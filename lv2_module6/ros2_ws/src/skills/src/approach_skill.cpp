@@ -47,6 +47,7 @@ public:
     timeout_s_ = declare_parameter<double>("approach_timeout_s", 30.0);
     res_v_ = declare_parameter<double>("residual_v", 0.02);          // 시뮬 res_v · res_w (행동 1 = 이만큼)
     res_w_ = declare_parameter<double>("residual_w", 0.1);
+    min_speed_ = declare_parameter<double>("approach_min_speed", 0.03);  // [m/s] 실기 바퀴 데드밴드 위 (sim 모드 기준 제어)
     exit_m_ = declare_parameter<double>("approach_exit_m", 0.165);  // exit 기본 후진 거리 [m] (= standoff 0.25 − gap 0.085)
     release_m_ = declare_parameter<double>("approach_release_m", 0.03);  // sim: 도착(tol_m×0.6) 뒤 이만큼 벗어나야 다시 위치 맞춤
     carrot_m_ = declare_parameter<double>("approach_carrot_m", 0.05);    // sim: 목표 직선 위 이만큼 앞 점을 향해 조향
@@ -351,12 +352,14 @@ private:
       w = std::clamp(3.0 * gyaw, -w_max_, w_max_);
     } else if (along < -0.003) {
       v = std::max(-0.05, 1.5 * along);
+      if (v > -min_speed_) v = -min_speed_;  // 실기 바퀴 데드밴드 (develop 11-12 approach_min_speed)
       w = std::clamp(1.5 * gyaw, -0.3, 0.3);
     } else if (std::abs(head_c) > 45.0 * M_PI / 180.0 && dist > release) {
       w = std::clamp(3.0 * head_c, -w_max_, w_max_);
     } else {
       v = std::clamp(1.5 * along, 0.0, v_max_) * std::max(0.0, std::cos(head_c));
-      if (along > 0.003) v = std::max(v, 0.01);
+      // 실기 바퀴는 약 2~3 cm/s 아래 명령엔 안 움직임 (데드밴드) — 도착 전이면 min_speed 아래로 안 내림 (develop 11-12)
+      if (along > 0.003) v = std::max(v, min_speed_);
       w = std::clamp(3.0 * head_c, -w_max_, w_max_);
     }
     if (dist <= tol_m_ && std::abs(gyaw) < tol_yaw_) still_s_ += 0.05;
@@ -374,9 +377,8 @@ private:
       end(false, "approach_blocked");
       return;
     }
-    double dv, dw;
-    if (exit_) dv = dw = 0.0;
-    else residual(x, y, yaw, dv, dw);
+    double dv = 0.0, dw = 0.0;
+    if (!exit_ && along >= -0.003) residual(x, y, yaw, dv, dw);  // 학습 보정은 전진으로만 배움 · exit은 보정 없음
     send(v + dv, w + dw);
   }
 
@@ -422,6 +424,7 @@ private:
   }
 
   std::string mode_;
+  double min_speed_ = 0.03;
   double speed_, pre_m_, pos_tol_, yaw_tol_, timeout_s_, res_v_, res_w_, release_m_, carrot_m_, v_max_, w_max_;
   bool pos_done_ = false;
   bool exit_ = false;

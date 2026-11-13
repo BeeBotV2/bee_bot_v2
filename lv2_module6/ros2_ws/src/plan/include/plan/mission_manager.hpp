@@ -5,13 +5,14 @@
 //   입력: ✉️ /cmd/mission (std_msgs/String "start" | "abort")
 //         ✉️ /mission/signal (확정 답) · /mission/signal_status (사이클마다 — ok · error) · /mission/qr (바코드 원문) — perception
 //         ✉️ /tracked_objects (퍽 tag·color·shape(box|cyl) · 장소 상자 location_box(tag · 윗면 가운데) · barcode · last_seen)
-//         ✉️ /task/status (coordinator 결과)
+//         🎬 /task/execute_plan (ExecutePlan action — coordinator 계획 실행 결과)
 //         ✉️ photo_topic (사진 찍을 때만 잠깐 구독) · TF map → base_footprint
-//   출력: ✉️ /task/sub_goals (SubGoalArray, plan_id = PLAN_ID_BASE + n) → coordinator
+//   출력: 🎬 /task/execute_plan (SubGoal[] + plan_id = PLAN_ID_BASE + n) → coordinator
 //         ✉️ /mission/state (plan/MissionState, latched) · /mission/markers (RViz)
 //         ✉️ 기록 log_dir/<시작 시각>/ signal · allocation · build · verify · return · error .json + photos/ · /diagnostics
 //   단계 (순서와 실패 시 갈 곳은 mission_solver next_phase):
-//     GO_OBSERVE 바코드 보는 자세로 (팔은 stow 그대로 — scan 자세는 없앰, 11-09) → BARCODE 이번에 본 바코드 → 관측 자세(−X)로
+//     GO_OBSERVE 바코드 보는 자세로 (팔은 stow 그대로 — scan 자세는 없앰, 11-09) → BARCODE 관측: 손 카메라(gaze) 바코드 +
+//              pole_front_cam 신호를 같은 자리에서 동시에 (11-12 — 신호 오류는 팔·바퀴가 멈췄을 때만 셈 · abort면 팔 접음) → 관측 자세(−X)로
 //     → READ 12회 점멸 — signal_status가 ok(두 사이클 같은 답)면 확정 · unconfirmed면 기다림 ·
 //              count·unknown·range가 signal_error_cycles번 이어지면 ERROR (발제: 추정 금지 → 안전 정지) · signal_timeout_s 넘어도 ERROR
 //     → SURVEY 시작 박스 6곳 전부: 퍽 두 자리 inspect(tag·색·모양) → pick → load next (적재함 12칸)
@@ -36,12 +37,14 @@
 #include "perception/msg/tracked_object_array.hpp"
 #include "plan/mission_solver.hpp"
 #include "plan/plan_next.hpp"
+#include "plan/action/execute_plan.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "plan/msg/basket_state.hpp"
 #include "plan/msg/mission_state.hpp"
 #include "plan/msg/sub_goal_array.hpp"
 #include "plan/msg/task_status.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
@@ -53,7 +56,7 @@ namespace plan {
 using plan::msg::MissionState;
 using plan::msg::SubGoal;
 using plan::msg::SubGoalArray;
-using plan::msg::TaskStatus;
+using ExecutePlan = plan::action::ExecutePlan;
 
 struct Box {  // arena [m] — 정사각 박스 (윗면 = box_top_z)
   double x, y, half;
@@ -82,7 +85,7 @@ private:
   void result(const std::string & text);         // 퍽·장소 결과 (실패해도 계속) → /mission/state · build.json
   void stop(const std::string & why);            // ERROR — coordinator 정지
 
-  // skill 요청 — 계획 하나를 보내고 /task/status로 끝을 기다림. run_retry는 실패하면 retries번까지 다시
+  // skill 요청 — 계획 하나를 ExecutePlan action으로 보내고 result를 기다림. run_retry는 실패하면 retries번까지 다시
   void run(std::vector<SubGoal> goals, Done done);
   void run_retry(std::vector<SubGoal> goals, Done done, int tries = 0);
   // 박스 위 점(arena)을 다룰 자리로 navigate + approach — 점에서 가까운 변부터, 실패하면 다음 변 (최대 approach_tries)
@@ -90,7 +93,6 @@ private:
 
   void go_observe();
   void barcode_phase();
-  void barcode_read();                                // 바코드 기다림 (팔을 barcode 자세로 둔 뒤)
   void barcode_done(bool ok, const std::string & why);  // 팔 stow로 → 다음 단계
   void read_phase();
   void survey(size_t box);
@@ -137,7 +139,26 @@ private:
   double box_top_z_, puck_h_, grid_step_, standoff_, approach_gap_, verify_radius_, match_radius_;
   double place_tol_, place_search_, corr_max_;
   Pose2 barcode_pose_;
-  std::string barcode_arm_pose_;  // 바코드 읽을 때 팔 자세 ("" = 안 움직임)
+  std::string barcode_arm_pose_;
+  double barcode_pole_s_ = 3.0;   // 팔을 뻗기 전에 pole_front_cam으로 보는 시간
+  Phase only_ = Phase::IDLE;      // 단계 하나만 실행 ("start:<단계>") — IDLE = 전체
+  bool signal_window_ = false;    // 이번 실행에서 신호 관측 창을 열었는지 (BARCODE부터 · READ만이면 READ에서)
+  bool gaze_sent_ = false;        // 이번 BARCODE에서 팔을 뻗었는지 (끝날 때 접을지)
+  double barcode_gaze_wait_s_ = 3.0, barcode_advance_step_m_ = 0.06, barcode_advance_max_m_ = 0.30, barcode_min_gap_m_ = 0.13;
+  double grip_front_m_ = -1.0;    // 손 카메라 정면(화면 가운데) depth 하위 10 % [m] (-1 = 모름) — 바코드 다가갈 때 멈춤 기준
+  rclcpp::Time grip_front_at_{0, 0, RCL_ROS_TIME};  // grip_front_m_을 마지막으로 잰 시각
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr grip_depth_sub_;
+  rclcpp::Time gaze_at_{0, 0, RCL_ROS_TIME};  // gaze 도착(또는 다가간 뒤) 시각
+  double advanced_m_ = 0.0;       // 바코드 쪽으로 다가간 거리
+  bool moving_ = false;           // 다가가는 중
+  bool returning_ = false;        // 바코드 뒤 팔 접고 제자리로 돌아오는 중
+  bool light_warned_ = false;     // 이번 관측에서 신호등 안 보임 경고를 했음
+  bool hold_noted_ = false;       // 신호 확정까지 다가가기 보류 안내를 했음
+  double light_check_s_ = 8.0;    // 관측 시작 뒤 이만큼 신호등이 안 보이면 경고 [s]
+  double signal_read_min_s_ = 60.0;  // READ에 들어온 뒤 최소 이만큼은 신호를 봄 (관측 시간을 바코드에 다 써도) [s]
+  rclcpp::Time read_phase_at_{0, 0, RCL_ROS_TIME};
+  bool observe_still() const;     // 관측 중 팔·바퀴가 멈춰 있음 (신호 오류 사이클을 셀 때)
+  Pose2 barcode_origin_;          // 다가갔다가 돌아올 자리 (arena)  // 바코드 읽을 때 팔 자세 ("" = 안 움직임)
   bool observe_move_ = false;  // barcode_pose_arena가 있으면 그 자리로 갔다가 관측 자리로 돌아옴
   double signal_timeout_s_, barcode_timeout_s_, home_hold_s_;
   int signal_error_cycles_ = 2;
@@ -148,13 +169,16 @@ private:
   Phase phase_ = Phase::IDLE;
   std::string note_, error_;
   bool active_ = false;
+  using ExecuteGoalHandle = rclcpp_action::ClientGoalHandle<ExecutePlan>;
   uint32_t plan_seq_ = 0, waiting_plan_ = 0;
+  ExecuteGoalHandle::SharedPtr waiting_goal_;
   Done waiting_done_;
   perception::msg::MissionSignal signal_;
   bool signal_ready_ = false;           // 이번 READ에서 확정 답을 받음
   int signal_streak_ = 0;               // 이어진 오류 사이클 수 (mission_solver signal_action)
   std::string signal_error_;            // ERROR로 갈 신호 오류 (count | unknown | range)
   std::string barcode_, barcode_msg_;
+  std::string bad_barcode_;              // 이번 BARCODE에서 본 미등록 바코드 (버리고 계속 찾음 · 끝까지 이것뿐이면 unknown_barcode)
   rclcpp::Time barcode_rx_{0, 0, RCL_ROS_TIME}, phase_started_{0, 0, RCL_ROS_TIME};
   rclcpp::Time read_started_{0, 0, RCL_ROS_TIME};
   Counts counts_;
@@ -191,7 +215,7 @@ private:
 
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-  rclcpp::Publisher<SubGoalArray>::SharedPtr goals_pub_;
+  rclcpp_action::Client<ExecutePlan>::SharedPtr execute_client_;
   rclcpp::Publisher<MissionState>::SharedPtr state_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr walls_pub_;  // /arena/walls (map, latched) → nvblox_map이 /map에 겹침
@@ -200,7 +224,6 @@ private:
   rclcpp::Subscription<perception::msg::MissionSignal>::SharedPtr signal_sub_, signal_status_sub_;
   std::map<int, perception::msg::TrackedObject> last_seen_;  // 태그 → 마지막으로 본 트랙 (locate memory)
   rclcpp::Subscription<perception::msg::TrackedObjectArray>::SharedPtr objects_sub_;
-  rclcpp::Subscription<TaskStatus>::SharedPtr status_sub_;
   rclcpp::Subscription<plan::msg::BasketState>::SharedPtr basket_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr photo_sub_;
   rclcpp::TimerBase::SharedPtr timer_, markers_timer_;

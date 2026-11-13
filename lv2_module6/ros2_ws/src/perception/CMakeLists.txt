@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(perception)
+# 빌드 종류를 안 주면(colcon build 그대로) 최적화 없이(-O0) 빌드됨 — 실기 젯슨에서 perception 상자 검출이 8배 느렸음 (11-13)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -124,6 +128,14 @@ if(BUILD_TESTING)
   ament_add_gtest(test_perception_core test/test_perception_core.cpp TIMEOUT 60
     ENV PERCEPTION_TEST_DATA=${CMAKE_CURRENT_SOURCE_DIR}/test/data)
   target_link_libraries(test_perception_core ${PROJECT_NAME}_cpp)
+  ament_add_gtest(test_perception_runtime test/test_perception_runtime.cpp TIMEOUT 120
+    ENV ROS_DOMAIN_ID=191 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST)
+  target_link_libraries(test_perception_runtime ${PROJECT_NAME}_cpp)
+  if(ZXing_FOUND)
+    ament_add_gtest(test_barcode_fallback test/test_barcode_fallback.cpp TIMEOUT 60
+      ENV PERCEPTION_TEST_DATA=${CMAKE_CURRENT_SOURCE_DIR}/test/data)
+    target_link_libraries(test_barcode_fallback ${PROJECT_NAME}_cpp)
+  endif()
   ament_add_test(test_launch GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     COMMAND ros2 launch "${CMAKE_CURRENT_SOURCE_DIR}/launch/perception.launch.py" --show-args
     TIMEOUT 60)
