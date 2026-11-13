@@ -4,6 +4,7 @@
 skill_navigate:
   ros__parameters:
     server_wait_s: 30.0
+    nav_near_m: 0.20         # [m] goal.target "near": 멈추거나 실패해도 목표에서 이 안이면 성공 (상자 앞 자리 — approach가 마저 맞춤)
     nav_look_m: 0.6          # [m] goal.target "look": 남은 경로가 이만큼 안이면 팔을 pose_look으로 (상자 도킹 앞, 11-13)
 skill_approach:
   ros__parameters:
@@ -22,8 +23,9 @@ skill_approach:
     approach_w_max: 0.5      # [rad/s] sim 회전 상한 (11-13: 1.0은 면 맞출 때 크게 돎)
     approach_exit_m: 0.165   # [m] goal.target "exit" 기본 후진 거리 (values[0]이 있으면 그 값) — 상자에서 standoff까지
     # 상자 도킹 (goal.values = [gap, half]): 도면 자리는 힌트 — 인지 상자로 목표를 정함 (11-12). 팔은 pose_look으로 천천히 (launch arm_velocity_scale 0.15)
-    box_match_m: 0.35        # [m] 힌트 상자 가운데에서 이만큼 안의 start_box · location_box만
+    box_match_m: 0.45        # [m] 힌트 상자 가운데에서 이만큼 안의 start_box · location_box만 (11-13: 0.35 → 0.45 — 지도 오차 20~25 cm에 측정이 밖으로 나감, 상자끼리는 0.7 m 넘게 떨어짐)
     box_wait_s: 8.0          # [s] 첫 측정까지 정지해서 기다림 — 넘으면 approach_box_unseen
+    box_seed_s: 30.0         # [s] 첫 측정만 이만큼 지난 것도 받음 (시작 전 기억 포함 — map→odom은 관측 시각 것이라 오래돼도 맞음) — 시작하며 팔이 올라가 pole_front_cam이 가려져도 도착 직전 측정으로 시작 (11-13)
     box_stale_s: 1.0         # [s] last_seen이 이보다 오래된 측정은 버림
     box_jump_m: 0.08         # [m] 추정에서 이만큼 넘게 튄 측정은 버림
     box_alpha: 0.3           # 새 측정을 섞는 비율
@@ -67,7 +69,6 @@ skill_load:
     server_wait_s: 30.0
     load_lift_m: 0.03        # [m] 박스 앞에서 시작하면 손을 곧게 이만큼 올린 뒤 carry로 · 0 = 안 올림
                              #   pick 끝 손 안 퍽 바닥 = 박스 위 5 cm (pick_above_m) → +3 cm = 8 cm, 옆 퍽 윗면(6 cm)보다 2 cm 위 (11/08 5 cm는 너무 높음)
-    load_over_lift_m: 0.04   # [m] 옆 칸 위는 칸 위(q_over)보다 이만큼 높게 지나고 곧게 내려옴 — 손 안 퍽 바닥이 적재된 옆 퍽 윗면 위 약 4 cm (11/12 시뮬 옆 퍽 침) · 0 = 예전
 skill_unload:
   ros__parameters:
     server_wait_s: 30.0
@@ -83,7 +84,6 @@ skill_stand:
     stand_grip_current_a: 0.007    # [A] 이 전류 이상 + 0.2 s 안 움직임 = 쥠 (실측: 퍽을 밀 때 8~10 mA)
     stand_empty_m: 0.003           # [m] 이보다 닫히면 빈손 → stand_no_grip
     stand_grip_timeout_s: 4.0      # [s] 넘으면 stand_grip_timeout
-    stand_hold_s: 0.3              # [s] 퍽 위(stand 첫 자세 · stand_pick 쥐는 자리)에서 멈춤 — 처짐 보정 쌓임
     # 대각선 끌기 (실기 11/03~04 — 큰 호는 퍽을 너무 높이 듦, 수평 끌기는 퍽이 안 들림). stand_drag_m 0이면 호 (stand_arc_end_deg)
     stand_drag_m: 0.0              # [m] 잡은 채 로봇 쪽으로 곧게 끎 — 0 = 호 (11/08 사용자: 끌기 안 씀 · 이전 0.04)
     stand_drag_lift_m: 0.035       # [m] 끌면서 올리는 양 — 약 41° 대각선
@@ -94,4 +94,4 @@ skill_stand:
     stand_contact_h_box_m: 0.030   # [m] 손가락 중심 높이 (상자 윗면 기준) — 실기는 두 모양 공통
     stand_contact_h_cyl_m: 0.030
     stand_vel_scale: 0.7           # 내려가기·위로 × 팀 관절 한계 (실기 11/04)
-    stand_arc_vel_scale: 1.0       # (11/10 실기 1.0 · 이전 0.7) 끌기·호 × 팀 관절 한계 (실기 11/04 · 시뮬 호 실험: 0.3 → 63 %, 0.5 → 100 %)
+    stand_arc_vel_scale: 0.7       # 끌기·호 × 팀 관절 한계 (실기 11/04 · 시뮬 호 실험: 0.3 → 63 %, 0.5 → 100 %)

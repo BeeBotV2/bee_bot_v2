@@ -23,6 +23,8 @@ from ...bars.state.nav_state import collision_text, controller_text
 from ... import fielddebug as fd
 
 ARM_PHASES = {0: '정지(위)', 1: '내려가기', 2: '안정', 3: '쥐기/놓기', 4: '올리기', 5: '대기'}  # ml/SkillContext phase
+# 현장 고정 문제 (11-14 실기: 신호등 보드 RGRRGRGGYGYG 반복 · 바코드 P2-04 · 퍽 7개) — 환경변수로 바꿀 수 있음
+FIELD_START = os.environ.get('BEE_DIAG_START', 'start:DIAG:P2-04:R4Y2G6')
 FRESH_S = 3.0   # 이보다 오래된 live 값은 '(N s 전)'을 붙임
 
 
@@ -372,6 +374,23 @@ class SignalAnswerItem(MenuItem):
         return STAY
 
 
+class ReanchorItem(MenuItem):
+    """지금 자리를 출발 자리로 — /initialpose map (0, 0, 0°). map 원점 = 출발 자세라 로봇이 출발 자리에 서 있을 때만.
+    cuVSLAM map→odom 잠금(cuvslam_slam 로그 '보정 잠금')도 풀린다. 시뮬은 출발 자리로 텔레포트."""
+    key = 'o'
+
+    def label(self):
+        return '지금 자리를 출발 자리로 (initialpose map 0,0,0 · 보정 잠금 풀기)'
+
+    def run(self):
+        if self.ui.confirm('로봇이 출발 자리(출발 자세)에 서 있나요? 지금 위치를 map (0, 0, 0°)으로 맞춥니다.', default=False):
+            try:
+                self.bus.nav.set_robot_pose(0.0, 0.0, 0.0)
+            except RuntimeError as e:
+                print(e, file=sys.stderr)
+        return STAY
+
+
 DIAG_LEVELS = {0: 'OK', 1: 'WARN', 2: 'ERROR', 3: 'STALE'}
 SNAPSHOT_DIR = Path.home() / '.ros' / 'bee_snapshots'
 SNAPSHOT_IMAGES = (('pole_front_cam', '/pole_front_cam/color/image_raw'), ('gripper_cam', '/gripper_cam/color/image_raw'))
@@ -438,6 +457,7 @@ class MissionMenu(Menu):
                 LogViewItem(self.app),
                 SnapshotItem(self.app),
                 SignalAnswerItem(self.app),
+                ReanchorItem(self.app),
                 # 단계 하나만 — mission_manager "start:<단계>" (끝나면 DONE · BUILD·VERIFY는 SURVEY 결과가 있어야 해 없음)
                 MissionCmdItem(self.app, 'b', 'start:BARCODE', '단계만: 관측 — 바코드(손 카메라 gaze) + 신호(pole) 동시', '관측 단계(바코드 + 신호)만 실행할까요? (팔·바퀴가 움직임)'),
                 MissionCmdItem(self.app, 'r', 'start:READ', '단계만: 신호 읽기 (READ)', '신호 읽기 단계만 실행할까요?'),
@@ -445,7 +465,94 @@ class MissionMenu(Menu):
                 MissionCmdItem(self.app, 'h', 'start:RETURN', '단계만: 출발 구역 복귀 (RETURN)', '복귀 단계만 실행할까요? (주행)'),
                 GoMenu(self.app, '3', '세부 명령 (navigate · pick · place … skill 직접)', SkillMenu(self.app)),
                 BasketClearItem(self.app),
-                ActionItem(self.app, '5', '실패 이력 지우기', self.state.failures.clear)]
+                ActionItem(self.app, '5', '실패 이력 지우기', self.state.failures.clear),
+                DiagRunItem(self.app),
+                GotoItem(self.app)]
 
     def center(self):
         return mission_lines(self.state, self.term)
+
+
+# ---------- 현장 진단 미션 + 녹화 (x) — mission_manager "start:DIAG…" (실패해도 계속) + bag (tools/field/record_run.sh 토픽 목록)
+RECORD_RUN = Path(__file__).resolve().parents[4] / 'field' / 'record_run.sh'   # tools/field/record_run.sh
+RECORD_OPTS = ['--storage-preset-profile', 'zstd_fast', '--max-bag-size', '1000000000']   # record_run.sh와 같게 (zstd · 1 GB씩)
+END_PHASES = ('IDLE', 'DONE', 'ERROR')
+
+
+def stop_bag_when_done(state, bag: str, bagrec, start_wait_s: float = 20.0, poll_s: float = 1.0) -> str:
+    """미션이 시작되면(끝 단계가 아님) 끝(DONE·ERROR·IDLE — abort도 ERROR)날 때까지 기다렸다가 우리 녹화만 끔.
+    start_wait_s 안에 시작 안 하면(시작 거부 — 적재함 장부·명령 오류) 바로 끔. → 끈 이유"""
+    end = time.monotonic() + start_wait_s
+    while (state.mission is None or state.mission.phase in END_PHASES) and time.monotonic() < end:
+        time.sleep(poll_s)
+    why = 'not_started' if state.mission is None or state.mission.phase in END_PHASES else ''
+    while not why:
+        time.sleep(poll_s)
+        if state.mission.phase in END_PHASES:
+            why = state.mission.phase
+    cur = bagrec.current()
+    if cur and cur.get('bag') == bag:   # 그사이 사람이 끄고 다른 녹화를 켰으면 건드리지 않음
+        bagrec.stop()
+    return why
+
+
+class GotoItem(MenuItem):
+    """상자로 가기 — start:GOTO:<목록>: 적은 상자에 SURVEY처럼(Nav2 → 상자 도킹) 다가가고 끝나면 복귀 (관측·조사 없음)."""
+    key = 'g'
+
+    def label(self):
+        return '상자로 가기 (미션처럼 다가가기 · 끝나면 복귀) — 예 S1,S2,S6,S4,S5,S3,L1,L2,L3'
+
+    def run(self):
+        text = self.ui.modal_input('상자로 가기', [
+            'S1~S6 = 시작 박스 · L1~L3 = 장소 — 쉼표로 이어 적은 순서대로 감 (숫자만 쓰면 시작 박스)',
+            '박스마다: 붙어 있던 상자에서 물러남 → Nav2로 변 앞 → 카메라로 본 상자에 도킹 (SURVEY와 같은 동작)',
+            '실패하면 기록하고 다음 상자 · 다 돌면 출발 구역으로 복귀 · 중지는 미션 메뉴 2',
+            '운영 모드 AUTO 필요'], '목록>', 'S1,S2,S6,S4,S5,S3,L1,L2,L3')
+        if text is None or not text.strip():
+            return STAY
+        cmd = 'start:GOTO:' + text.strip().replace(' ', '')
+        if not self.ui.confirm(f'"{cmd}" — 로봇이 주행합니다. 시작할까요?', default=False):
+            return STAY
+        self.bus.cmd_mission(cmd)
+        return STAY
+
+
+class DiagRunItem(MenuItem):
+    key = 'x'
+
+    def label(self):
+        return f'현장 진단 미션 + 녹화 — {FIELD_START} (실패해도 계속 · 치명만 정지 · 끝나면 녹화 끔)'
+
+    def run(self):
+        import threading
+        from ... import bagrec
+        cmd = self.ui.modal_input('현장 진단 미션 + 녹화', [
+            'start:DIAG                           처음부터 · 관측(바코드·신호) 실패도 기록하고 SURVEY까지',
+            'start:DIAG:P2-04:R4Y2G6              위 + 관측이 실패하면 이 바코드·신호로 BUILD까지',
+            'start:DIAG_FROM_SURVEY:P2-04:R4Y2G6  관측 건너뛰고 이 값으로 SURVEY부터 (진단)',
+            'start:FROM_SURVEY:P2-04:R4Y2G6       관측 건너뛰고 SURVEY부터 (실패 처리는 평소대로)',
+            '바코드 P2-01~04 · 신호 R·Y·G 각 1~6 합 12 — 틀리면 mission_manager가 거부(하는 일 줄에 이유)',
+            '치명(바로 정지): estop · 수동 전환 · arm_contact · collision · overcurrent · abort · 주행 갇힘 3번',
+            '기록: ~/.ros/mission/<시각>/steps.jsonl · phases.jsonl → python3 tools/plan/step_stats.py'],
+            '명령>', FIELD_START,  # 현장 고정 문제 (FIELD_START) — Enter만 누르면 그대로
+            validate=lambda t: None if t.strip().startswith(('start:DIAG', 'start:FROM_SURVEY')) else 'start:DIAG… 또는 start:FROM_SURVEY…')
+        if cmd is None:
+            return STAY
+        cmd = cmd.strip()
+        if not self.ui.confirm(f'"{cmd}" 미션을 시작하고 녹화할까요?', default=False,
+                               body=['로봇이 움직입니다 (주행·팔).', f'현재 단계: {self.state.mission.phase if self.state.mission else "-"}',
+                                     f'녹화: {bagrec.BAG_DIR}/<시각>_diag_mission (미션이 끝나면 자동으로 끔)']):
+            return STAY
+        try:
+            regex = subprocess.run([str(RECORD_RUN), '--regex'], capture_output=True, text=True, check=True).stdout.strip()
+            rec = bagrec.start('diag_mission', regex=regex, extra=RECORD_OPTS)
+        except (OSError, subprocess.CalledProcessError, RuntimeError) as e:
+            if not self.ui.confirm('녹화를 못 켬 — 녹화 없이 미션만 시작할까요?', default=False, body=[str(e)[-300:]]):
+                return STAY
+            rec = None
+        self.bus.cmd_mission(cmd)
+        if rec:
+            threading.Thread(target=stop_bag_when_done, args=(self.state, rec['bag'], bagrec), daemon=True).start()
+            print(f'미션 {cmd} · 녹화 {rec["bag"]}')
+        return STAY

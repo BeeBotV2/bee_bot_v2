@@ -421,7 +421,12 @@ local_costmap:
       footprint: "[[0.069, 0.151], [0.069, -0.151], [-0.245, -0.151], [-0.245, 0.151]]"
       footprint_padding: 0.06
       always_send_full_costmap: true
-      plugins: ["voxel_layer", "inflation_layer"]
+      # static_layer (벽 지도 /map): 카메라는 0.2 m 안·옆·뒤를 못 봐서 voxel만으로는 돌다가 옆 벽에 박음 (11-13 headless 여러 번).
+      #   처음엔 inflation 0.35로 넣었다가 벽 옆 다가설 자리에 못 들어감 → 로컬 inflation 반경을 0.32로 줄여 같이 씀 (경사 6)
+      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -447,8 +452,8 @@ local_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         # 직사각형 footprint의 외접 반경(≈0.30, 패딩 포함) 이상이어야 MPPI가 몸 모양으로 충돌을 본다 (작으면 경고 + 원으로 봄).
         # 6.0 = 벽에서 0.3 m면 비용 약 1/4 — 통로 가운데를 고르되 좁은 곳(절반 폭 0.25)도 지나가게
-        inflation_radius: 0.35
-        cost_scaling_factor: 6.0
+        inflation_radius: 0.32   # 11-13: 0.35 → 0.32 (static_layer 벽과 같이). 외접 반경(0.302, padding 포함) 이상이어야 함 — 0.30이면 computeCircumscribedCost 오류
+        cost_scaling_factor: 6.0 # 11-13: 10이면 벽 0.2 m에서 비용 75로 낮아 MPPI가 벽에 붙어 감 → 6 (같은 자리 122, 전역과 같음)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
