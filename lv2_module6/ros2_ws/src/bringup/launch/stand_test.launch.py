@@ -1,6 +1,6 @@
 """팔 작업 테스트용 가벼운 실행 (세우기 stand · 집기 pick): 팔·그리퍼·카메라·인지·MoveIt·coordinator만.
 
-  LAUNCH_FILE=stand_test.launch.py ./start.sh   # 저장소 ros2_ws/ — 가상환경 켜고 start.sh 환경 확인(카메라 serial 등) 그대로
+  isaac/loops/manipulator-launcher.sh   # 가상환경 켜고 start.sh 환경 확인(카메라 serial 등) 그대로
 
 전체 bringup(start.sh)에서 빼는 것 — Jetson 메모리·CPU를 많이 먹는데 팔 테스트엔 안 쓰는 것:
   SLAM(cuVSLAM·nvblox·지도) · Nav2 서버 전부 · pole_front_cam 점구름 · body_filter · signal_decoder ·
@@ -37,6 +37,11 @@ FIXED = {'use_slam': 'false', 'localization': 'true', 'nvblox_map': '', 'use_nav
 
 def generate_launch_description():
     passthrough = {k: v for k, v in _main.ROS_SYSTEM_ARGS.items() if k not in FIXED}
+    # bringup의 'auto'(USB 감지)는 bringup.launch.py의 setup_map이 true/false로 바꾸는데 여기엔 그 단계가 없음 →
+    #   'auto' 그대로 ros_system에 가면 카메라 조건(== 'true')이 거짓이라 gripper_cam이 안 뜸. 팔 테스트는 손 카메라가 필수라 true.
+    passthrough['use_gripper_cam'] = ('true', 'gripper_cam 개별 스위치 (use_cameras와 AND) · 팔 테스트는 손 카메라 필수')
+    # 서서 팔만 쓰는데 자이로 영점이 틀어지면 odom yaw가 혼자 돎 → map 기준으로 기억한 퍽이 돌아감 (11/08 실기: 2번째 퍽을 엉뚱한 데서 집음)
+    passthrough['ekf_imu'] = ('false', 'EKF yaw 회전속도 = IMU 자이로 · false(기본)면 바퀴 — 수동 주행은 바퀴 yaw로 충분')
     learning = {'enabled': LaunchConfiguration('learning_enabled')}
     return LaunchDescription([
         *[DeclareLaunchArgument(k, default_value=v, description=d) for k, (v, d) in passthrough.items()],
