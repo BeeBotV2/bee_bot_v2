@@ -3,6 +3,8 @@
 
   루프 클로저 켜고 TF map→odom · /cuvslam/path + 시각 오도메트리 /cuvslam/odom(속도) → EKF가 바퀴·IMU와 합침
   publish_map_tf:=false면 시각 오도메트리만 (map→odom을 다른 곳이 낼 때)
+  map→odom은 TF로 직접 안 내고 /cuvslam/map_to_odom(latched)으로 — map_tf_relay(C++)가 30 Hz로 TF를 냄 (11-16: 이 노드가 CPU 몰림에
+  1 s 넘게 멈추면 TF가 끊겨 Nav2 error 102 · 표준 AMCL처럼 계산과 TF 발행을 나눔)
 
   입력: pole_front_cam 컬러 + 정렬 depth + camera_info (RGBD 모드 — D435는 IMU가 없어 VIO 불가)
   map = 출발할 때의 base_footprint (기존 SLAM과 같음), x·y·yaw만 (기존 SLAM Reg/Force3DoF와 같음 — 경기장 바닥은 평평)
@@ -24,13 +26,12 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
-from rclpy.duration import Duration
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from sensor_msgs_py import point_cloud2
 from visualization_msgs.msg import Marker, MarkerArray
-from tf2_ros import Buffer, TransformBroadcaster, TransformListener
+from tf2_ros import Buffer, TransformListener
 
 
 def mat(q, t):
@@ -209,12 +210,6 @@ class CuvslamSlam(Node):
         # BEE_CUVSLAM_NO_MAP_TF=1 — 다른 위치 추정(AMCL 스캔 매칭 등)이 map→odom을 낼 때 (시뮬 비교용, 11-15)
         if os.environ.get('BEE_CUVSLAM_NO_MAP_TF') == '1':
             self.publish_map_tf = False
-        # map→odom을 이만큼 미래 시각으로 냄 (0.5 s — 영상 지연 + 발행 간격 최대 0.33 s 때문에 0.2로는 Nav2 controller가 '미래 외삽'으로 목표를 중단함, 실기 2026-11-09)
-        # 최신 map→odom이 방금 들어온 depth 영상보다 옛 시각이라, nvblox가 그 영상 시각으로 TF를 찾으면 '미래 외삽'으로 실패해
-        # depth를 버렸음 (실기 2026-10-29: 지도가 시작 몇 프레임 뒤로 안 자람). map→odom은 천천히 바뀌어 미래로 내도 안전
-        self.map_tf_tolerance = Duration(seconds=float(self.declare_parameter('map_tf_tolerance', 1.0).value))
-        #   map→odom 시각을 이만큼 미래로 (AMCL transform_tolerance 기본 1.0과 같게) — 11-15: 0.5면 미션 시작(bag 녹화·팔 동작) 순간 CPU 몰림에
-        #   cuVSLAM이 ~1 s 멈춰 TF가 끊김 → controller "Failed to transform end pose" (error 102)로 출발 못 함
         self.depth_scale = float(self.declare_parameter('depth_scale_factor', 1000.0).value)  # 16UC1 mm → m
         self.min_depth = float(self.declare_parameter('min_depth', 0.5).value)  # [m] 이 안 픽셀(자기 팔)은 추적에서 뺌
         # N장에 한 장만 추적 (1 = 전부 · 2 = 15 → 7.5 Hz) — CPU 줄이기 시험용 (11-15). 빠른 제자리 회전(최대 1.8 rad/s)에서
@@ -245,13 +240,10 @@ class CuvslamSlam(Node):
         self.ok = self.lost = 0
         self.tf_buf = Buffer()
         TransformListener(self.tf_buf, self, spin_thread=True)  # 콜백 안에서 TF를 읽어도 막히지 않게
-        self.tf_pub = TransformBroadcaster(self)
-        # map→odom 이어 내기 (11-15): 영상이 늦거나 추적을 잃으면 map→odom이 1~3 s 끊겨(실기 bag 171710: 8번, 최대 3.05 s)
-        #   stamp+0.5 s가 지나면 Nav2 controller가 목표·경로 끝을 odom으로 못 옮겨 error 102로 출발 직후 실패했음 (실기 S3 ×5).
-        #   AMCL처럼 마지막 값을 지금 시각으로 다시 냄 — map→odom은 천천히 바뀌어 같은 값이 맞음
-        self.last_map_tf = None   # (x, y, yaw, 낸 시각 ns)
-        if self.publish_map_tf:
-            self.create_timer(0.1, self.republish_map)
+        # map→odom → map_tf_relay가 TF로 이어 냄 (머리말) · transient_local — relay가 나중에 떠도 마지막 값을 받음
+        self.map_tf_pub = self.create_publisher(TransformStamped, self.declare_parameter('map_to_odom_topic', '/cuvslam/map_to_odom').value,
+                                                QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                                           durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.odom_pub = self.create_publisher(Odometry, self.declare_parameter('odom_topic', '/cuvslam/odom').value, 10)
         self.path_pub = self.create_publisher(Path, '/cuvslam/path', 1)
         self.path = Path()
@@ -408,21 +400,6 @@ class CuvslamSlam(Node):
         if self.publish_map_tf:
             self.publish_map(c.header.stamp, slam if slam is not None else p)  # 루프 클로저 반영된 SLAM 위치 우선
 
-    def republish_map(self):
-        """마지막 map→odom을 0.2 s 넘게 못 냈으면 지금 시각(+tolerance)으로 다시 냄"""
-        if self.last_map_tf is None:
-            return
-        x, y, yaw, t = self.last_map_tf
-        now = self.get_clock().now()
-        if now.nanoseconds - t < 200_000_000:
-            return
-        tf = TransformStamped()
-        tf.header.stamp = (now + self.map_tf_tolerance).to_msg()
-        tf.header.frame_id, tf.child_frame_id = self.map, self.odom
-        tf.transform.translation.x, tf.transform.translation.y = x, y
-        tf.transform.rotation.z, tf.transform.rotation.w = math.sin(yaw / 2), math.cos(yaw / 2)
-        self.tf_pub.sendTransform(tf)
-
     def publish_vis(self):
         """BEE_CUVSLAM_VIS: 마지막 프레임 특징점(영상 위 점) · 그 프레임 랜드마크 · SLAM 지도 랜드마크 · 루프 클로저 랜드마크 · 포즈 그래프.
         cuVSLAM world(출발 때 카메라, OpenCV 축) 점 p → map(출발 때 base_footprint) = B·p (B = base_from_cam, base_pose와 같은 기준)"""
@@ -506,12 +483,11 @@ class CuvslamSlam(Node):
                                             '(/initialpose로 다시 맞추면 풀림)', throttle_duration_sec=5.0)
                 base = compose((x, y, yaw), planar(odom_from_base))  # 낸 보정 기준 로봇 자세 (경로 표시)
         tf = TransformStamped()
-        tf.header.stamp = (Time.from_msg(stamp) + self.map_tf_tolerance).to_msg()
+        tf.header.stamp = stamp  # 계산한 영상 시각 (TF 시각은 relay가 지금 + future_s로 찍음)
         tf.header.frame_id, tf.child_frame_id = self.map, self.odom
         tf.transform.translation.x, tf.transform.translation.y = x, y
         tf.transform.rotation.z, tf.transform.rotation.w = math.sin(yaw / 2), math.cos(yaw / 2)
-        self.tf_pub.sendTransform(tf)
-        self.last_map_tf = (x, y, yaw, self.get_clock().now().nanoseconds)
+        self.map_tf_pub.publish(tf)
         ps = PoseStamped()
         ps.header = tf.header
         ps.pose.position.x, ps.pose.position.y = base[0], base[1]

@@ -290,6 +290,9 @@ private:
   bool loc_on_ = false;
   int loc_min_n_ = 3;
   double loc_step_m_ = 0.05, loc_step_rad_ = 0.0175, loc_min_m_ = 0.02, loc_min_rad_ = 0.0087, loc_settle_s_ = 1.5;
+  // 벽 정합 보정 중 로봇 위치로 이미 넘긴 몫 (조각을 이은 것) — nvblox 격자는 map에 쌓여 위치를 옮겨도 예전에 본 벽이 그대로라
+  //   벽 정합이 같은 차이를 다시 봄 → 빼지 않으면 같은 보정을 계속 넘겨 위치가 흘러감 (11-15 밤 시뮬 7 m). 벽 정합 차이가 작아지면 0
+  ArenaCorr loc_sent_;
   double loc_last_ = -1e9;            // 마지막으로 넘긴 시각 (wall_s) — settle 동안 상자 관측은 안 셈 (좌표가 옮겨지는 중)
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr loc_pub_;
   rclcpp::TimerBase::SharedPtr loc_timer_;

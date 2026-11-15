@@ -2,6 +2,15 @@ cmake_minimum_required(VERSION 3.16)
 project(ros_system)
 
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(geometry_msgs REQUIRED)
+
+# map→odom TF 이어 내기 (src/map_tf_relay.cpp) — cuvslam_slam이 멈춰도 TF가 끊기지 않게
+add_executable(map_tf_relay src/map_tf_relay.cpp)
+target_compile_features(map_tf_relay PUBLIC cxx_std_17)
+target_link_libraries(map_tf_relay PUBLIC rclcpp::rclcpp tf2_ros::tf2_ros ${geometry_msgs_TARGETS})
+install(TARGETS map_tf_relay DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME})

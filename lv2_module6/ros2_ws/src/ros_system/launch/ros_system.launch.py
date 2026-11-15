@@ -381,6 +381,7 @@ def check_slam(context):
 def slam_nodes():
     """SLAM = cuVSLAM(위치) + nvblox(지도) — use_slam일 때. 위쪽이 받는 것: map→odom TF(cuVSLAM) · /map latched(nvblox_map) · 원점 = 출발 자리
       cuvslam_slam   pole_front_cam RGB-D → map→odom (루프 클로저) + /cuvslam/odom (EKF odom1)
+      map_tf_relay   /cuvslam/map_to_odom → TF map→odom 30 Hz (C++)
       depth gate     scan_cam_gate 재사용 — nvblox에 줄 depth에서 카메라 0.5 m 안(자기 팔·손가락·폴대)을 0(측정 없음)으로.
                      pole_front_cam (+ use_pole_back_cam이면 pole_back_cam — pole_back_depth_gate) — gripper_cam(팔 끝)은
                      스캔 자세가 없어져(11-09) 지도에 안 넣음.
@@ -422,6 +423,8 @@ def slam_nodes():
         Node(package='ros_system', executable='cuvslam_slam', name='cuvslam_slam', output='screen', condition=on,
              parameters=[{'publish_map_tf': True,
                           'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int)}]),
+        # map→odom TF 이어 내기 (C++, 11-16) — cuvslam_slam이 낸 /cuvslam/map_to_odom을 30 Hz로 TF로 (파이썬이 멈춰도 안 끊김)
+        Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_depth_gate', output='screen',
              condition=IfCondition(PythonExpression([*slam_nvblox, ' and not ', *one_proc, ' and not ', *gate_cpp])),
              parameters=[gate_params('pole_front_cam')]),
