@@ -11,6 +11,8 @@
 //     시뮬 재현). 먼저 /compute_path_to_pose로 경로를 받아 지나는 문마다 들어가기 점(문 앞, 문 축 방향으로 제자리 회전) ·
 //     나가기 점(문 너머, 일직선 유지)을 끼워 차례로 NavigateToPose. 목표가 문 바로 너머면 나가기 점은 뺌.
 //     문은 경기장(arena) 좌표 — start_pose_arena로 map에 옮김 (door_use_correction이면 /arena/correction도 얹음 — 기본 끔)
+//   꼭 거칠 길목 (gates, 11-15 사용자 지도): A → B 화살표마다 — 경로가 A→B 가운데 수직선을 그 방향으로 건너면 A · B를 차례로
+//     경유 (both면 거꾸로도 B · A). 문과 겹치면(문 가운데가 A–B 선분에서 0.4 m 안) 그 문은 뺌. A·B는 사용자가 찍은 점 그대로
 //   가르친 경로 (routes_dir, 11-15 teach & repeat): 사람이 수동으로 몬 경로(tools/field/route_record.py)의 시작이 로봇 근처 ·
 //     끝이 목표 근처면(거꾸로도) 문 경유점 대신 그 경로의 꺾이는 점들을 경유점으로 (skills/route_plan.hpp)
 //   경유점 지도 (via_points, 11-15 사용자 지정): 사람이 찍은 점 + 화살표 — 보이는 점끼리 최단으로 이어 경유점 (skills/via_graph.hpp).
@@ -31,6 +33,7 @@
 #include "skills/skill_node.hpp"
 #include "std_msgs/msg/string.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <cstdlib>
@@ -64,6 +67,8 @@ public:
     near_yaw_ = declare_parameter<double>("nav_near_yaw", 0.8);  // [rad]
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     doors_ = declare_parameter<std::vector<double>>("doors", std::vector<double>{});  // 문마다 7개 — skills.yaml 설명
+    gates_ = declare_parameter<std::vector<double>>("gates", std::vector<double>{});  // 길목마다 6개 — skills.yaml 설명
+    no_path_ = declare_parameter<std::vector<double>>("no_path_zones", std::vector<double>{});  // 사각형마다 4개 — skills.yaml 설명
     start_ = declare_parameter<std::vector<double>>("start_pose_arena", {0.734, 0.950, M_PI});
     door_goal_skip_m_ = declare_parameter<double>("door_goal_skip_m", 0.30);
     // 문에 /arena/correction을 얹을지 — 기본 끔 (11-15): 전역·local costmap은 /arena/walls(보정 안 한 실측 벽)를 봄. 문만 보정하면
@@ -111,7 +116,7 @@ public:
         std::istringstream in(g.target);
         for (std::string t; in >> t;) flags.insert(t);
         const uint64_t seq = ++nav_seq_;
-        if ((doors_.size() < 7 && via_.nodes.empty()) || !path_->action_server_is_ready()) {
+        if ((doors_.size() < 7 && gates_.size() < 6 && via_.nodes.empty() && no_path_.size() < 4) || !path_->action_server_is_ready()) {
           drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
           return;
         }
@@ -124,26 +129,33 @@ public:
           if (seq != nav_seq_) return;  // 그사이 멈춤
           auto legs = std::make_shared<std::vector<Pose>>();
           if (r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result && !r.result->path.poses.empty()) {
-            *legs = route_legs(r.result->path.poses.front(), goal);  // 가르친 경로가 있으면 그것 (문도 이미 사람이 지남)
-            if (legs->empty()) {
-              const auto & rp = r.result->path.poses.front().pose.position;
-              const auto v = via_.nodes.empty() ? std::nullopt
-                                                : via_.route({rp.x, rp.y}, {goal.pose.position.x, goal.pose.position.y});
-              if (v) {
-                for (size_t k = 0; k < v->size(); ++k) {
-                  const auto nxt = k + 1 < v->size() ? (*v)[k + 1] : ViaGraph::P{goal.pose.position.x, goal.pose.position.y};
-                  const double yaw = std::atan2(nxt.second - (*v)[k].second, nxt.first - (*v)[k].first);  // 다음 점을 봄
-                  Pose p = goal;
-                  p.pose.position.x = (*v)[k].first;
-                  p.pose.position.y = (*v)[k].second;
-                  p.pose.orientation.x = p.pose.orientation.y = 0.0;
-                  p.pose.orientation.z = std::sin(yaw / 2);
-                  p.pose.orientation.w = std::cos(yaw / 2);
-                  legs->push_back(p);
+            // 경유점 지도 먼저 (11-16) → 이어진 길이 없으면 가르친 경로 → 그것도 없으면 막은 구역 검사 → 문 경유점
+            //   경유 0개(로봇과 목표가 바로 이어짐)도 경유점 지도의 답 — 가르친 경로로 넘어가지 않음
+            const auto & rp = r.result->path.poses.front().pose.position;
+            const auto v = via_.nodes.empty() ? std::nullopt
+                                              : via_.route({rp.x, rp.y}, {goal.pose.position.x, goal.pose.position.y});
+            if (v) {
+              for (size_t k = 0; k < v->size(); ++k) {
+                const auto nxt = k + 1 < v->size() ? (*v)[k + 1] : ViaGraph::P{goal.pose.position.x, goal.pose.position.y};
+                const double yaw = std::atan2(nxt.second - (*v)[k].second, nxt.first - (*v)[k].first);  // 다음 점을 봄
+                Pose p = goal;
+                p.pose.position.x = (*v)[k].first;
+                p.pose.position.y = (*v)[k].second;
+                p.pose.orientation.x = p.pose.orientation.y = 0.0;
+                p.pose.orientation.z = std::sin(yaw / 2);
+                p.pose.orientation.w = std::cos(yaw / 2);
+                legs->push_back(p);
+              }
+              RCLCPP_INFO(get_logger(), "경유점 지도 — 경유 %zu개", legs->size());
+            } else {
+              if (!via_.nodes.empty()) RCLCPP_WARN(get_logger(), "경유점 지도에 이어진 길 없음 — 가르친 경로 · 문 경유점으로");
+              *legs = route_legs(r.result->path.poses.front(), goal);  // 가르친 경로가 있으면 그것 (문도 이미 사람이 지남)
+              if (legs->empty()) {
+                if (const int z = blocked_zone(r.result->path.poses); z >= 0) {  // 그 구역엔 경유점이 없음 — 돌아갈 길도 없다고 봄
+                  RCLCPP_WARN(get_logger(), "경로가 막은 구역 %d(no_path_zones)을 지남 — 안 감", z);
+                  done(false, "nav_no_path_zone");
+                  return;
                 }
-                RCLCPP_INFO(get_logger(), "경유점 지도 — 경유 %zu개", legs->size());
-              } else {
-                if (!via_.nodes.empty()) RCLCPP_WARN(get_logger(), "경유점 지도에 이어진 길 없음 — 문 경유점으로");
                 *legs = door_legs(r.result->path.poses, goal);
               }
             }
@@ -168,6 +180,25 @@ protected:
   }
 
 private:
+  // map → arena (door_legs의 to_map 거꾸로: a = R(yaw0)·R(−dth)·(m − d) + start)
+  std::pair<double, double> to_arena(double x, double y) {
+    const double ux = x - corr_["dx"], uy = y - corr_["dy"], cd = std::cos(corr_["dth"]), sd = std::sin(corr_["dth"]);
+    const double mx = cd * ux + sd * uy, my = -sd * ux + cd * uy, c0 = std::cos(start_[2]), s0 = std::sin(start_[2]);
+    return {c0 * mx - s0 * my + start_[0], s0 * mx + c0 * my + start_[1]};
+  }
+
+  // 경로 점이 막은 구역(no_path_zones, arena 사각형) 안이면 그 구역 번호 (0부터), 아니면 −1
+  int blocked_zone(const std::vector<Pose> & path) {
+    for (const auto & p : path) {
+      const auto [ax, ay] = to_arena(p.pose.position.x, p.pose.position.y);
+      for (size_t i = 0; i + 3 < no_path_.size(); i += 4)
+        if (ax >= std::min(no_path_[i], no_path_[i + 2]) && ax <= std::max(no_path_[i], no_path_[i + 2]) &&
+            ay >= std::min(no_path_[i + 1], no_path_[i + 3]) && ay <= std::max(no_path_[i + 1], no_path_[i + 3]))
+          return static_cast<int>(i / 4);
+    }
+    return -1;
+  }
+
   // 경로가 지나는 문 → 들어가기 · 나가기 점 (map). 문 한 줄 = cx, cy, nx, ny (문 축 단위벡터), half_w (문 폭 절반),
   //   d_neg, d_pos (축 −쪽 · +쪽 점까지 문 가운데에서 [m]) — 모두 arena
   std::vector<Pose> door_legs(const std::vector<Pose> & path, const Pose & goal) {
@@ -180,54 +211,94 @@ private:
       const double mx = c0 * (ax - start_[0]) - s0 * (ay - start_[1]), my = s0 * (ax - start_[0]) + c0 * (ay - start_[1]);
       return std::pair<double, double>{cd * mx - sd * my + corr_["dx"], sd * mx + cd * my + corr_["dy"]};
     };
-    struct Hit { size_t k; size_t door; int sgn; };
+    // 문 · 길목을 한 모양으로 (arena): 가운데 · 축 · 폭 절반 · 축 −쪽/+쪽 점 거리. 길목은 A–B 가운데 · 축 A→B · 점 = A, B
+    struct Cross { double cx, cy, nx, ny, half_w, d_neg, d_pos; bool gate, one_way; double ax, ay, bx, by; };
+    std::vector<Cross> xs;
+    for (size_t d = 0; d + 6 < doors_.size(); d += 7)
+      xs.push_back({doors_[d], doors_[d + 1], doors_[d + 2], doors_[d + 3], doors_[d + 4], doors_[d + 5], doors_[d + 6], false, false,
+                    0, 0, 0, 0});
+    for (size_t i = 0; i + 5 < gates_.size(); i += 6) {
+      const double ax = gates_[i], ay = gates_[i + 1], bx = gates_[i + 2], by = gates_[i + 3], len = std::hypot(bx - ax, by - ay);
+      if (len < 1e-3) continue;
+      xs.push_back({(ax + bx) / 2, (ay + by) / 2, (bx - ax) / len, (by - ay) / len, gates_[i + 4], len / 2, len / 2, true,
+                    gates_[i + 5] < 0.5, ax, ay, bx, by});
+    }
+    struct Hit { size_t k; size_t x; int sgn; };
     std::vector<Hit> hits;
     std::set<size_t> seen;
     for (size_t k = 0; k + 1 < path.size(); ++k) {
       const auto & a = path[k].pose.position, & b = path[k + 1].pose.position;
-      for (size_t d = 0; d + 6 < doors_.size(); d += 7) {
-        if (seen.count(d)) continue;
-        const auto [cx, cy] = to_map(doors_[d], doors_[d + 1]);
-        const double nx = c * doors_[d + 2] - s * doors_[d + 3], ny = s * doors_[d + 2] + c * doors_[d + 3];
+      for (size_t x = 0; x < xs.size(); ++x) {
+        if (seen.count(x)) continue;
+        const auto & X = xs[x];
+        const auto [cx, cy] = to_map(X.cx, X.cy);
+        const double nx = c * X.nx - s * X.ny, ny = s * X.nx + c * X.ny;
         const double sa = (a.x - cx) * nx + (a.y - cy) * ny, sb = (b.x - cx) * nx + (b.y - cy) * ny;
         if ((sa < 0.0) == (sb < 0.0)) continue;
         const double t = sa / (sa - sb), qx = a.x + (b.x - a.x) * t, qy = a.y + (b.y - a.y) * t;
-        if (std::abs(-(qx - cx) * ny + (qy - cy) * nx) > doors_[d + 4]) continue;
-        seen.insert(d);
-        hits.push_back({k, d, sb > sa ? 1 : -1});
+        if (std::abs(-(qx - cx) * ny + (qy - cy) * nx) > X.half_w) continue;
+        const int sgn = sb > sa ? 1 : -1;
+        if (X.one_way && sgn < 0) continue;  // 화살표 반대로 지나면 길목 아님 (다음 구간에서 다시 보지 않게 seen엔 안 넣음)
+        seen.insert(x);
+        hits.push_back({k, x, sgn});
       }
     }
+    // 길목과 겹치는 문은 뺌 — 같은 틈에 점이 넷이면 앞뒤로 오감 (문 가운데가 지난 길목 선분에서 0.4 m 안)
+    hits.erase(std::remove_if(hits.begin(), hits.end(), [&](const Hit & h) {
+      if (xs[h.x].gate) return false;
+      for (const auto & g : hits) {
+        if (!xs[g.x].gate) continue;
+        const auto & G = xs[g.x];
+        const double dx = G.bx - G.ax, dy = G.by - G.ay, len2 = dx * dx + dy * dy;
+        const double u = std::clamp(((xs[h.x].cx - G.ax) * dx + (xs[h.x].cy - G.ay) * dy) / len2, 0.0, 1.0);
+        if (std::hypot(xs[h.x].cx - G.ax - u * dx, xs[h.x].cy - G.ay - u * dy) < 0.4) return true;
+      }
+      return false;
+    }), hits.end());
     const auto & r0 = path.front().pose.position, & g = goal.pose.position;
+    auto point = [&](double px, double py, double yaw) {
+      Pose p = goal;
+      p.pose.position.x = px;
+      p.pose.position.y = py;
+      p.pose.orientation.x = p.pose.orientation.y = 0.0;
+      p.pose.orientation.z = std::sin(yaw / 2);
+      p.pose.orientation.w = std::cos(yaw / 2);
+      return p;
+    };
+    auto add = [&](double px, double py, double yaw) {  // 바로 앞 점과 거의 같으면 (길목 B = 다음 길목 A) 한 번만
+      if (!legs.empty() && std::hypot(legs.back().pose.position.x - px, legs.back().pose.position.y - py) < 0.15) return;
+      legs.push_back(point(px, py, yaw));
+    };
     double pcx = 0.0, pcy = 0.0, pfwd = -1.0;   // 앞 문 가운데 · 나가기 거리 (없으면 −1)
     bool pexit = false;                         // 앞 문 나가기 점을 넣었는지
     for (const auto & h : hits) {  // 경로 순서 (k 오름차순으로 찾았음)
-      const size_t d = h.door;
-      const auto [cx, cy] = to_map(doors_[d], doors_[d + 1]);
-      const double nx = h.sgn * (c * doors_[d + 2] - s * doors_[d + 3]), ny = h.sgn * (s * doors_[d + 2] + c * doors_[d + 3]);
-      const double back = h.sgn > 0 ? doors_[d + 5] : doors_[d + 6], fwd = h.sgn > 0 ? doors_[d + 6] : doors_[d + 5];
-      auto point = [&](double along) {
-        Pose p = goal;
-        p.pose.position.x = cx + nx * along;
-        p.pose.position.y = cy + ny * along;
-        const double yaw = std::atan2(ny, nx);
-        p.pose.orientation.x = p.pose.orientation.y = 0.0;
-        p.pose.orientation.z = std::sin(yaw / 2);
-        p.pose.orientation.w = std::cos(yaw / 2);
-        return p;
-      };
+      const auto & X = xs[h.x];
+      const auto [cx, cy] = to_map(X.cx, X.cy);
+      const double nx = h.sgn * (c * X.nx - s * X.ny), ny = h.sgn * (s * X.nx + c * X.ny), yaw = std::atan2(ny, nx);
+      if (X.gate) {  // 사용자가 찍은 점 그대로 — 들어가는 점 · 나가는 점 (거꾸로면 B · A)
+        auto [p1x, p1y] = to_map(h.sgn > 0 ? X.ax : X.bx, h.sgn > 0 ? X.ay : X.by);
+        auto [p2x, p2y] = to_map(h.sgn > 0 ? X.bx : X.ax, h.sgn > 0 ? X.by : X.ay);
+        if (std::hypot(r0.x - p1x, r0.y - p1y) > 0.25) add(p1x, p1y, yaw);  // 이미 그 점에 서 있으면 뺌
+        if (std::hypot(g.x - p2x, g.y - p2y) > door_goal_skip_m_) add(p2x, p2y, yaw);
+        RCLCPP_INFO(get_logger(), "길목 (%.2f, %.2f)→(%.2f, %.2f) 지남 — 경유 %zu개", p1x, p1y, p2x, p2y, legs.size());
+        pfwd = -1.0;
+        pexit = false;
+        continue;
+      }
+      const double back = h.sgn > 0 ? X.d_neg : X.d_pos, fwd = h.sgn > 0 ? X.d_pos : X.d_neg;
       // 이미 들어가기 점에 서 있으면 뺌 — 11-15: 예전엔 문 가운데에서 back + 0.1 안이면 뺐는데, 문 옆 상자 자리(B4, 문에서 0.37 m)에서
       //   들어가기 점을 건너뛰고 대각선으로 문 모서리에 박았음
-      const auto in = point(-back);
+      const double inx = cx - nx * back, iny = cy - ny * back;
       // 붙은 문 둘 (11-15 시뮬 L2→L1: D8·D9 0.73 m — 앞 문 나가기 0.55 m가 다음 문 들어가기 0.55 m를 지나쳐 되돌아가다 끼임):
       //   두 문 사이가 나가기 + 들어가기보다 가까우면 앞 문 나가기 · 이 문 들어가기를 빼고 앞 문 들어가기에서 이 문 나가기로 곧게
       const bool chained = pfwd >= 0.0 && std::hypot(cx - pcx, cy - pcy) < pfwd + back + 0.05;
       if (chained) {
         if (pexit) legs.pop_back();
-      } else if (std::hypot(r0.x - in.pose.position.x, r0.y - in.pose.position.y) > 0.15) {
-        legs.push_back(in);
+      } else if (std::hypot(r0.x - inx, r0.y - iny) > 0.15) {
+        add(inx, iny, yaw);
       }
       pexit = std::hypot(g.x - cx, g.y - cy) > fwd + door_goal_skip_m_;
-      if (pexit) legs.push_back(point(fwd));
+      if (pexit) legs.push_back(point(cx + nx * fwd, cy + ny * fwd, yaw));  // add 말고 — 다음 문이 붙으면 pop_back으로 뺌
       pcx = cx; pcy = cy; pfwd = fwd;
       RCLCPP_INFO(get_logger(), "문 (%.2f, %.2f) 지남 — 경유 %zu개", cx, cy, legs.size());
     }
@@ -415,7 +486,7 @@ private:
     return std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
   }
   double stall_s_ = 25.0, stall_gain_m_ = 0.10, look_m_ = 0.6, near_m_ = 0.15, near_yaw_ = 0.8, door_goal_skip_m_ = 0.30;
-  std::vector<double> doors_, start_;
+  std::vector<double> doors_, gates_, no_path_, start_;
   std::map<std::string, double> corr_{{"dx", 0.0}, {"dy", 0.0}, {"dth", 0.0}};
   bool door_use_corr_ = false;
   std::string routes_dir_;
