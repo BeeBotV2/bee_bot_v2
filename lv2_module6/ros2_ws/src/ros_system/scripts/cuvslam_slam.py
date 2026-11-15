@@ -97,6 +97,12 @@ def body_twist(prev, cur, dt):
     return (c * dx + s * dy) / dt, (-s * dx + c * dy) / dt, dyaw / dt
 
 
+def apply_map_correction(map_offset, corr):
+    """도면 보정 조각 corr (지금 map에서 도면 물체가 compose(corr, 도면)에 보임) → 새 map_offset = corr⁻¹ ∘ map_offset
+    (map 자세 = map_offset ∘ cuVSLAM 자세라, 모든 map 자세가 corr⁻¹만큼 옮겨져 도면 물체가 제자리에 옴)"""
+    return compose(inverse(corr), map_offset)
+
+
 class MapGate:
     """map→odom 보정 거르기 — cuVSLAM(RGB-D 한 대 · IMU 없음)이 벽 앞·빠른 회전에서 튀어도 지도 위치가 따라 튀지 않게.
     표준(Isaac ROS VIO)은 IMU 융합으로 버티고 map→odom은 루프 클로저 때만 바뀜 — 여기선 대신:
@@ -224,6 +230,11 @@ class CuvslamSlam(Node):
         self.create_subscription(PoseWithCovarianceStamped,
                                  self.declare_parameter('initialpose_topic', '/initialpose').value,
                                  self.on_initialpose, 10)
+        # 도면 보정 → 로봇 위치 (mission_manager arena_corr_to_localization, 11-15): [dx, dy, dth] = 보정 조각
+        #   (지금 map에서 도면 물체가 apply_corr(조각, 도면) 자리에 보임) → map 기준을 조각⁻¹만큼 옮김. MapGate가 초당 rate로 따라감
+        from std_msgs.msg import Float64MultiArray
+        self.create_subscription(Float64MultiArray, self.declare_parameter('map_correction_topic', '/localization/map_correction').value,
+                                 self.on_map_correction, 10)
         self.create_subscription(CameraInfo, self.declare_parameter('camera_info', '/pole_front_cam/color/camera_info').value,
                                  self.on_info, qos_profile_sensor_data)
         color = Subscriber(self, Image, self.declare_parameter('rgb', '/pole_front_cam/color/image_raw').value,
@@ -266,6 +277,12 @@ class CuvslamSlam(Node):
             self.get_logger().info('initialpose 대기 — 첫 추적 프레임 뒤 적용')
             return
         self.apply_initialpose(desired)
+
+    def on_map_correction(self, m):
+        if len(m.data) < 3:
+            return
+        self.map_offset = apply_map_correction(self.map_offset, (float(m.data[0]), float(m.data[1]), float(m.data[2])))
+        self.get_logger().info(f'도면 보정 받음 → map 기준 옮김 ({m.data[0]:+.3f}, {m.data[1]:+.3f}, {math.degrees(m.data[2]):+.2f}°)')
 
     def apply_initialpose(self, desired):
         if self.gate is not None:

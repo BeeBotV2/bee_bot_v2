@@ -10,7 +10,7 @@
 //   문 경유점 (doors, 11-15): 경로가 문을 대각선으로 질러 벽 끝에 코를 대고 collision_monitor가 세웠음 (실기 B3 6판 ·
 //     시뮬 재현). 먼저 /compute_path_to_pose로 경로를 받아 지나는 문마다 들어가기 점(문 앞, 문 축 방향으로 제자리 회전) ·
 //     나가기 점(문 너머, 일직선 유지)을 끼워 차례로 NavigateToPose. 목표가 문 바로 너머면 나가기 점은 뺌.
-//     문은 경기장(arena) 좌표 — start_pose_arena로 map에 옮기고 mission_manager의 /arena/correction을 얹음
+//     문은 경기장(arena) 좌표 — start_pose_arena로 map에 옮김 (door_use_correction이면 /arena/correction도 얹음 — 기본 끔)
 #include <sstream>
 #include "skills/arm_io.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
@@ -47,8 +47,13 @@ public:
     doors_ = declare_parameter<std::vector<double>>("doors", std::vector<double>{});  // 문마다 7개 — skills.yaml 설명
     start_ = declare_parameter<std::vector<double>>("start_pose_arena", {0.734, 0.950, M_PI});
     door_goal_skip_m_ = declare_parameter<double>("door_goal_skip_m", 0.30);
+    // 문에 /arena/correction을 얹을지 — 기본 끔 (11-15): 전역·local costmap은 /arena/walls(보정 안 한 실측 벽)를 봄. 문만 보정하면
+    //   경로와 문 경유점이 다른 벽을 봐서, 돌아오는 길에 들어가기 점이 문 축에서 9 cm 어긋나 위쪽 벽 끝에 막혔음.
+    //   보정은 이제 로봇 위치(map→odom)로 들어감 (mission_manager arena_corr_to_localization → cuvslam_slam) — 그러면 벽·문 모두 맞음
+    door_use_corr_ = declare_parameter<bool>("door_use_correction", false);
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
+        if (!door_use_corr_) return;
         for (const char * k : {"dx", "dy", "dth"}) {
           const auto i = m->data.find(std::string("\"") + k + "\":");
           if (i != std::string::npos) corr_[k] = std::strtod(m->data.c_str() + i + std::string(k).size() + 3, nullptr);
@@ -231,6 +236,7 @@ private:
   double stall_s_ = 25.0, stall_gain_m_ = 0.10, look_m_ = 0.6, near_m_ = 0.15, near_yaw_ = 0.8, door_goal_skip_m_ = 0.30;
   std::vector<double> doors_, start_;
   std::map<std::string, double> corr_{{"dx", 0.0}, {"dy", 0.0}, {"dth", 0.0}};
+  bool door_use_corr_ = false;
   ArmIO arm_;
   std::vector<double> look_q_;
 };
