@@ -141,7 +141,11 @@ def main(out_dir):
     stops += [(f'L{i}', stand_pose(LOC[i - 1], P['location_box_sides'][i - 1])) for i in P['build_location_order']]
     stops += [('start', (START[0], START[1], START[2]))]
     out_dir.mkdir(parents=True, exist_ok=True)
-    for k, ((na, a), (nb, b)) in enumerate(zip(stops, stops[1:]), 1):
+    legs = list(zip(stops, stops[1:]))
+    # 상자마다 출발로 돌아가는 구간도 (상자로 가기 시험 · 중간 실패 뒤 복귀 — 11-16 실기 S4_start 없어 Nav2로 가다 걸림)
+    home = stops[0]
+    legs += [(s, home) for s in stops[1:-1] if (s, home) not in legs]
+    for k, ((na, a), (nb, b)) in enumerate(legs, 1):
         pts = astar(a, b)
         if pts is None: print(f'{k:2d} {na}_{nb}: 경로 없음'); continue
         corners = push_corners(simplify(pts, 0.05))

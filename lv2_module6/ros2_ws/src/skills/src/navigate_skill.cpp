@@ -502,6 +502,9 @@ private:
     b.target.x = unstick_m_;
     b.speed = 0.05f;
     b.time_allowance.sec = 10;
+    // costmap 검사 끔 (11-16 실기·시뮬: 벽·상자에 붙어 걸린 자리에서 뒤쪽 costmap이 '충돌 앞'으로 막아 못 빠져나옴)
+    //   0.15 m · 0.05 m/s만 — 뒤는 collision_monitor backward 반원이 계속 지킴
+    b.disable_collision_checks = true;
     rclcpp_action::Client<BackUp>::SendGoalOptions bo;
     bo.result_callback = [this, seq, then](const rclcpp_action::ClientGoalHandle<BackUp>::WrappedResult &) {
       if (seq == nav_seq_) then();
