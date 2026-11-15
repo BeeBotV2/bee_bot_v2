@@ -139,6 +139,7 @@ MissionManager::MissionManager()
   stand_find_m_ = declare_parameter<double>("stand_find_m", 0.10);  // [m] stand 뒤 선 퍽을 누운 가운데에서 이 안에서 찾음 → pick
   verify_radius_ = declare_parameter<double>("verify_radius", 0.15);
   verify_in_place_ = declare_parameter<bool>("verify_in_place", true);
+  declare_parameter<std::string>("start_stop", "start");  // 미션 시작 때 로봇이 선 곳 (leg 이름) — 시뮬 구간 시험용 (ros2 param set)
   // 방문 순서 (1부터) — 경기장 고정이라 오프라인 A*(tools/plan/route_order.py, 도면 벽)로 정한 값. 비거나 틀리면 1, 2, 3, …
   survey_order_ = visit_order(declare_parameter<std::vector<int64_t>>("survey_order", std::vector<int64_t>{}), start_boxes_.size());
   build_loc_order_ = visit_order(declare_parameter<std::vector<int64_t>>("build_location_order", std::vector<int64_t>{}), 3);
@@ -354,7 +355,7 @@ void MissionManager::on_command(const std::string & cmd) {
   verify_json_.clear();
   verified_.clear();
   last_place_loc_ = -1;
-  stop_ = "start";  // 미션은 출발 자리에서 시작 (운영 규칙)
+  stop_ = get_parameter("start_stop").as_string();  // 미션은 출발 자리에서 시작 (운영 규칙) · 시뮬 구간 시험은 그 상자 앞 (S4 등)
   seen_tags_.clear();
   lying_.clear();
   corr_.assign(locations_.size(), {0.0, 0.0});

@@ -135,5 +135,15 @@ def main(out_dir):
               + ' → '.join(f'{"직" if t == "forward" else "회"}{v:+g}' for t, v in mv))
 
 
+def stops():
+    st = [('start', (START[0], START[1], START[2]))]
+    st += [(f'S{i}', stand_pose(SB[i - 1], P['start_box_sides'][i - 1])) for i in P['survey_order']]
+    st += [(f'L{i}', stand_pose(LOC[i - 1], P['location_box_sides'][i - 1])) for i in P['build_location_order']]
+    return st
+
+
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == '--stops':  # 구간 시험용: 이름 x y yaw (다가설 자리 · 상자를 봄)
+        for n, (x, y, t) in stops(): print(n, f'{x:.3f}', f'{y:.3f}', f'{t:.5f}')
+        sys.exit(0)
     main(Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.path.expanduser('~/.ros/routes')))
