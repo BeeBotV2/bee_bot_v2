@@ -631,6 +631,9 @@ def start_with_bag(item, cmd: str, label: str):
             rec = bagrec.start(label, regex=regex, extra=RECORD_OPTS)
         except (OSError, subprocess.CalledProcessError, RuntimeError) as e:
             print(f'녹화를 못 켬 — 녹화 없이 진행: {str(e)[-200:]}')
+    if rec:  # 녹화기가 토픽 수십 개를 구독하는 순간(~1 s) CPU가 몰림 — 그 뒤에 출발 (11-15: 겹쳐서 TF 끊김 → 출발 실패)
+        import time
+        time.sleep(2.0)
     item.bus.cmd_mission(cmd)
     if rec:
         threading.Thread(target=stop_bag_when_done, args=(item.state, rec['bag'], bagrec), daemon=True).start()
