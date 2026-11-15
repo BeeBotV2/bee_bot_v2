@@ -212,7 +212,9 @@ class CuvslamSlam(Node):
         # map→odom을 이만큼 미래 시각으로 냄 (0.5 s — 영상 지연 + 발행 간격 최대 0.33 s 때문에 0.2로는 Nav2 controller가 '미래 외삽'으로 목표를 중단함, 실기 2026-11-09)
         # 최신 map→odom이 방금 들어온 depth 영상보다 옛 시각이라, nvblox가 그 영상 시각으로 TF를 찾으면 '미래 외삽'으로 실패해
         # depth를 버렸음 (실기 2026-10-29: 지도가 시작 몇 프레임 뒤로 안 자람). map→odom은 천천히 바뀌어 미래로 내도 안전
-        self.map_tf_tolerance = Duration(seconds=float(self.declare_parameter('map_tf_tolerance', 0.5).value))
+        self.map_tf_tolerance = Duration(seconds=float(self.declare_parameter('map_tf_tolerance', 1.0).value))
+        #   map→odom 시각을 이만큼 미래로 (AMCL transform_tolerance 기본 1.0과 같게) — 11-15: 0.5면 미션 시작(bag 녹화·팔 동작) 순간 CPU 몰림에
+        #   cuVSLAM이 ~1 s 멈춰 TF가 끊김 → controller "Failed to transform end pose" (error 102)로 출발 못 함
         self.depth_scale = float(self.declare_parameter('depth_scale_factor', 1000.0).value)  # 16UC1 mm → m
         self.min_depth = float(self.declare_parameter('min_depth', 0.5).value)  # [m] 이 안 픽셀(자기 팔)은 추적에서 뺌
         # N장에 한 장만 추적 (1 = 전부 · 2 = 15 → 7.5 Hz) — CPU 줄이기 시험용 (11-15). 빠른 제자리 회전(최대 1.8 rad/s)에서

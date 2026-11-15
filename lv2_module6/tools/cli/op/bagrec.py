@@ -90,7 +90,8 @@ def start(label: str | None = None, topics: list[str] | None = None, regex: str 
     bag = BAG_DIR / f'{time.strftime("%Y%m%d_%H%M%S")}_{label}'
     BAG_DIR.mkdir(parents=True, exist_ok=True)
     log = BAG_DIR / f'{bag.name}.log'
-    cmd = bag_command(bag, topics, regex, extra)
+    # nice 10 — 녹화기는 제어·Nav2·cuVSLAM보다 뒤로 (11-15: 미션 시작과 겹친 녹화 시작 CPU 몰림에 cuVSLAM이 멈춰 출발 실패)
+    cmd = ['nice', '-n', '10', *bag_command(bag, topics, regex, extra)]
     max_s = MAX_S if max_s is None else max_s
     if max_s > 0 and shutil.which('timeout'):
         # --foreground: SIGINT를 ros2에만 한 번 넘김 · -k: SIGINT에 안 끝나면 30초 뒤 SIGKILL.
@@ -111,7 +112,7 @@ def start(label: str | None = None, topics: list[str] | None = None, regex: str 
         raise RuntimeError(f'ros2 bag record 시작 실패 (로그 {log})\n{tail}')
     mon = None
     if sys_on:
-        mon = subprocess.Popen([sys.executable, str(SYSMON), '--out', str(bag)], stdout=subprocess.DEVNULL,
+        mon = subprocess.Popen(['nice', '-n', '10', sys.executable, str(SYSMON), '--out', str(bag)], stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True)
     rec = {'pid': proc.pid, 'mon_pid': mon.pid if mon else None, 'bag': str(bag), 'label': label,
            'started': time.time(), 'log': str(log), 'sys': bool(sys_on), 'owner': os.getpid(), 'max_s': max_s}
