@@ -70,3 +70,14 @@ TEST(RoutePlan, MedianSpeed) {
   std::remove(f);
   EXPECT_DOUBLE_EQ(skills::median_speed("/nonexistent", 0.1), 0.1);
 }
+
+TEST(RoutePlan, PathPoints) {
+  // 1 m 직진 → 왼쪽 90° → 0.5 m 직진 → 왼쪽 90° (끝 방향)
+  const std::vector<skills::Move> m{{false, 1.0}, {true, M_PI / 2}, {false, 0.5}, {true, M_PI / 2}};
+  const auto p = skills::path_points({0.0, 0.0, 0.0}, m, 0.1);
+  ASSERT_EQ(p.size(), 16u);  // 시작 + 10 + 5
+  EXPECT_NEAR(p[10].x, 1.0, 1e-9);
+  EXPECT_NEAR(p[10].yaw, M_PI / 2, 1e-9);  // 꺾이는 점은 새 방향
+  EXPECT_NEAR(p.back().y, 0.5, 1e-9);
+  EXPECT_NEAR(p.back().yaw, M_PI, 1e-9);   // 끝 방향
+}

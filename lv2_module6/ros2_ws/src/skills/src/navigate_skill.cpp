@@ -21,6 +21,7 @@
 #include "skills/arm_io.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
 #include "nav2_msgs/action/drive_on_heading.hpp"
+#include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/spin.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
@@ -49,12 +50,14 @@ public:
   using Pose = geometry_msgs::msg::PoseStamped;
   using Spin = nav2_msgs::action::Spin;
   using Drive = nav2_msgs::action::DriveOnHeading;
+  using Follow = nav2_msgs::action::FollowPath;
   explicit NavigateSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_navigate", options), arm_(*this) {
     nav_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
     path_ = rclcpp_action::create_client<ComputePath>(this, "/compute_path_to_pose");
     spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
     drive_ = rclcpp_action::create_client<Drive>(this, "/drive_on_heading");
+    follow_ = rclcpp_action::create_client<Follow>(this, "/follow_path");
     stall_s_ = declare_parameter<double>("nav_stall_s", 15.0);       // 0이면 감시 안 함
     stall_gain_m_ = declare_parameter<double>("nav_stall_gain_m", 0.10);
     look_m_ = declare_parameter<double>("nav_look_m", 0.6);
@@ -82,6 +85,9 @@ public:
     settle_s_ = declare_parameter<double>("route_settle_s", 0.8);
     // 엇나가면: false(기본) = 멈추고 실패 (표가 맞는지 시험) · true = 남은 길은 Nav2
     fallback_nav2_ = declare_parameter<bool>("route_fallback_nav2", false);
+    // follow(기본) = 표를 map 경로로 바꿔 FollowPath — 컨트롤러가 local costmap(벽·장애물)을 보며 따라감 (사람이 몬 길 + 주변 인지)
+    //   primitives = Spin · DriveOnHeading으로 거리·각도만 (눈 감고 셈 — 시뮬: odom 회전이 12% 많게 잡혀 10° 틀어져 벽으로)
+    route_mode_ = declare_parameter<std::string>("route_mode", "follow");
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
         if (!door_use_corr_) return;
@@ -115,6 +121,8 @@ protected:
     spin_goal_.reset();
     if (drive_goal_) drive_->async_cancel_goal(drive_goal_);
     drive_goal_.reset();
+    if (follow_goal_) follow_->async_cancel_goal(follow_goal_);
+    follow_goal_.reset();
     arm_.stop();
   }
 
@@ -164,9 +172,9 @@ private:
     spin_->async_send_goal(g, opt);
   }
 
-  bool odom_pose(Pose2d & p) {
+  bool odom_pose(Pose2d & p, const std::string & frame = "odom") {
     try {
-      const auto t = arm_.tf().lookupTransform("odom", "base_footprint", tf2::TimePointZero).transform;
+      const auto t = arm_.tf().lookupTransform(frame, "base_footprint", tf2::TimePointZero).transform;
       p = {t.translation.x, t.translation.y, yaw_of(t.rotation)};
       return true;
     } catch (const std::exception &) {
@@ -189,6 +197,7 @@ private:
       }
     if (best.empty()) { RCLCPP_INFO(get_logger(), "구간 %s 표 없음 — Nav2", leg.c_str()); return false; }
     auto moves = std::make_shared<std::vector<Move>>(load_motion(best));
+    if (route_mode_ == "follow" && !moves->empty()) return start_follow(leg, best, *moves, goal, flags, seq, done);
     Pose2d p;
     if (moves->empty() || !spin_->action_server_is_ready() || !drive_->action_server_is_ready() || !odom_pose(p)) {
       RCLCPP_WARN(get_logger(), "구간 %s 표 %s — 재생 못 함 (빈 표 · /spin·/drive_on_heading 없음 · odom TF 없음) → Nav2",
@@ -198,6 +207,55 @@ private:
     const double speed = std::clamp(median_speed(best.substr(0, best.size() - 11) + ".cmd.csv", route_speed_), 0.05, 0.22);
     RCLCPP_INFO(get_logger(), "구간 %s 표대로 (%zu동작 · 직진 %.2f m/s) — %s", leg.c_str(), moves->size(), speed, best.c_str());
     replay(leg, moves, 0, p, speed, goal, flags, seq, done);
+    return true;
+  }
+
+  // follow: 표 → map 경로 (지금 로봇 자세에서) → FollowPath. 실패하면 멈춤 (route_fallback_nav2면 Nav2)
+  bool start_follow(const std::string & leg, const std::string & file, const std::vector<Move> & moves, const Pose & goal,
+                    const std::set<std::string> & flags, uint64_t seq, Done done) {
+    Pose2d p;
+    if (!follow_->action_server_is_ready() || !odom_pose(p, "map")) {
+      RCLCPP_WARN(get_logger(), "구간 %s — /follow_path 없음 또는 map TF 없음 → Nav2", leg.c_str());
+      return false;
+    }
+    Follow::Goal g;
+    g.path.header.frame_id = "map";
+    g.path.header.stamp = now();
+    for (const auto & q : path_points(p, moves)) {
+      Pose ps;
+      ps.header = g.path.header;
+      ps.pose.position.x = q.x;
+      ps.pose.position.y = q.y;
+      ps.pose.orientation.z = std::sin(q.yaw / 2);
+      ps.pose.orientation.w = std::cos(q.yaw / 2);
+      g.path.poses.push_back(ps);
+    }
+    const auto & e = g.path.poses.back().pose.position;
+    RCLCPP_INFO(get_logger(), "구간 %s 표 → 경로 %zu점 (끝 map %.2f, %.2f · Nav2 목표와 %.2f m) FollowPath — %s", leg.c_str(),
+                g.path.poses.size(), e.x, e.y, std::hypot(e.x - goal.pose.position.x, e.y - goal.pose.position.y), file.c_str());
+    stage("표 " + leg + " 경로 따라가기");
+    rclcpp_action::Client<Follow>::SendGoalOptions opt;
+    const auto finish = [this, leg, goal, flags, seq, done](bool ok, const std::string & why) {
+      if (seq != nav_seq_) return;
+      if (ok) { RCLCPP_INFO(get_logger(), "구간 %s 경로 끝 — 도착", leg.c_str()); done(true, ""); return; }
+      if (!fallback_nav2_) {
+        RCLCPP_WARN(get_logger(), "구간 %s 경로 따라가기 실패 (%s) — 멈춤", leg.c_str(), why.c_str());
+        done(false, "route_follow_failed");
+        return;
+      }
+      RCLCPP_WARN(get_logger(), "구간 %s 경로 따라가기 실패 (%s) — Nav2", leg.c_str(), why.c_str());
+      nav2(goal, flags, seq, done);
+    };
+    opt.goal_response_callback = [this, seq, finish](const rclcpp_action::ClientGoalHandle<Follow>::SharedPtr & h) {
+      if (seq != nav_seq_) { if (h) follow_->async_cancel_goal(h); return; }
+      if (h) follow_goal_ = h; else finish(false, "follow_rejected");
+    };
+    opt.result_callback = [this, finish](const rclcpp_action::ClientGoalHandle<Follow>::WrappedResult & r) {
+      follow_goal_.reset();
+      finish(r.code == rclcpp_action::ResultCode::SUCCEEDED,
+             r.result ? fmt("error %u %s", static_cast<unsigned>(r.result->error_code), r.result->error_msg.c_str()) : "aborted");
+    };
+    follow_->async_send_goal(g, opt);
     return true;
   }
 
@@ -445,6 +503,9 @@ private:
   rclcpp_action::Client<Drive>::SharedPtr drive_;
   rclcpp_action::ClientGoalHandle<Spin>::SharedPtr spin_goal_;
   rclcpp_action::ClientGoalHandle<Drive>::SharedPtr drive_goal_;
+  rclcpp_action::Client<Follow>::SharedPtr follow_;
+  rclcpp_action::ClientGoalHandle<Follow>::SharedPtr follow_goal_;
+  std::string route_mode_ = "follow";
   bool taught_ = false;
   double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052, settle_s_ = 0.8;
   bool fallback_nav2_ = false;

@@ -141,4 +141,24 @@ inline std::pair<double, double> deviation(const Pose2d & expect, const Pose2d &
           std::abs(std::remainder(actual.yaw - expect.yaw, 2 * M_PI))};
 }
 
+// 표 → 경로 점들 (구간 출발 자세 p에서, step 간격) — 회전은 그 자리 점의 방향만 바꿈, 마지막 점 방향 = 끝 방향.
+//   follow 모드: 이 경로를 Nav2 FollowPath로 — 컨트롤러가 local costmap(벽·장애물)을 보며 따라감 (11-15)
+inline std::vector<Pose2d> path_points(Pose2d p, const std::vector<Move> & moves, double step = 0.05) {
+  std::vector<Pose2d> out{p};
+  for (const auto & m : moves) {
+    if (m.turn) {
+      p.yaw += m.value;
+      out.back().yaw = p.yaw;
+      continue;
+    }
+    const int n = std::max(1, static_cast<int>(std::ceil(m.value / step - 1e-9)));
+    for (int k = 0; k < n; ++k) {
+      p.x += m.value / n * std::cos(p.yaw);
+      p.y += m.value / n * std::sin(p.yaw);
+      out.push_back(p);
+    }
+  }
+  return out;
+}
+
 }  // namespace skills
