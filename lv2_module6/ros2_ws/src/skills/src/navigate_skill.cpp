@@ -219,6 +219,10 @@ private:
       return false;
     }
     Follow::Goal g;
+    // 이름을 꼭 줘야 함 — goal_checker가 둘이라 빈 이름이면 "Failed to find goal checker name" (BT와 같은 이름: nav2_params.yaml)
+    g.controller_id = "FollowPath";
+    g.goal_checker_id = "general_goal_checker";
+    g.progress_checker_id = "progress_checker";
     g.path.header.frame_id = "map";
     g.path.header.stamp = now();
     for (const auto & q : path_points(p, moves)) {
