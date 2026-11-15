@@ -49,7 +49,7 @@ class StaticMapTests(unittest.TestCase):
 
     def test_static_keeps_localization_removes_reconstruction(self):
         ctx = self.context(map_backend='static_2d', static_map_yaml=str(self.map))
-        self.assertEqual(set(self.active(ctx)), {'cuvslam_slam', 'map_tf_relay', 'map_server', 'lifecycle_manager_map', 'rewind', 'static_esdf_slice'})
+        self.assertEqual(set(self.active(ctx)), {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'map_server', 'lifecycle_manager_map', 'rewind', 'static_esdf_slice'})
         with patch.object(self.mod.importlib.util, 'find_spec', return_value=object()), patch.object(self.mod, 'get_package_share_directory', return_value='/installed') as pkg:
             for action in self.mod.check_slam(ctx):
                 action.execute(ctx)
@@ -65,10 +65,10 @@ class StaticMapTests(unittest.TestCase):
 
     def test_original_backend_and_no_map(self):
         # nvblox 기본 — nvblox_map · rewind는 py_helpers 한 프로세스 (#214) · pole_depth_gate는 C++(perception depth_gate) 따로
-        self.assertEqual(set(self.active(self.context())), {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'py_helpers', 'pole_depth_gate'})
-        self.assertEqual(set(self.active(self.context(depth_gate_cpp='false'))), {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'py_helpers'})
+        self.assertEqual(set(self.active(self.context())), {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'py_helpers', 'pole_depth_gate'})
+        self.assertEqual(set(self.active(self.context(depth_gate_cpp='false'))), {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'py_helpers'})
         self.assertEqual(set(self.active(self.context(py_helpers_one_process='false'))),
-                         {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'nvblox_map', 'pole_depth_gate', 'rewind'})
+                         {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'nvblox_map', 'pole_depth_gate', 'rewind'})
         self.assertEqual(set(self.active(self.context(use_slam='false', map_backend='static_2d'))), {'rewind'})
 
     def test_rejects_missing_map_and_mapping(self):

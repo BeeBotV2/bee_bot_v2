@@ -8,7 +8,13 @@ find_package(geometry_msgs REQUIRED)
 # map→odom 계속 내기 (src/map_tf_relay.cpp 머리말) — cuvslam_slam이 멈춰도 TF가 안 끊기게
 add_executable(map_tf_relay src/map_tf_relay.cpp)
 target_link_libraries(map_tf_relay rclcpp::rclcpp tf2_ros::tf2_ros ${geometry_msgs_TARGETS})
-install(TARGETS map_tf_relay DESTINATION lib/${PROJECT_NAME})
+find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+# 도면 벽 → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor가 옆·뒤 벽을 보게
+add_executable(grid_obstacle_cloud src/grid_obstacle_cloud.cpp)
+target_link_libraries(grid_obstacle_cloud rclcpp::rclcpp tf2_ros::tf2_ros tf2::tf2 ${nav_msgs_TARGETS} ${sensor_msgs_TARGETS})
+install(TARGETS map_tf_relay grid_obstacle_cloud DESTINATION lib/${PROJECT_NAME})
 
 # cuvslam_slam C++판 (src/cuvslam_slam.cpp, 11-16) — cuVSLAM C++ API(cuvslam2.h)를 바로 부름. 둘 다 있어야 빌드 (없으면 파이썬판만):
 #   헤더 = PyCuVSLAM 소스(v17.0.1, NVIDIA Community License라 저장소에 안 넣음) CUVSLAM_SRC_DIR/libs/cuvslam/cuvslam2.h

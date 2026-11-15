@@ -437,6 +437,8 @@ def slam_nodes():
                           'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int)}]),
         # cuvslam_slam의 map→odom(/cuvslam/map_odom)을 30 Hz로 계속 TF로 (src/map_tf_relay.cpp) — 계산이 멈춰도 TF는 안 끊김
         Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
+        # 도면 벽(/arena/walls) → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor 두 번째 입력 (옆·뒤)
+        Node(package='ros_system', executable='grid_obstacle_cloud', name='grid_obstacle_cloud', output='screen', condition=on),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_depth_gate', output='screen',
              condition=IfCondition(PythonExpression([*slam_nvblox, ' and not ', *one_proc, ' and not ', *gate_cpp])),
              parameters=[gate_params('pole_front_cam')]),

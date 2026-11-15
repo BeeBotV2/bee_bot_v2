@@ -260,6 +260,7 @@ MissionManager::MissionManager()
   beep_pub_ = create_publisher<std_msgs::msg::Int32MultiArray>("/cmd/beep", 10);
   markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/mission/markers", latched);
   walls_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/arena/walls", latched);
+  walls_only_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/arena/walls_only", latched);
   publish_walls();
   corr_pub_ = create_publisher<std_msgs::msg::String>("/arena/correction", latched);
   if (wall_fit_) {  // nvblox 격자는 보통 토픽(주기 발행) — best effort로 받으면 reliable 발행도 받음
@@ -1796,6 +1797,8 @@ void MissionManager::publish_walls() {
         g.data[static_cast<size_t>(cy) * g.info.width + cx] = 100;
     }
   }
+  // 벽만 따로 (11-16) — collision_monitor 옆·뒤 입력(ros_system grid_obstacle_cloud). 상자를 넣으면 상자에 붙는 approach(1.6 cm)를 막음
+  walls_only_pub_->publish(g);
   // 시작 박스 · 장소 상자도 칸 100 (11-14) — 7 cm 낮은 상자는 다가가면 카메라 광선이 로컬 코스트맵에서 가까운 면을 지워
   //   DWB가 몸으로 긁고 돌다 밀었다 (시뮬 상자 3을 0.5 m). 붙는 건 approach(코스트맵 안 씀)라 지도에 있어도 붙음
   size_t nb = 0;

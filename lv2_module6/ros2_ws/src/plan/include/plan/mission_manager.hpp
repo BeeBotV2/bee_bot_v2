@@ -337,6 +337,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr beep_pub_;
   rclcpp::TimerBase::SharedPtr beep_timer_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr walls_only_pub_;  // /arena/walls_only — 벽만 (상자·금지 구역 없음) → collision_monitor 옆·뒤 입력
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr walls_pub_;  // /arena/walls (map, latched) → nvblox_map이 /map에 겹침
   void publish_walls();
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_, barcode_sub_;
