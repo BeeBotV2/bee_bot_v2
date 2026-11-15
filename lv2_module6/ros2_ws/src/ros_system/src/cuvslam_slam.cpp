@@ -139,9 +139,11 @@ public:
     tf_buf_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buf_, this, true);  // 따로 스레드 — 콜백 안에서 TF를 읽어도 안 막힘
     tf_pub_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
-    // map_tf_relay (11-16): true면 map→odom을 TF 대신 /cuvslam/map_odom으로만 — map_tf_relay(C++)가 30 Hz로 계속 TF로 냄
+    // map_tf_relay (11-16): true면 map→odom을 TF 대신 토픽으로만 — map_tf_relay(C++)가 30 Hz로 계속 TF로 냄
+    //   토픽은 파이썬판·map_tf_relay와 같은 /cuvslam/map_to_odom (예전 /cuvslam/map_odom이면 relay가 못 받아 map→odom TF가 없었음)
     relay_ = declare_parameter<bool>("map_tf_relay", true);
-    map_odom_pub_ = create_publisher<geometry_msgs::msg::TransformStamped>("/cuvslam/map_odom", rclcpp::QoS(1).reliable().transient_local());
+    map_odom_pub_ = create_publisher<geometry_msgs::msg::TransformStamped>(
+      declare_parameter<std::string>("map_to_odom_topic", "/cuvslam/map_to_odom"), rclcpp::QoS(1).reliable().transient_local());
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(declare_parameter<std::string>("odom_topic", "/cuvslam/odom"), 10);
     path_pub_ = create_publisher<nav_msgs::msg::Path>("/cuvslam/path", 1);
     path_.header.frame_id = map_;
