@@ -157,6 +157,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   wall_gate_ = declare_parameter<double>("arena_corr_wall_gate", wall_gate_);
   wall_min_cells_ = static_cast<int>(declare_parameter<int64_t>("arena_corr_wall_min_cells", wall_min_cells_));
   wall_min_eig_ = declare_parameter<double>("arena_corr_wall_min_eig", wall_min_eig_);
+  wall_keep_s_ = declare_parameter<double>("arena_corr_wall_keep_s", wall_keep_s_);
   const double wall_period = declare_parameter<double>("arena_corr_wall_period", 2.0);
   const auto wall_grid = declare_parameter<std::string>("arena_corr_wall_grid", "/nvblox_node/static_occupancy_grid");
   acorr_gate_ = declare_parameter<double>("arena_corr_gate", acorr_gate_);

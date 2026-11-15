@@ -286,7 +286,7 @@ private:
   struct WallPt { double x, y, t; };
   std::vector<WallPt> wall_pts_;
   std::set<long long> wall_prev_;     // 지난 격자의 겉면 칸 (map 칸 번호) — 새로 생긴 칸만 고름
-  double wall_keep_s_ = 120.0;        // [s] 이보다 오래된 점은 버림
+  double wall_keep_s_ = 120.0;        // [s] 이보다 오래된 점은 버림 (arena_corr_wall_keep_s)
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_sub_;
   rclcpp::TimerBase::SharedPtr wall_timer_;
   void wall_tick();

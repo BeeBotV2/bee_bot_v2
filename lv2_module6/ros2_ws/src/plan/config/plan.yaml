@@ -197,7 +197,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   도면 상자와 짝지어 arena → map 변환에 (dx, dy, dθ)를 더함. 다가설 자리·장소·복귀·/arena/walls 전부 (회차 시작마다 0부터)
     #   기록: 로그 "도면 보정 dx … (근거 n개)" · <회차>/arena_correction.jsonl · /arena/correction (latched JSON)
     #   영상 끝에 잘린 상자(cut)와 같은 관측의 재발행(last_seen 그대로)은 안 셈
-    arena_correction: true # 상자 인지·marks 수집 활성. arena_corr_boxes=false라 box-fit은 끔
+    arena_correction: true # 상자 인지·marks 수집 활성 · box-fit은 arena_corr_boxes (11-16 사용자: 켬)
     arena_corr_idle: true # 미션이 없을 때도 보정해 /arena/correction으로 냄 (approach_loop.py --real이 그 값으로 목표를 잡음) — 미션 시작하면 0부터
     arena_corr_gate: 0.6 # [m] 인지 상자가 (지금 보정한) 도면 상자에서 이 안이고 다른 상자는 그보다 0.25 m 넘게 멀 때만 짝
     arena_corr_range: 2.5 # [m] 로봇에서 이보다 먼 상자는 안 씀 (depth 오차)
@@ -214,7 +214,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   회전은 10°씩 틀림 (11-15 bag approach_1115_094224 재생). 안 맞으면(벽이 한 방향만 · 칸 부족) 예전처럼 상자로
     #   상자(7 cm)는 격자에 없음 (esdf_slice_min_height 0.08) — 벽만
     arena_corr_wall_fit: true # 기본 벽 정합 활성 — src/n/RMS 기록 및 목표 좌표에 사용. map→odom 이동은 아래 스위치가 별도 제어
-    arena_corr_boxes: false # 상자 인지로 보정 안 함 (벽 정합만 · 안 맞으면 보정 없음) — 상자마다 인지 위치(marks)는 계속 /arena/correction에
+    arena_corr_boxes: true # 11-16 사용자: 상자 인지로도 보정 (벽 정합이 한 번 맞기 전까지만 — 그 뒤엔 벽) — 상자마다 인지 위치(marks)는 계속 /arena/correction에
     arena_corr_wall_gate: 0.3 # [m] 도면 벽에서 이 안의 칸만 (그 밖 = 상자·사람·도면에 없는 것)
     arena_corr_wall_min_cells: 60 # 맞은 칸(벽 겉면 — 빈 칸과 맞닿은 점유 칸)이 이보다 적으면 안 씀 (5 cm 칸 → 벽 3 m)
     arena_corr_wall_min_eig: 0.03 # x · y · 회전이 다 묶여야 (벽 한 줄만 보이면 그 벽을 따라가는 방향을 모름)
