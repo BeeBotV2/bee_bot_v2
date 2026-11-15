@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -75,6 +76,7 @@ public:
     dev_m_ = declare_parameter<double>("route_dev_m", 0.30);            // 표 기대 자세에서 이만큼 벗어나면 Nav2로
     dev_rad_ = declare_parameter<double>("route_dev_deg", 15.0) * M_PI / 180.0;
     route_speed_ = declare_parameter<double>("route_speed", 0.15);      // .cmd.csv가 없을 때 직진 속도 [m/s]
+    fix_rad_ = declare_parameter<double>("route_heading_fix_deg", 3.0) * M_PI / 180.0;  // 직진 전 이보다 틀리면 먼저 돎
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
         if (!door_use_corr_) return;
@@ -139,6 +141,24 @@ private:
     path_->async_send_goal(pg, opt);
   }
 
+  // Spin (odom 기준 상대 각도) — 결과를 cb(ok, why)로
+  void send_spin(double yaw, uint64_t seq, std::function<void(bool, const std::string &)> cb) {
+    Spin::Goal g;
+    g.target_yaw = static_cast<float>(yaw);
+    g.time_allowance.sec = static_cast<int32_t>(std::abs(yaw) / 0.3 + 10.0);
+    g.disable_collision_checks = true;  // 사람이 몬 길 — 벽 옆 회전도 그대로 (collision_monitor는 계속 켜짐)
+    rclcpp_action::Client<Spin>::SendGoalOptions opt;
+    opt.goal_response_callback = [this, seq, cb](const rclcpp_action::ClientGoalHandle<Spin>::SharedPtr & h) {
+      if (seq != nav_seq_) { if (h) spin_->async_cancel_goal(h); return; }
+      if (h) spin_goal_ = h; else cb(false, "spin_rejected");
+    };
+    opt.result_callback = [this, cb](const rclcpp_action::ClientGoalHandle<Spin>::WrappedResult & r) {
+      spin_goal_.reset();
+      cb(r.code == rclcpp_action::ResultCode::SUCCEEDED, "spin_failed");
+    };
+    spin_->async_send_goal(g, opt);
+  }
+
   bool odom_pose(Pose2d & p) {
     try {
       const auto t = arm_.tf().lookupTransform("odom", "base_footprint", tf2::TimePointZero).transform;
@@ -177,8 +197,10 @@ private:
   }
 
   // 표의 i번째 동작 — 끝나면 odom을 기대 자세와 비교. 엇나가거나 실패하면 남은 길은 Nav2로
+  //   회전은 '표의 기대 방향'까지 (지난 회전이 더 돌았거나 직진 중 휜 것까지 메움 — 11-15 실기: Spin −86°가 −99°로 13° 더 돌아
+  //   2.2 m 직진 뒤 0.56 m 엇나감). 직진 전에 방향이 route_heading_fix_deg 넘게 틀리면 먼저 그만큼 돎 (한 번)
   void replay(const std::string & leg, std::shared_ptr<std::vector<Move>> moves, size_t i, Pose2d expect, double speed,
-              const Pose & goal, const std::set<std::string> & flags, uint64_t seq, Done done) {
+              const Pose & goal, const std::set<std::string> & flags, uint64_t seq, Done done, bool fixed = false) {
     if (seq != nav_seq_) return;
     if (i >= moves->size()) {
       RCLCPP_INFO(get_logger(), "구간 %s 표 끝 — 도착", leg.c_str());
@@ -192,13 +214,26 @@ private:
       RCLCPP_WARN(get_logger(), "구간 %s 표 재생 그만 (%s) — 남은 길은 Nav2", leg.c_str(), why.c_str());
       nav2(goal, flags, seq, done);
     };
-    const auto check = [this, leg, moves, i, next, speed, goal, flags, seq, done, fallback](bool ok, const std::string & why) {
+    Pose2d cur;
+    if (!odom_pose(cur)) { fallback("odom_tf"); return; }
+    const double head_err = std::remainder(expect.yaw - cur.yaw, 2 * M_PI);
+    if (!m.turn && !fixed && std::abs(head_err) > fix_rad_) {  // 직진 전 방향 바로잡기
+      stage(fmt("표 %s %zu/%zu 방향 바로잡기 %+.0f°", leg.c_str(), i + 1, moves->size(), head_err * 180.0 / M_PI));
+      send_spin(head_err, seq, [this, leg, moves, i, expect, speed, goal, flags, seq, done, fallback](bool ok, const std::string & why) {
+        if (seq != nav_seq_) return;
+        if (!ok) { fallback(why); return; }
+        replay(leg, moves, i, expect, speed, goal, flags, seq, done, true);
+      });
+      return;
+    }
+    const auto check = [this, leg, moves, i, m, next, speed, goal, flags, seq, done, fallback](bool ok, const std::string & why) {
       if (seq != nav_seq_) return;
       if (!ok) { fallback(why); return; }
       Pose2d now_p;
       if (!odom_pose(now_p)) { fallback("odom_tf"); return; }
       const auto [dm, dr] = deviation(next, now_p);
-      if (dm > dev_m_ || dr > dev_rad_) {
+      // 회전 뒤 방향 차는 다음 직진 전에 바로잡으니 위치만 봄 · 직진 뒤엔 둘 다
+      if (dm > dev_m_ || (!m.turn && dr > dev_rad_)) {
         fallback(fmt("엇나감 %.2f m · %.0f°", dm, dr * 180.0 / M_PI));
         return;
       }
@@ -207,20 +242,7 @@ private:
     stage(fmt("표 %s %zu/%zu %s", leg.c_str(), i + 1, moves->size(),
               (m.turn ? fmt("회전 %+.0f°", m.value * 180.0 / M_PI) : fmt("직진 %.2f m", m.value)).c_str()));
     if (m.turn) {
-      Spin::Goal g;
-      g.target_yaw = static_cast<float>(m.value);
-      g.time_allowance.sec = static_cast<int32_t>(std::abs(m.value) / 0.3 + 10.0);
-      g.disable_collision_checks = true;  // 사람이 몬 길 — 벽 옆 회전도 그대로 (collision_monitor는 계속 켜짐)
-      rclcpp_action::Client<Spin>::SendGoalOptions opt;
-      opt.goal_response_callback = [this, seq, check](const rclcpp_action::ClientGoalHandle<Spin>::SharedPtr & h) {
-        if (seq != nav_seq_) { if (h) spin_->async_cancel_goal(h); return; }
-        if (h) spin_goal_ = h; else check(false, "spin_rejected");
-      };
-      opt.result_callback = [this, check](const rclcpp_action::ClientGoalHandle<Spin>::WrappedResult & r) {
-        spin_goal_.reset();
-        check(r.code == rclcpp_action::ResultCode::SUCCEEDED, "spin_failed");
-      };
-      spin_->async_send_goal(g, opt);
+      send_spin(std::remainder(next.yaw - cur.yaw, 2 * M_PI), seq, check);  // 표의 기대 방향까지
     } else {
       Drive::Goal g;
       g.target.x = m.value;
@@ -408,7 +430,7 @@ private:
   rclcpp_action::ClientGoalHandle<Spin>::SharedPtr spin_goal_;
   rclcpp_action::ClientGoalHandle<Drive>::SharedPtr drive_goal_;
   bool taught_ = false;
-  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15;
+  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr corr_sub_;
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
   uint64_t nav_seq_ = 0;  // 보낸 goal 번호 — stop하면 올라가 옛 응답·결과를 가려냄
