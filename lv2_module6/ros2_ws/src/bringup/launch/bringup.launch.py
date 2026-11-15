@@ -290,7 +290,7 @@ def generate_launch_description():
                               description='지도 폴더 이름 — slam: 비우면 날짜_시각으로 새로 · saved: 비우면 가장 최근'),
         DeclareLaunchArgument('navigation_throttle', default_value='false'),
         DeclareLaunchArgument('navigation_infer_hz', default_value='1.0'),
-        DeclareLaunchArgument('cv_threads', default_value='0'),
+        DeclareLaunchArgument('cv_threads', default_value='2'),
         DeclareLaunchArgument('perception', default_value='auto',
                               description='인지 노드(perception_node · signal_decoder · hand_relative): auto = 매핑(map:=slam)이면 끔 · true = 항상 · false = 항상 끔. body_filter는 Nav2 충돌감시용이라 그대로'),
         DeclareLaunchArgument('fake_slam', default_value='false',
