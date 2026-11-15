@@ -32,8 +32,10 @@ imu_sensor_broadcaster:
     sensor_name: imu
     frame_id: imu_link
     # 공분산 — 0이면 EKF가 IMU를 '완벽'으로 받아 바퀴와 섞는 비율이 의미 없음 (실측: 바퀴 odom은 실제와 같은데 EKF yaw만 4.5° 틀어짐).
-    # EKF는 yaw 각속도만 씀 (ekf.yaml imu0_config). 자이로 잡음 σ 0.01 rad/s → 분산 1e-4 (시뮬레이터 fake_opencr noise와 같음)
-    static_covariance_angular_velocity: [1.0e-4, 0.0, 0.0, 0.0, 1.0e-4, 0.0, 0.0, 0.0, 1.0e-4]
+    # EKF는 yaw 각속도만 씀 (ekf.yaml imu0_config). 예전 1e-4 (자이로 잡음 σ 0.01 rad/s — 시뮬레이터 fake_opencr noise와 같음)
+    # 11-16: 0.03 — 실제 잡음이 아니라 EKF 비중. IMU는 100 Hz라 cuVSLAM(15 Hz · 0.0025)보다 덜 믿게 하려면 크게 줘야 함
+    #   (재생 실측 yaw 회전속도 cuVSLAM 64% · IMU 36%. 1e-4면 IMU 거의 100%) — ekf.yaml 비중 설계 참고
+    static_covariance_angular_velocity: [0.03, 0.0, 0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.03]
 
 diff_drive_controller:
   ros__parameters:
@@ -61,8 +63,10 @@ diff_drive_controller:
     # 공분산 [x, y, z, roll, pitch, yaw] — EKF는 twist의 vx·vy·vyaw를 씀. 0이면 '완벽'으로 받아 IMU와 섞는 비율이 의미 없음.
     #   vx·vy 0.001 (σ ≈ 0.03 m/s) · vyaw 0.01 (σ 0.1 rad/s — 바퀴 회전은 미끄러지면 틀어지므로 자이로(1e-4)를 더 믿게)
     #   쓰지 않는 축(z·roll·pitch)은 크게
+    # 11-16 twist: vx 0.1 (cuVSLAM이 주 · 바퀴는 받침 — 100 Hz라 크게 줘야 재생 실측 cuVSLAM 85%) · vy 1e-4 (옆으로 못 감 = 물리라 꽉)
+    #   vyaw 0.01 그대로 (EKF는 안 씀 — ekf_imu:=false일 때만). pose 공분산은 EKF가 안 씀 — ekf.yaml 비중 설계 참고
     pose_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.01]
-    twist_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.01]
+    twist_covariance_diagonal: [0.1, 0.0001, 1000000.0, 1000000.0, 1000000.0, 0.01]
     publish_rate: 50.0
 
 rl_arm_correction:
