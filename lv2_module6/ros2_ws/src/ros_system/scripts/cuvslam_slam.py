@@ -220,6 +220,8 @@ class CuvslamSlam(Node):
         self.frame_skip = max(1, int(self.declare_parameter('frame_skip', 1).value))
         self.frame_n = 0
         self.near_raw = max(math.ceil(self.min_depth * self.depth_scale) - 1, 0)  # depth 원값 < min_depth·scale ⇔ ≤ 이 값 (정수)
+        # SLAM 지도 키프레임 수 상한 (cuVSLAM 기본 300) — 경기장이 작아 150이면 충분, 메모리 절약 (11-15)
+        self.max_map_size = int(self.declare_parameter('max_map_size', 150).value)
         # EKF에 주는 속도 분산 — 실측으로 맞출 값 (σ 0.05 m/s · 0.05 rad/s에서 시작)
         self.lin_var = float(self.declare_parameter('linear_variance', 0.0025).value)
         self.ang_var = float(self.declare_parameter('angular_variance', 0.0025).value)
@@ -347,7 +349,8 @@ class CuvslamSlam(Node):
         rgbd.enable_depth_stereo_tracking = False
         odom_cfg = cuvslam.Tracker.OdometryConfig(odometry_mode=cuvslam.Tracker.OdometryMode.RGBD, async_sba=True,
                                                   rgbd_settings=rgbd)
-        slam_cfg = cuvslam.Tracker.SlamConfig(planar_constraints=True) if self.publish_map_tf else None
+        slam_cfg = cuvslam.Tracker.SlamConfig(planar_constraints=True, max_map_size=self.max_map_size) \
+            if self.publish_map_tf else None
         if self.vis:
             odom_cfg.enable_observations_export = odom_cfg.enable_landmarks_export = True
             if slam_cfg is not None:
