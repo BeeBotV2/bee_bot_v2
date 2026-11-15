@@ -51,6 +51,14 @@ def node(package, executable, overrides=None, condition=None):
                 condition=condition)
 
 
+def hand_relative_exe():
+    """hand_relative 실행 파일 — C++(기본, 11-16 · 파이썬은 CPU 몰리면 ~1 s 멈춤) · launch 인자 hand_relative_py:=true면 예전 파이썬"""
+    return PythonExpression(["'hand_relative_py' if '", LaunchConfiguration('hand_relative_py'), "'.lower() == 'true' else 'hand_relative'"])
+
+
+HAND_RELATIVE_PY_ARG = ('hand_relative_py', 'false', 'true면 hand_relative 예전 파이썬판 (scripts/hand_relative.py) · 기본 C++')
+
+
 # ros_system에 그대로 넘기는 하드웨어·서버 인자 (기본값 = 실기). 테스트베드 faker가 대역에 맞게 덮어씀
 ROS_SYSTEM_ARGS = {
     'map_backend': ('nvblox', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox)'),
@@ -269,6 +277,7 @@ def generate_launch_description():
                               description='false면 mission_manager를 띄우지 않음 — 도면 벽(/arena/walls)이 /map에 안 겹침 (매핑·주행 시험용, 미션 불가)'),
         DeclareLaunchArgument('use_perception', default_value='auto',
                               description='false면 인지 노드(perception_node · signal_decoder · hand_relative)를 안 띄움 · true면 항상 · auto(기본)면 perception:=를 따름 (body_filter는 Nav2용이라 늘 뜸)'),
+        DeclareLaunchArgument(HAND_RELATIVE_PY_ARG[0], default_value=HAND_RELATIVE_PY_ARG[1], description=HAND_RELATIVE_PY_ARG[2]),
         DeclareLaunchArgument('use_ml', default_value='true',
                               description='false면 ml 노드(grasp_scorer)를 띄우지 않음'),
         *[DeclareLaunchArgument(f'use_{n}', default_value=LaunchConfiguration('use_ml'),
@@ -351,7 +360,7 @@ def generate_launch_description():
         node('control', 'manual_control'),
         node('perception', 'body_filter'),
         node('perception', 'signal_decoder', condition=IfCondition(LaunchConfiguration('use_perception'))),
-        node('perception', 'hand_relative', condition=IfCondition(LaunchConfiguration('use_hand_relative'))),  # 손 카메라 상대값 → rl_arm_correction 정책 입력
+        node('perception', hand_relative_exe(), condition=IfCondition(LaunchConfiguration('use_hand_relative'))),  # 손 카메라 상대값 → rl_arm_correction 정책 입력
         node('manager', 'state_manager', {'operation': LaunchConfiguration('operation'),
                                           'map_mode': LaunchConfiguration('map_mode'),
                                           'map_name': ParameterValue(LaunchConfiguration('map_name'), value_type=str),

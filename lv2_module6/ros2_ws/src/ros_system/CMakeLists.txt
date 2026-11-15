@@ -12,6 +12,24 @@ target_compile_features(map_tf_relay PUBLIC cxx_std_17)
 target_link_libraries(map_tf_relay PUBLIC rclcpp::rclcpp tf2_ros::tf2_ros ${geometry_msgs_TARGETS})
 install(TARGETS map_tf_relay DESTINATION lib/${PROJECT_NAME})
 
+# 보조 노드 C++판 (11-16) — nvblox_map · rewind를 한 프로세스(cpp_helpers <노드…>)로 · 파이썬판(py_helpers)과 이름·토픽 같음
+#   include/ros_system/helpers.hpp · 격자 계산 grid_ops.hpp · launch helpers_cpp:=false면 예전 파이썬
+find_package(nav_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(action_msgs REQUIRED)
+find_package(nvblox_msgs QUIET)  # nvblox_map 저장 지도 불러오기 (/nvblox_node/load_map) — ~/isaac_ros_ws를 source해야 잡힘
+add_executable(cpp_helpers src/cpp_helpers.cpp src/nvblox_map.cpp src/rewind.cpp)
+target_compile_features(cpp_helpers PRIVATE cxx_std_17)
+target_include_directories(cpp_helpers PRIVATE include)
+target_link_libraries(cpp_helpers rclcpp::rclcpp ${nav_msgs_TARGETS} ${std_srvs_TARGETS} ${action_msgs_TARGETS} ${geometry_msgs_TARGETS})
+if(nvblox_msgs_FOUND)
+  target_compile_definitions(cpp_helpers PRIVATE ROS_SYSTEM_NVBLOX_MSGS)
+  target_link_libraries(cpp_helpers ${nvblox_msgs_TARGETS})
+else()
+  message(WARNING "nvblox_msgs 없음 — cpp_helpers nvblox_map이 저장 지도를 못 불러옴 (isaac_ros_ws source 후 다시 빌드)")
+endif()
+install(TARGETS cpp_helpers DESTINATION lib/${PROJECT_NAME})
+
 # cuvslam_slam C++판 (src/cuvslam_slam.cpp, 11-16) — cuVSLAM C++ API(cuvslam2.h)를 바로 부름. 둘 다 있어야 빌드 (없으면 파이썬판만):
 #   헤더 = PyCuVSLAM 소스(v17.0.1, NVIDIA Community License라 저장소에 안 넣음) CUVSLAM_SRC_DIR/libs/cuvslam/cuvslam2.h
 #   라이브러리 = pip로 깐 cuvslam 패키지 안 libcuvslam.so (같은 소스로 빌드한 것 — documents/jetson-orin-nano/CUVSLAM.md)
@@ -82,6 +100,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_slam_math test/test_slam_math.cpp TIMEOUT 60)
   target_include_directories(test_slam_math PRIVATE include)
   target_link_libraries(test_slam_math Eigen3::Eigen)
+  # nvblox_map C++판 격자 계산 (grid_ops.hpp — despeckle · overlay)
+  ament_add_gtest(test_grid_ops test/test_grid_ops.cpp TIMEOUT 60)
+  target_include_directories(test_grid_ops PRIVATE include)
+  target_link_libraries(test_grid_ops ${nav_msgs_TARGETS})
   # URDF: 모델 폴더마다 xacro로 펼쳐지고(mock 인자 포함) 링크·관절 트리가 올바른지
   foreach(X ${URDF_XACROS})
     get_filename_component(D "${X}" DIRECTORY)

@@ -61,7 +61,8 @@ rosidl_get_typesupport_target(msgs_cpp ${PROJECT_NAME} rosidl_typesupport_cpp)  
 
 # --- C++ 노드: 클래스 구현(src/<노드>.cpp)은 라이브러리로 묶고, 실행 파일(src/<노드>_main.cpp)과 테스트가 함께 링크
 #     선언·설명은 include/perception/<노드>.hpp
-add_library(${PROJECT_NAME}_nodes STATIC src/body_filter.cpp src/body_filter_core.cpp src/signal_decoder.cpp src/static_esdf_slice.cpp src/depth_gate.cpp)
+add_library(${PROJECT_NAME}_nodes STATIC src/body_filter.cpp src/body_filter_core.cpp src/signal_decoder.cpp src/static_esdf_slice.cpp
+  src/depth_gate.cpp src/hand_relative.cpp)
 target_include_directories(${PROJECT_NAME}_nodes PUBLIC include)
 target_compile_features(${PROJECT_NAME}_nodes PUBLIC cxx_std_17)
 target_link_libraries(${PROJECT_NAME}_nodes PUBLIC rclcpp::rclcpp ${sensor_msgs_TARGETS} ${std_msgs_TARGETS} ${geometry_msgs_TARGETS}
@@ -96,11 +97,12 @@ endif()
 set_source_files_properties(src/body_filter_core.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 # static_esdf_slice: map_backend:=static_2d에서 nvblox ESDF slice 대역 (RL 주행 controller 입력)
 # depth_gate: nvblox depth에서 가까운 픽셀(팔·폴대)을 0으로 — ros_system scan_cam_gate.py(pole_depth_gate)의 C++판 (CPU 6 → 2 %)
-foreach(node body_filter signal_decoder static_esdf_slice depth_gate)
+# hand_relative: 손 카메라 상대값 (scripts/hand_relative.py의 C++판, 11-16 — 파이썬은 CPU 몰리면 ~1 s 멈춤) · 계산 hand_geom.hpp
+foreach(node body_filter signal_decoder static_esdf_slice depth_gate hand_relative)
   add_executable(${node} src/${node}_main.cpp)
   target_link_libraries(${node} ${PROJECT_NAME}_nodes)
 endforeach()
-install(TARGETS body_filter signal_decoder static_esdf_slice depth_gate DESTINATION lib/${PROJECT_NAME})
+install(TARGETS body_filter signal_decoder static_esdf_slice depth_gate hand_relative DESTINATION lib/${PROJECT_NAME})
 
 # YOLO 인지 노드 — C++판이 perception_node (bringup·launch가 이 이름으로 띄움, 11/11 젯슨 CPU 때문에 C++로)
 #   계산 함수 perception_core · YOLO 실행 yolo_onnx · 노드 perception_node (설명은 include/perception/<이름>.hpp)
@@ -161,8 +163,8 @@ install(TARGETS perception_node DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/perception_node.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME perception_node_py)
-# 손 카메라 상대값 (Python, scripts/hand_relative.py + 계산 모듈 hand_geom.py를 같은 폴더에)
-install(PROGRAMS scripts/hand_relative.py DESTINATION lib/${PROJECT_NAME} RENAME hand_relative)
+# 손 카메라 상대값 예전 파이썬판 (scripts/hand_relative.py + 계산 모듈 hand_geom.py를 같은 폴더에) — 되돌릴 때: launch hand_relative_py:=true
+install(PROGRAMS scripts/hand_relative.py DESTINATION lib/${PROJECT_NAME} RENAME hand_relative_py)
 install(FILES scripts/hand_geom.py DESTINATION lib/${PROJECT_NAME})
 
 # 파라미터 (bringup이 share/perception/config/perception.yaml을 노드에 넘긴다)
@@ -192,6 +194,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_body_filter_cuda ${PROJECT_NAME}_nodes)
   ament_add_gtest(test_static_esdf_slice test/test_static_esdf_slice.cpp TIMEOUT 60)
   target_link_libraries(test_static_esdf_slice ${PROJECT_NAME}_nodes)
+  ament_add_gtest(test_hand_geom test/test_hand_geom.cpp TIMEOUT 60)  # hand_geom.hpp — test_hand_relative.py와 같은 시나리오
+  target_link_libraries(test_hand_geom ${PROJECT_NAME}_nodes)
   ament_add_gtest(test_depth_gate test/test_depth_gate.cpp TIMEOUT 60)
   target_link_libraries(test_depth_gate ${PROJECT_NAME}_nodes)
   ament_add_gtest(test_signal test/test_signal.cpp TIMEOUT 60)
