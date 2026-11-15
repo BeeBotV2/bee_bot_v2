@@ -110,7 +110,10 @@ mission_manager:             # 주사위 기억 미션 (documents/mission/README
     arena_corr_walls_rad: 0.087    # [rad] (5°)
     # 보정 → 로봇 위치 (11-15): 근거가 충분한 보정을 목표에만 얹지 않고 로봇 위치(map→odom)로 넘김 — 벽·문·costmap·nvblox·목표가 한 좌표
     #   cuvslam_slam이 /localization/map_correction을 받아 map 기준을 옮김 (MapGate 초당 5 cm·5°로 부드럽게)
-    arena_corr_to_localization: true
+    #   11-15 밤 끔: 시뮬에서 정지한 로봇 위치가 2분 동안 60번 5 cm씩 밀려 7 m까지 흘러감 — '남은 보정'이 0으로 안 줄고(+0.07~0.12 m)
+    #   같은 방향으로 계속 (위치를 옮기면 nvblox 지도도 따라 옮겨져 벽 정합이 같은 차이를 다시 봄 · 시뮬 벽은 plan 벽과 ≤11 cm 다름).
+    #   실기 녹화 중 map 1~4 m 튐(day1_03~06)도 같은 원인으로 보임. 고치기 전까지 false
+    arena_corr_to_localization: false
     arena_corr_loc_min_n: 3          # 상자 근거 이만큼(또는 벽 정합)일 때만 — 상자 1~2개로는 안 옮김
     arena_corr_loc_step_m: 0.05      # [m] 한 번에 넘기는 조각 (MapGate 잠금 0.30 m보다 훨씬 작게)
     arena_corr_loc_step_rad: 0.0175  # [rad] (1°)

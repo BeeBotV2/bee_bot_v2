@@ -30,6 +30,7 @@
 #include "std_msgs/msg/string.hpp"
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -77,6 +78,10 @@ public:
     dev_rad_ = declare_parameter<double>("route_dev_deg", 15.0) * M_PI / 180.0;
     route_speed_ = declare_parameter<double>("route_speed", 0.15);      // .cmd.csv가 없을 때 직진 속도 [m/s]
     fix_rad_ = declare_parameter<double>("route_heading_fix_deg", 3.0) * M_PI / 180.0;  // 직진 전 이보다 틀리면 먼저 돎
+    // 회전 뒤 이만큼 기다렸다 방향을 잼 — Spin은 목표 각도에 닿는 순간 끝을 알리고 감속하며 더 돎 (시뮬 정답: −86° → −98.7°)
+    settle_s_ = declare_parameter<double>("route_settle_s", 0.8);
+    // 엇나가면: false(기본) = 멈추고 실패 (표가 맞는지 시험) · true = 남은 길은 Nav2
+    fallback_nav2_ = declare_parameter<bool>("route_fallback_nav2", false);
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
         if (!door_use_corr_) return;
@@ -211,6 +216,11 @@ private:
     const Pose2d next = after(expect, m);
     const auto fallback = [this, leg, goal, flags, seq, done](const std::string & why) {
       if (seq != nav_seq_) return;
+      if (!fallback_nav2_) {
+        RCLCPP_WARN(get_logger(), "구간 %s 표 재생 그만 (%s) — 멈춤 (route_fallback_nav2: false)", leg.c_str(), why.c_str());
+        done(false, "route_deviation");
+        return;
+      }
       RCLCPP_WARN(get_logger(), "구간 %s 표 재생 그만 (%s) — 남은 길은 Nav2", leg.c_str(), why.c_str());
       nav2(goal, flags, seq, done);
     };
@@ -237,7 +247,13 @@ private:
         fallback(fmt("엇나감 %.2f m · %.0f°", dm, dr * 180.0 / M_PI));
         return;
       }
-      replay(leg, moves, i + 1, next, speed, goal, flags, seq, done);
+      if (!m.turn) { replay(leg, moves, i + 1, next, speed, goal, flags, seq, done); return; }
+      // 회전 뒤: 멈출 때까지 기다렸다가 다음 동작 (다음 직진 전 방향 바로잡기가 남은 회전까지 봄)
+      auto t = std::make_shared<rclcpp::TimerBase::SharedPtr>();
+      *t = create_wall_timer(std::chrono::duration<double>(settle_s_), [this, t, leg, moves, i, next, speed, goal, flags, seq, done]() {
+        (*t)->cancel();
+        replay(leg, moves, i + 1, next, speed, goal, flags, seq, done);
+      });
     };
     stage(fmt("표 %s %zu/%zu %s", leg.c_str(), i + 1, moves->size(),
               (m.turn ? fmt("회전 %+.0f°", m.value * 180.0 / M_PI) : fmt("직진 %.2f m", m.value)).c_str()));
@@ -430,7 +446,8 @@ private:
   rclcpp_action::ClientGoalHandle<Spin>::SharedPtr spin_goal_;
   rclcpp_action::ClientGoalHandle<Drive>::SharedPtr drive_goal_;
   bool taught_ = false;
-  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052;
+  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052, settle_s_ = 0.8;
+  bool fallback_nav2_ = false;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr corr_sub_;
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
   uint64_t nav_seq_ = 0;  // 보낸 goal 번호 — stop하면 올라가 옛 응답·결과를 가려냄
