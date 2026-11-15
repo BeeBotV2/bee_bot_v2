@@ -251,7 +251,8 @@ def generate_launch_description():
             package='robot_localization', executable='ekf_node', name='ekf_filter_node', output='screen',
             condition=IfCondition(PythonExpression(["'", LaunchConfiguration('use_ekf'), "' == 'true' and '",
                                                     LaunchConfiguration('ekf_imu'), f"' == '{imu}'"])),
-            parameters=[share('config', 'ekf.yaml')] + ([] if imu == 'true' else [  # 바퀴 vx·vy + yaw 회전속도, IMU 안 씀
+            # ekf_imu false: 바퀴(odom0) vx·vy + yaw 회전속도, IMU 안 씀 · cuVSLAM(odom1)은 ekf.yaml 그대로 (11-16: odom0 = 바퀴로 되돌림)
+            parameters=[share('config', 'ekf.yaml')] + ([] if imu == 'true' else [
                 {'imu0_config': [False] * 15, 'odom0_config': [False] * 6 + [True, True, False, False, False, True] + [False] * 3}]))
           for imu in ('true', 'false')],
 
