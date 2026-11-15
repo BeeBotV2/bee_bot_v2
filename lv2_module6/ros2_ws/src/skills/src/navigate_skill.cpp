@@ -21,6 +21,9 @@
 //     남은 길은 예전처럼 Nav2로 (실패 아님). 속도 = 같은 구간 .cmd.csv의 사람 직진 속도 중앙값
 //   경유점 지도 (via_points, 11-15 사용자 지정): 사람이 찍은 점 + 화살표 — 보이는 점끼리 최단으로 이어 경유점 (skills/via_graph.hpp).
 //     가르친 경로가 없을 때 문 경유점 대신 씀 (로봇·목표가 어느 점과도 못 이어지면 문 경유점으로)
+//     via_through(기본 true, 11-16): 경유점 + 목표를 NavigateThroughPoses 한 번으로 — 경유점마다 서서 돌지 않고 지나감
+//       (Nav2 BT RemovePassedGoals radius 0.40 m 안이면 지난 것). 마지막 목표의 near · look · 진척 감시 · 끼임 풀기는 같음.
+//       서버가 없으면 예전처럼 경유점마다 NavigateToPose. 문 경유점 · 가르친 경로는 정확히 서야 해서 그대로 NavigateToPose
 //   끼임 풀기 (11-15): 진척 없음이면 바로 실패하지 않고 nav_unstuck_tries번까지 — 곧게 후진(nav_unstuck_back_m) → 그 자리에서 다시 받은
 //     경로의 앞(0.4 m) 쪽으로 제자리 회전 → 같은 점으로 다시 출발. 시뮬 B4→B5: 문 모서리에 코를 대고 Nav2 복구(후진 0.10 m)로도
 //     같은 대각선을 다시 타서 멈춤
@@ -28,6 +31,7 @@
 #include "skills/arm_io.hpp"
 #include "nav2_msgs/action/back_up.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
+#include "nav2_msgs/action/navigate_through_poses.hpp"
 #include "nav2_msgs/action/drive_on_heading.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/spin.hpp"
@@ -56,6 +60,7 @@ namespace skills {
 class NavigateSkill : public SkillNode {
 public:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
+  using NavigateThrough = nav2_msgs::action::NavigateThroughPoses;
   using ComputePath = nav2_msgs::action::ComputePathToPose;
   using BackUp = nav2_msgs::action::BackUp;
   using Spin = nav2_msgs::action::Spin;
@@ -65,6 +70,7 @@ public:
   explicit NavigateSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_navigate", options), arm_(*this) {
     nav_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
+    through_ = rclcpp_action::create_client<NavigateThrough>(this, "/navigate_through_poses");
     path_ = rclcpp_action::create_client<ComputePath>(this, "/compute_path_to_pose");
     spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
     drive_ = rclcpp_action::create_client<Drive>(this, "/drive_on_heading");
@@ -77,6 +83,7 @@ public:
     look_m_ = declare_parameter<double>("nav_look_m", 0.6);
     near_m_ = declare_parameter<double>("nav_near_m", 0.15);
     near_yaw_ = declare_parameter<double>("nav_near_yaw", 0.8);  // [rad]
+    via_through_ = declare_parameter<bool>("via_through", true);  // 경유점 지도 길을 NavigateThroughPoses 한 번으로 (머리말)
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     doors_ = declare_parameter<std::vector<double>>("doors", std::vector<double>{});  // 문마다 7개 — skills.yaml 설명
     gates_ = declare_parameter<std::vector<double>>("gates", std::vector<double>{});  // 길목마다 6개 — skills.yaml 설명
@@ -158,6 +165,8 @@ protected:
     ++nav_seq_;  // 응답 전인 goal은 goal_response_callback이 취소
     if (nav_goal_) nav_->async_cancel_goal(nav_goal_);
     nav_goal_.reset();
+    if (through_goal_) through_->async_cancel_goal(through_goal_);
+    through_goal_.reset();
     if (spin_goal_) spin_->async_cancel_goal(spin_goal_);
     spin_goal_.reset();
     if (drive_goal_) drive_->async_cancel_goal(drive_goal_);
@@ -182,6 +191,7 @@ private:
     opt.result_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::WrappedResult & r) {
       if (seq != nav_seq_) return;  // 그사이 멈춤
       auto legs = std::make_shared<std::vector<Pose>>();
+      bool via = false;  // 경유점 지도 길 (via_through면 NavigateThroughPoses 한 번)
       if (r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result && !r.result->path.poses.empty()) {
         // 경유점 지도 먼저 (11-16) → 이어진 길이 없으면 가르친 경로 → 그것도 없으면 막은 구역 검사 → 문 경유점
         //   경유 0개(로봇과 목표가 바로 이어짐)도 경유점 지도의 답 — 가르친 경로로 넘어가지 않음
@@ -201,6 +211,7 @@ private:
             legs->push_back(p);
           }
           RCLCPP_INFO(get_logger(), "경유점 지도 — 경유 %zu개", legs->size());
+          via = !legs->empty();
         } else {
           if (!via_.nodes.empty()) RCLCPP_WARN(get_logger(), "경유점 지도에 이어진 길 없음 — 가르친 경로 · 문 경유점으로");
           *legs = route_legs(r.result->path.poses.front(), goal);  // 가르친 경로가 있으면 그것 (문도 이미 사람이 지남)
@@ -215,7 +226,8 @@ private:
         }
       }
       legs->push_back(goal);  // 경로 실패면 문 없이 그대로 (Nav2가 다시 계획하며 실패를 알림)
-      drive(legs, 0, flags, seq, done);
+      if (via && via_through_ && through_->action_server_is_ready()) drive_through(legs, flags, seq, done);
+      else drive(legs, 0, flags, seq, done);
     };
     opt.goal_response_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::SharedPtr & h) {
       if (!h && seq == nav_seq_) drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
@@ -707,6 +719,87 @@ private:
     nav_->async_send_goal(goal, opt);
   }
 
+  // 경유점 + 목표(legs 끝)를 NavigateThroughPoses 한 번으로 — 경유점에서 서지 않음. 끝 처리는 drive()의 마지막 점과 같음:
+  //   near(목표 nav_near_m · nav_near_yaw 안이면 실패도 성공) · look(목표까지 nav_look_m 안이면 팔) · 진척 감시 · 끼임 풀기
+  //   끼임 풀기 뒤에는 아직 안 지난 점(피드백 number_of_poses_remaining)부터 다시
+  void drive_through(std::shared_ptr<std::vector<Pose>> legs, std::set<std::string> flags, uint64_t seq, Done done, int tries = 0) {
+    if (seq != nav_seq_) return;
+    if (legs->size() < 2) { drive(legs, 0, flags, seq, done, tries); return; }
+    NavigateThrough::Goal goal;
+    goal.poses.header.frame_id = legs->back().header.frame_id;
+    for (auto p : *legs) {
+      p.header.stamp = builtin_interfaces::msg::Time();  // 0 = 가장 최근 TF (drive 설명 — error 102)
+      goal.poses.goals.push_back(p);
+    }
+    const auto gp = legs->back().pose.position;
+    const double gyaw = yaw_of(legs->back().pose.orientation);
+    stage("Nav2 경유 " + std::to_string(legs->size() - 1) + "개 지나 (" + std::to_string(gp.x).substr(0, 5) + ", " +
+          std::to_string(gp.y).substr(0, 5) + ")");
+    RCLCPP_INFO(get_logger(), "경유점 %zu개를 서지 않고 지나 목표로 (NavigateThroughPoses)", legs->size() - 1);
+    rclcpp_action::Client<NavigateThrough>::SendGoalOptions opt;
+    auto finished = std::make_shared<bool>(false);
+    auto watch = std::make_shared<ProgressWatch>(stall_s_, stall_gain_m_);
+    auto look = std::make_shared<bool>(flags.count("look") > 0);
+    const bool near = flags.count("near") > 0;
+    auto left = std::make_shared<double>(1e9);
+    auto yaw_err = std::make_shared<double>(M_PI);
+    auto here = std::make_shared<Pose>();
+    auto remain = std::make_shared<size_t>(legs->size());  // 아직 안 지난 점 수 (목표 포함)
+    auto finish = [this, near, left, yaw_err, here, remain, done, legs, flags, seq, tries](bool ok, const std::string & why) {
+      if (!ok && near && *left <= near_m_ && *yaw_err <= near_yaw_) {
+        RCLCPP_WARN(get_logger(), "%s — 목표 %.2f m · %.0f° 앞이라 성공 처리 (near, 나머지는 approach)", why.c_str(), *left,
+                    *yaw_err * 180.0 / M_PI);
+        ok = true;
+      }
+      if (!ok && why == "nav_no_progress" && tries < unstuck_tries_ && seq == nav_seq_) {
+        const size_t n = std::clamp<size_t>(*remain, 1, legs->size());
+        auto rest = std::make_shared<std::vector<Pose>>(legs->end() - static_cast<std::ptrdiff_t>(n), legs->end());
+        unstuck(*here, rest->front(), seq, [this, rest, flags, seq, done, tries]() { drive_through(rest, flags, seq, done, tries + 1); });
+        return;
+      }
+      done(ok, ok ? "" : why);
+    };
+    opt.feedback_callback = [this, finished, watch, look, left, yaw_err, here, remain, gp, gyaw, finish](
+        rclcpp_action::ClientGoalHandle<NavigateThrough>::SharedPtr h, const std::shared_ptr<const NavigateThrough::Feedback> fb) {
+      if (*finished) return;
+      *here = fb->current_pose;
+      if (fb->number_of_poses_remaining > 0) *remain = static_cast<size_t>(fb->number_of_poses_remaining);
+      *left = std::hypot(fb->current_pose.pose.position.x - gp.x, fb->current_pose.pose.position.y - gp.y);
+      *yaw_err = std::abs(std::remainder(yaw_of(fb->current_pose.pose.orientation) - gyaw, 2 * M_PI));
+      // distance_remaining은 남은 경유점까지 합친 길이 — look은 마지막 구간(남은 점 = 목표 하나)에서만
+      if (*look && *remain <= 1 && fb->distance_remaining > 0.01 && fb->distance_remaining < look_m_) {
+        *look = false;
+        if (arm_.moveit_ready())
+          arm_.move_joints(look_q_, [this](bool ok) { if (!ok) RCLCPP_WARN(get_logger(), "주행 중 look 자세 실패"); });
+        else RCLCPP_WARN(get_logger(), "MoveIt 없음 — 주행 중 look 자세 건너뜀");
+      }
+      if (stall_s_ <= 0.0 || !watch->update(now().seconds(), fb->distance_remaining)) return;
+      *finished = true;
+      RCLCPP_WARN(get_logger(), "진척 없음 — 남은 %.2f m가 %.0f s 동안 %.2f m도 안 줄음 (회복 %d회 · 남은 점 %d) → 취소",
+                  fb->distance_remaining, stall_s_, stall_gain_m_, fb->number_of_recoveries, fb->number_of_poses_remaining);
+      through_->async_cancel_goal(h);
+      finish(false, "nav_no_progress");
+    };
+    opt.goal_response_callback = [this, seq, finished, finish](const rclcpp_action::ClientGoalHandle<NavigateThrough>::SharedPtr & h) {
+      if (seq != nav_seq_) {
+        if (h) through_->async_cancel_goal(h);
+        return;
+      }
+      if (h) { through_goal_ = h; return; }
+      if (*finished) return;
+      *finished = true;
+      finish(false, "nav_rejected");
+    };
+    opt.result_callback = [this, seq, finished, finish](const rclcpp_action::ClientGoalHandle<NavigateThrough>::WrappedResult & r) {
+      if (seq == nav_seq_) through_goal_.reset();
+      if (*finished || seq != nav_seq_) return;
+      *finished = true;
+      const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED;
+      finish(ok, ok ? "" : "nav_failed");
+    };
+    through_->async_send_goal(goal, opt);
+  }
+
   // 끼임 풀기: 곧게 후진 → 다시 받은 경로의 0.4 m 앞 쪽으로 제자리 회전 → then(). 어느 단계가 실패해도 다음으로 넘어감
   //   (후진이 뒤 벽에 막혀도 회전 · 재출발은 해 봄). 후진은 costmap 충돌 검사를 끔 — 이미 팽창 칸 안이라 거절됨 (collision_monitor는 그대로)
   void unstuck(const Pose & here, const Pose & target, uint64_t seq, std::function<void()> then) {
@@ -759,6 +852,7 @@ private:
   }
 
   rclcpp_action::Client<NavigateToPose>::SharedPtr nav_;
+  rclcpp_action::Client<NavigateThrough>::SharedPtr through_;
   rclcpp_action::Client<ComputePath>::SharedPtr path_;
   rclcpp_action::Client<Spin>::SharedPtr spin_;
   rclcpp_action::Client<Drive>::SharedPtr drive_;
@@ -778,6 +872,7 @@ private:
   double unstuck_back_m_ = 0.15;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr corr_sub_;
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
+  rclcpp_action::ClientGoalHandle<NavigateThrough>::SharedPtr through_goal_;  // 경유점 지도 길 goal (via_through)
   uint64_t nav_seq_ = 0;  // 보낸 goal 번호 — stop하면 올라가 옛 응답·결과를 가려냄
   template <typename... A>
   static std::string fmt(const char * f, A... a) {
@@ -791,7 +886,7 @@ private:
   double stall_s_ = 25.0, stall_gain_m_ = 0.10, look_m_ = 0.6, near_m_ = 0.15, near_yaw_ = 0.8, door_goal_skip_m_ = 0.30;
   std::vector<double> doors_, gates_, no_path_, start_;
   std::map<std::string, double> corr_{{"dx", 0.0}, {"dy", 0.0}, {"dth", 0.0}};
-  bool door_use_corr_ = false;
+  bool door_use_corr_ = false, via_through_ = true;
   std::string routes_dir_;
   double route_start_m_ = 0.5, route_goal_m_ = 0.4, route_tol_m_ = 0.10;
   ViaGraph via_;
