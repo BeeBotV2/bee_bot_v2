@@ -79,7 +79,7 @@ ROS_SYSTEM_ARGS = {
     'use_ekf': ('true', 'robot_localization EKF'),
     'ekf_imu': ('true', 'EKF yaw 회전속도 = IMU 자이로 · false면 바퀴'),
     'use_nav2': ('true', '진짜 Nav2 서버'),
-    'nav2_container_params': ('false', 'true = costmap이 nav2_params.yaml 값으로 (진짜 몸 · voxel) · false = 예전 그대로 (costmap Nav2 기본값) — ros_system nav2_nodes 설명'),
+    'nav2_container_params': ('true', 'true(11-15부터 기본) = costmap이 nav2_params.yaml 값으로 (전역·local 모두 /arena/walls 실측 벽 · 튜닝값) · false = 예전 (전역 costmap이 Nav2 기본값 robot_radius 0.1) — ros_system nav2_nodes 설명'),
     'nav2_composition': ('true', 'Nav2 서버·관리자(+ map_saver)를 한 프로세스(nav2_container)로 — 메모리 절약 · false면 서버마다 프로세스 (예전)'),
     'py_helpers_one_process': ('true', 'python 보조 노드(pole_depth_gate · nvblox_map · rewind)를 한 프로세스로 — 메모리 절약 · false면 따로 (예전)'),
     'depth_gate_cpp': ('true', 'pole_depth_gate를 C++(perception depth_gate)로 — CPU 절약 (bag 재생 11-14: 파이썬 6 % → C++ 2 %) · false면 예전 파이썬'),
