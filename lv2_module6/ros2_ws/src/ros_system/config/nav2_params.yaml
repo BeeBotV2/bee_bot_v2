@@ -484,7 +484,10 @@ global_costmap:
       # 전역 계획: 정적 벽 + 카메라에 보인 장애물(상자 — map.pgm에는 벽만 있음) + 팽창.
       # (11-13 obstacle_layer 추가: 없으면 Smac이 상자를 통과하는 경로를 내고 MPPI가 상자 앞에서 멈춤.
       #  예전에 뺀 이유 — 좁은 통로에서 전역 계획이 자주 실패 — 가 다시 보이면 이 줄부터 의심)
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      # 11-15 실기: 카메라 층(obstacle_layer)을 빼고 정적 벽 + 팽창만. 문 앞에 서면 카메라가 문틀을 지도 벽 옆에 한 번 더 찍어
+      #   0.57 m 문틈이 robot_radius 기준 '통과 불가'가 됨 → 플래너가 아래 통로로 7 m 돌아가는 경로를 내고 문 앞에서 돌다 멈춤.
+      #   상자(지도에 없음)는 local costmap · RL · collision_monitor가 피함. 아래 obstacle_layer 블록은 다시 켤 때를 위해 남김
+      plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
