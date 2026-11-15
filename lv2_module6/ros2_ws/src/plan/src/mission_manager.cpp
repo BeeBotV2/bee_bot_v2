@@ -132,6 +132,7 @@ MissionManager::MissionManager()
   stand_check_s_ = declare_parameter<double>("stand_check_s", 1.0);
   stand_find_m_ = declare_parameter<double>("stand_find_m", 0.10);  // [m] stand 뒤 선 퍽을 누운 가운데에서 이 안에서 찾음 → pick
   verify_radius_ = declare_parameter<double>("verify_radius", 0.15);
+  verify_in_place_ = declare_parameter<bool>("verify_in_place", true);
   // 방문 순서 (1부터) — 경기장 고정이라 오프라인 A*(tools/plan/route_order.py, 도면 벽)로 정한 값. 비거나 틀리면 1, 2, 3, …
   survey_order_ = visit_order(declare_parameter<std::vector<int64_t>>("survey_order", std::vector<int64_t>{}), start_boxes_.size());
   build_loc_order_ = visit_order(declare_parameter<std::vector<int64_t>>("build_location_order", std::vector<int64_t>{}), 3);
@@ -344,6 +345,8 @@ void MissionManager::on_command(const std::string & cmd) {
   results_.clear();
   build_json_.clear();
   verify_json_.clear();
+  verified_.clear();
+  last_place_loc_ = -1;
   seen_tags_.clear();
   lying_.clear();
   corr_.assign(locations_.size(), {0.0, 0.0});
@@ -822,6 +825,14 @@ void MissionManager::solve_allocation() {
 // ---------- BUILD — 퍽마다 [손에 쥐기 → 놓기 → 확인]. 실패하면 기록하고 다음 퍽
 void MissionManager::build(size_t i) {
   if (i == 0 && planner_ == "plan_next" && plan_next_ok_ && build_pn_start()) { build_pn(); return; }
+  // 그 자리 재검증 (11-15): 앞 퍽과 장소가 다르거나 다 놓았으면 — 떠나기 전에 지금 선 장소를 봄 (다시 돌아오지 않음)
+  if (verify_in_place_ && i > 0 && i <= jobs_.size()) {
+    const size_t prev = jobs_[i - 1].loc;
+    if ((i == jobs_.size() || jobs_[i].loc != prev) && !verified_.count(prev) && last_place_loc_ == static_cast<int>(prev)) {
+      verify_at(prev, [this, i]() { build(i); });
+      return;
+    }
+  }
   if (i >= jobs_.size()) {
     write_log("build.json", "{\"placed\": " + str(placed_) + ", \"total\": " + str(static_cast<int>(jobs_.size())) +
               ", \"pucks\": [" + build_json_ + "]}\n");
@@ -836,6 +847,7 @@ void MissionManager::build(size_t i) {
 
 void MissionManager::bring(size_t i) {
   const Job job = jobs_[i];
+  last_place_loc_ = -1;  // 이 퍽 처리 중 다른 곳(시작 박스)으로 갈 수 있음 — 장소 앞에서 놓기 시작할 때 다시 정함
   ctx_ = "\"tag\": " + str(job.tag) + ", \"loc\": \"L" + str(static_cast<int>(job.loc) + 1) + "\", \"cell\": " + str(job.cell);
   const auto skip = [this, i, job](const std::string & why) {
     result("puck " + str(job.tag) + ": " + why);
@@ -942,6 +954,7 @@ void MissionManager::place_check(size_t i, int tries) {
     job_done(i, ok);
   };
   attempt_ = tries;
+  last_place_loc_ = static_cast<int>(job.loc);  // 장소 앞에 섬 (go_near 성공 뒤에만 옴)
   run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [this, i, tries, tx, ty, next](bool ok, const std::string & why) {
     if (!ok) { next(false, "place_failed " + why); return; }
     const rclcpp::Time t0 = now();  // 놓은 뒤에 실제로 본 것만
@@ -990,61 +1003,72 @@ void MissionManager::verify(size_t k) {  // k = 재확인 순서 인덱스 — �
     return;
   }
   const size_t li = build_loc_order_[build_loc_order_.size() - 1 - k];
+  if (verified_.count(li)) { verify(k + 1); return; }  // 놓은 그 자리에서 이미 함 (verify_in_place)
   const std::string name = "L" + str(static_cast<int>(li) + 1);
   ctx_ = "\"loc\": " + q(name);
   note(name + " 재검증");
   const double lx = locations_[li].first, ly = locations_[li].second;
   go_near(loc_boxes_[li], lx, ly, [this, k, li, name](bool ok, const std::string & why) {
     if (!ok) {
+      verified_.insert(li);
       result(name + ": verify_approach_failed " + why);
       seen_tags_.push_back({});
       verify_json_ += std::string(verify_json_.empty() ? "" : ", ") + "{\"location\": " + q(name) + ", \"ok\": false, \"why\": " + q(why) + "}";
       verify(k + 1);
       return;
     }
-    correct(li);
-    const auto center = cell_target(li, 4);  // 가운데 칸 = 보정한 장소 중심
-    const double cx = center.first, cy = center.second;
-    const rclcpp::Time t0 = now();
-    run_retry({SubGoal().set__skill("inspect").set__target(point(cx, cy, box_top_z_ + puck_h_))},
-      [this, k, li, name, cx, cy, t0](bool ok2, const std::string & why2) {
-        if (!ok2) RCLCPP_WARN(get_logger(), "%s inspect 실패 (%s) — 본 것만 기록", name.c_str(), why2.c_str());
-        snap("verify_" + name);
-        const auto c = to_map(cx, cy);
-        std::vector<Seen> seen;
-        std::vector<int> tags;
-        std::string obs;
-        if (objects_) for (const auto & o : objects_->objects) {
-          if (!is_puck(o) || rclcpp::Time(o.last_seen, RCL_ROS_TIME) < t0) continue;
-          const double mx = o.pose.pose.position.x, my = o.pose.pose.position.y;
-          if (std::hypot(mx - c.x, my - c.y) > verify_radius_) continue;
-          const auto a = to_arena(mx, my);  // 기록은 발제 좌표로
-          const std::string tag = detail(o, "tag");
-          const int t = tag.empty() ? -1 : std::stoi(tag);
-          seen.push_back({t, a.x, a.y});
-          tags.push_back(t);
-          obs += std::string(obs.empty() ? "" : ", ") + "{\"tag\": " + (tag.empty() ? "null" : tag) +
-                 fmt(", \"x_mm\": %.0f, \"y_mm\": %.0f", a.x * 1000, a.y * 1000) + ", \"color\": " + q(o.color) +
-                 ", \"lying\": " + (o.class_name == "puck_lying" ? "true" : "false") + "}";
-        }
-        std::vector<std::pair<int, int>> expected;
-        for (const auto & j : jobs_) if (j.loc == li) expected.push_back({j.tag, j.cell});
-        const auto r = judge_location(expected, cx, cy, grid_step_, seen, place_tol_);
-        std::string cells;
-        for (const auto & k : r.cells)
-          cells += std::string(cells.empty() ? "" : ", ") + "{\"tag\": " + str(k.tag) + ", \"cell\": " + str(k.cell) +
-                   ", \"found\": " + (k.found ? "true" : "false") + fmt(", \"err_mm\": %.1f", k.err * 1000) + "}";
-        seen_tags_.push_back(tags);
-        verify_json_ += std::string(verify_json_.empty() ? "" : ", ") + "{\"location\": " + q(name) + ", \"group\": " +
-          q(std::string(1, order_[li])) + fmt(", \"correction_mm\": [%.1f, %.1f]", corr_[li].first * 1000, corr_[li].second * 1000) +
-          ", \"cells\": [" + cells + "], \"observed\": [" + obs + "], \"extra\": " + str(static_cast<int>(r.extra.size())) +
-          ", \"ok\": " + (r.ok ? "true" : "false") + "}";
-        result(name + ": " + (r.ok ? "ok" : "mismatch"));
-        RCLCPP_INFO(get_logger(), "재검증 %s: 칸 %zu개 · 새로 본 퍽 %zu개 · 빈 칸 퍽 %zu개 → %s", name.c_str(), r.cells.size(),
-                    seen.size(), r.extra.size(), r.ok ? "일치" : "불일치");
-        verify(k + 1);
-      });
+    verify_at(li, [this, k]() { verify(k + 1); });
   });
+}
+
+// 지금 선 자리(장소 li 앞)에서 재검증 — 놓은 뒤 새로 본 퍽만으로 칸별 판정 (발제 p7: 목표 상태 복사 금지)
+void MissionManager::verify_at(size_t li, std::function<void()> then) {
+  verified_.insert(li);
+  const std::string name = "L" + str(static_cast<int>(li) + 1);
+  ctx_ = "\"loc\": " + q(name);
+  note(name + " 재검증 (그 자리)");
+  correct(li);
+  const auto center = cell_target(li, 4);  // 가운데 칸 = 보정한 장소 중심
+  const double cx = center.first, cy = center.second;
+  const rclcpp::Time t0 = now();
+  run_retry({SubGoal().set__skill("inspect").set__target(point(cx, cy, box_top_z_ + puck_h_))},
+    [this, li, name, cx, cy, t0, then](bool ok2, const std::string & why2) {
+      if (!ok2) RCLCPP_WARN(get_logger(), "%s inspect 실패 (%s) — 본 것만 기록", name.c_str(), why2.c_str());
+      snap("verify_" + name);
+      const auto c = to_map(cx, cy);
+      std::vector<Seen> seen;
+      std::vector<int> tags;
+      std::string obs;
+      if (objects_) for (const auto & o : objects_->objects) {
+        if (!is_puck(o) || rclcpp::Time(o.last_seen, RCL_ROS_TIME) < t0) continue;
+        const double mx = o.pose.pose.position.x, my = o.pose.pose.position.y;
+        if (std::hypot(mx - c.x, my - c.y) > verify_radius_) continue;
+        const auto a = to_arena(mx, my);  // 기록은 발제 좌표로
+        const std::string tag = detail(o, "tag");
+        const int t = tag.empty() ? -1 : std::stoi(tag);
+        seen.push_back({t, a.x, a.y});
+        tags.push_back(t);
+        obs += std::string(obs.empty() ? "" : ", ") + "{\"tag\": " + (tag.empty() ? "null" : tag) +
+               fmt(", \"x_mm\": %.0f, \"y_mm\": %.0f", a.x * 1000, a.y * 1000) + ", \"color\": " + q(o.color) +
+               ", \"lying\": " + (o.class_name == "puck_lying" ? "true" : "false") + "}";
+      }
+      std::vector<std::pair<int, int>> expected;
+      for (const auto & j : jobs_) if (j.loc == li) expected.push_back({j.tag, j.cell});
+      const auto r = judge_location(expected, cx, cy, grid_step_, seen, place_tol_);
+      std::string cells;
+      for (const auto & k : r.cells)
+        cells += std::string(cells.empty() ? "" : ", ") + "{\"tag\": " + str(k.tag) + ", \"cell\": " + str(k.cell) +
+                 ", \"found\": " + (k.found ? "true" : "false") + fmt(", \"err_mm\": %.1f", k.err * 1000) + "}";
+      seen_tags_.push_back(tags);
+      verify_json_ += std::string(verify_json_.empty() ? "" : ", ") + "{\"location\": " + q(name) + ", \"group\": " +
+        q(std::string(1, order_[li])) + fmt(", \"correction_mm\": [%.1f, %.1f]", corr_[li].first * 1000, corr_[li].second * 1000) +
+        ", \"cells\": [" + cells + "], \"observed\": [" + obs + "], \"extra\": " + str(static_cast<int>(r.extra.size())) +
+        ", \"ok\": " + (r.ok ? "true" : "false") + "}";
+      result(name + ": " + (r.ok ? "ok" : "mismatch"));
+      RCLCPP_INFO(get_logger(), "재검증 %s: 칸 %zu개 · 새로 본 퍽 %zu개 · 빈 칸 퍽 %zu개 → %s", name.c_str(), r.cells.size(),
+                  seen.size(), r.extra.size(), r.ok ? "일치" : "불일치");
+      then();
+    });
 }
 
 // ---------- RETURN — 출발 구역 가운데 → 외곽 직사각형이 구역 안인지 확인, 밖이면 한 번 보정 → 정지

@@ -136,6 +136,7 @@ mission_manager:             # 주사위 기억 미션 (documents/mission/README
     stand_check_s: 1.0                       # [s] 누운 퍽 stand 뒤 인지가 섰는지 볼 때까지 기다림 → 섰으면 선 퍽을 pick (못 보면 stand_pick), 아직 누웠으면 stand 다시 (retries번)
     stand_find_m: 0.10                       # [m] stand 뒤 look에서 누운 가운데 이 안의 퍽: 누움 → 다시 stand · 섬 → pick · 없음 → stand_lost (선 퍽은 약 45 mm 옆 · 실패하면 6~7 cm 튐) — 11-15
     verify_radius: 0.15                      # [m] 재검증 때 장소 중심에서 이 안의 퍽만
+    verify_in_place: true                    # 장소의 마지막 퍽을 놓은 그 자리에서 바로 재검증 (11-15) — false면 다 놓은 뒤 L3·L2·L1을 다시 찾아감
     # 바코드 보는 자세 [x, y, yaw] (출발 구역 안) — 비우면 출발(관측) 자리에서 그대로 봄 (이동 없음)
     #   실기 11-12: 출발 자리에서 신호등·바코드 둘 다 인지됨 → 이동 안 함. 예전 시뮬 값 [0.950, 0.800, 3.3126]은
     #   26 cm 뒤 자리라 Nav2가 돌아섰다 다시 돌아 한 바퀴를 돌았음 (시뮬 렌더에선 바코드가 화면 끝에 걸렸음)
