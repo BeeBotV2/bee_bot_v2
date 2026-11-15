@@ -88,7 +88,7 @@ def _save(out: Path, name: str, pts) -> None:
 
 def record(node, tf_buf, name: str, start=START, first: int = 1) -> int:
     """한 번에 쭉 몰면서 구간마다 Enter — <이름>_01.txt, _02.txt …로 나눠 저장 (끝 점 = 다음 구간 시작).
-    q + Enter = 지금 구간까지 저장하고 끝 · Ctrl+C = 지금 구간은 버리고 끝."""
+    q + Enter · Ctrl+C = 지금 구간까지 저장하고 끝."""
     import rclpy
     from rclpy.time import Time
     from geometry_msgs.msg import TwistStamped
@@ -106,12 +106,35 @@ def record(node, tf_buf, name: str, start=START, first: int = 1) -> int:
 
     def stem(k: int) -> str:
         return f'{name}_{k:02d}' + (f'_{labels[k - 1]}' if k - 1 < len(labels) else '')
+
+    def save_seg() -> bool:
+        """지금 구간 저장 (0.3 m 넘게 움직였으면) — Enter · q · Ctrl+C 모두 (11-15: 마지막 복귀를 Ctrl+C로 끝내 메모리에서 사라짐)."""
+        nonlocal seg, pts, odom, saved
+        moved = len(odom) >= 2 and math.hypot(odom[-1][0] - odom[0][0], odom[-1][1] - odom[0][1]) >= 0.3
+        if not (moved or (len(pts) >= 2 and math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]) >= 0.3)):
+            return False
+        st = stem(seg)
+        if len(pts) >= 2:
+            _save(ROUTES / f'{st}.txt', f'{st}', pts)
+        if len(odom) >= 2:
+            _save_motion(ROUTES / f'{st}.motion.csv', st, odom)
+        (ROUTES / f'{st}.cmd.csv').write_text(
+            f'# {st} · 사람이 준 조작 명령 /cmd/manual/cmd_vel (값이 바뀔 때만) · t = 구간 시작부터 [s]\n'
+            't,linear_mps,angular_radps\n' + ''.join(f'{t},{v},{w}\n' for t, v, w in cmds))
+        saved += 1
+        seg += 1
+        pts, odom = pts[-1:], odom[-1:]   # 다음 구간은 이 자리에서 시작
+        cmds.clear()
+        t0[0] = time.monotonic()
+        if seg - 1 < len(labels):
+            print(f'  다음 구간 {seg}: {labels[seg - 1]}')
+        return True
     if labels:
         print(f'구간 순서 (plan.yaml): ' + ' · '.join(f'{i}) {l}' for i, l in enumerate(labels, 1)))
     if labels and seg - 1 < len(labels):
         print(f'  이번 첫 구간 {seg}: {labels[seg - 1]}')
-    print(f'경로 녹화: {name} — 수동으로 몰다가 구간 끝(상자 앞)에서 멈추고 Enter = 그 구간 저장 · 이어서 다음 구간\n'
-          f'  q + Enter = 끝 · 저장 폴더 {ROUTES}')
+    print(f'경로 녹화: {name} — 수동으로 몰다가 구간 끝(상자 앞)에서 상자를 똑바로 보고 Enter = 그 구간 저장 · 이어서 다음 구간\n'
+          f'  q + Enter 또는 Ctrl+C = 지금 구간까지 저장하고 끝 · 저장 폴더 {ROUTES}')
     try:
         while True:
             rclpy.spin_once(node, timeout_sec=0.1)
@@ -133,29 +156,13 @@ def record(node, tf_buf, name: str, start=START, first: int = 1) -> int:
             if not select.select([sys.stdin], [], [], 0)[0]:
                 continue
             quit_ = sys.stdin.readline().strip().lower() == 'q'
-            moved = len(odom) >= 2 and math.hypot(odom[-1][0] - odom[0][0], odom[-1][1] - odom[0][1]) >= 0.3
-            if moved or (len(pts) >= 2 and math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]) >= 0.3):
-                st = stem(seg)
-                if len(pts) >= 2:
-                    _save(ROUTES / f'{st}.txt', f'{st}', pts)
-                if len(odom) >= 2:
-                    _save_motion(ROUTES / f'{st}.motion.csv', st, odom)
-                (ROUTES / f'{st}.cmd.csv').write_text(
-                    f'# {st} · 사람이 준 조작 명령 /cmd/manual/cmd_vel (값이 바뀔 때만) · t = 구간 시작부터 [s]\n'
-                    't,linear_mps,angular_radps\n' + ''.join(f'{t},{v},{w}\n' for t, v, w in cmds))
-                saved += 1
-                seg += 1
-                pts, odom = pts[-1:], odom[-1:]   # 다음 구간은 이 자리에서 시작
-                cmds.clear()
-                t0[0] = time.monotonic()
-                if seg - 1 < len(labels):
-                    print(f'  다음 구간 {seg}: {labels[seg - 1]}')
-            elif not quit_:
+            if not save_seg() and not quit_:
                 print('\n  구간이 0.3 m보다 짧음 — 저장 안 함 (계속 몰기)')
             if quit_:
                 break
     except KeyboardInterrupt:
-        print('\n  Ctrl+C — 지금 구간은 버림')
+        print('\n  Ctrl+C — 지금 구간까지 저장하고 끝')
+        save_seg()
     node.destroy_subscription(sub)
     print(f'끝 — 구간 {saved}개 저장 ({ROUTES}: .txt = map 좌표 · .motion.csv = 직진·회전 정답표 · .cmd.csv = 조작 명령)')
     return 0 if saved else 1
