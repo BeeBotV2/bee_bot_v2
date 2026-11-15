@@ -86,14 +86,14 @@ def _save(out: Path, name: str, pts) -> None:
     print(f'\n저장: {out.name} ({len(pts)}점 · {length:.2f} m) — 시작 ({pts[0][0]:.2f}, {pts[0][1]:.2f}) → 끝 ({pts[-1][0]:.2f}, {pts[-1][1]:.2f})')
 
 
-def record(node, tf_buf, name: str, start=START) -> int:
+def record(node, tf_buf, name: str, start=START, first: int = 1) -> int:
     """한 번에 쭉 몰면서 구간마다 Enter — <이름>_01.txt, _02.txt …로 나눠 저장 (끝 점 = 다음 구간 시작).
     q + Enter = 지금 구간까지 저장하고 끝 · Ctrl+C = 지금 구간은 버리고 끝."""
     import rclpy
     from rclpy.time import Time
     from geometry_msgs.msg import TwistStamped
     ROUTES.mkdir(parents=True, exist_ok=True)
-    seg, pts, odom, saved = 1, [], [], 0
+    seg, pts, odom, saved = max(1, first), [], [], 0   # first = 이어서 할 때 시작 구간 번호 (--from)
     labels = leg_labels()
     cmds: list[tuple[float, float, float]] = []   # (t, v, w) — 사람이 준 조작 명령 (값이 바뀔 때만)
     t0 = [time.monotonic()]
@@ -108,6 +108,8 @@ def record(node, tf_buf, name: str, start=START) -> int:
         return f'{name}_{k:02d}' + (f'_{labels[k - 1]}' if k - 1 < len(labels) else '')
     if labels:
         print(f'구간 순서 (plan.yaml): ' + ' · '.join(f'{i}) {l}' for i, l in enumerate(labels, 1)))
+    if labels and seg - 1 < len(labels):
+        print(f'  이번 첫 구간 {seg}: {labels[seg - 1]}')
     print(f'경로 녹화: {name} — 수동으로 몰다가 구간 끝(상자 앞)에서 멈추고 Enter = 그 구간 저장 · 이어서 다음 구간\n'
           f'  q + Enter = 끝 · 저장 폴더 {ROUTES}')
     try:
