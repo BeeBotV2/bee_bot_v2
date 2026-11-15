@@ -91,6 +91,7 @@ const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedOb
 
 MissionManager::MissionManager()
 : rclcpp::Node("mission_manager") {
+  phase_beeps_ = declare_parameter<bool>("phase_beeps", true);
   const auto sp = declare_parameter<std::vector<double>>("start_pose_arena", {0.734, 0.950, M_PI});
   start_ = {sp.at(0), sp.at(1), sp.at(2)};
   start_zone_ = declare_parameter<std::vector<double>>("start_zone", {0.434, 0.650, 1.034, 1.250});
@@ -246,6 +247,7 @@ MissionManager::MissionManager()
   const auto latched = rclcpp::QoS(1).reliable().transient_local();
   execute_client_ = rclcpp_action::create_client<ExecutePlan>(this, "/task/execute_plan");
   state_pub_ = create_publisher<MissionState>("/mission/state", latched);
+  beep_pub_ = create_publisher<std_msgs::msg::Int32MultiArray>("/cmd/beep", 10);
   markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/mission/markers", latched);
   walls_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/arena/walls", latched);
   publish_walls();
@@ -382,6 +384,7 @@ void MissionManager::on_command(const std::string & cmd) {
     for (const auto & g : goto_) list += (list.empty() ? "" : ",") + g;
     note("상자로 가기 " + list + " — SURVEY처럼 (Nav2 → 상자 도킹) · 끝나면 복귀");
     phase_ = Phase::SURVEY;
+    beep_phase(phase_);
     phase_t0_ = wall_s();
     ctx_.clear();
     goto_seq(0);
@@ -411,6 +414,7 @@ void MissionManager::enter(Phase p, const std::string & why) {
   phase_ = p;
   phase_t0_ = wall_s();
   ctx_.clear();
+  if (p != Phase::ERROR) beep_phase(p);
   switch (p) {
     case Phase::GO_OBSERVE: go_observe(); break;
     case Phase::BARCODE: barcode_phase(); break;
@@ -424,7 +428,7 @@ void MissionManager::enter(Phase p, const std::string & why) {
       active_ = false;
       note("기록: " + run_dir_ + (results_.empty() ? "" : " · 실패 " + str(static_cast<int>(results_.size())) + "건 (결과 목록)"));
       break;
-    case Phase::ERROR: stop(why); break;
+    case Phase::ERROR: beep_phase(p); stop(why); break;
     default: break;
   }
 }
@@ -1080,6 +1084,7 @@ void MissionManager::go_home(bool corrected) {
 }
 
 void MissionManager::stop(const std::string & why) {
+  const bool already_error = phase_ == Phase::ERROR;
   if (active_) {  // 시간 기록 — 진행 중 단계·단계·미션을 실패로 닫음 (finish → ERROR로 왔으면 단계 줄은 이미 씀)
     close_steps(false, why, step_log_.cur);
     if (phase_ != Phase::ERROR) phase_line(false, why, Phase::ERROR);
@@ -1091,6 +1096,7 @@ void MissionManager::stop(const std::string & why) {
   waiting_plan_ = 0;
   waiting_done_ = nullptr;
   phase_ = Phase::ERROR;
+  if (!already_error) beep_phase(phase_);
   error_ = why;
   if (timer_) timer_->cancel();
   // 관측 중 팔을 뻗은 채 멈추면 다음 시작·주행 때 부딪힘 → 접기(stow)만 새 goal로 보냄 (결과는 안 기다림)
@@ -1119,6 +1125,47 @@ void MissionManager::note(const std::string & text) {
   note_ = text;
   RCLCPP_INFO(get_logger(), "[%s] %s", phase_name(phase_), text.c_str());
   publish_state();
+}
+
+void MissionManager::beep_phase(Phase phase) {
+  if (!phase_beeps_ || !beep_pub_) return;
+  int hz = 0, ms = 120;
+  switch (phase) {
+    case Phase::GO_OBSERVE: hz = 1100; break;
+    case Phase::BARCODE: hz = 1400; break;
+    case Phase::READ: hz = 1700; break;
+    case Phase::SURVEY: hz = 2000; break;
+    case Phase::BUILD: hz = 2300; break;
+    case Phase::VERIFY: hz = 2600; break;
+    case Phase::RETURN: hz = 2900; break;
+    case Phase::DONE: hz = 4200; ms = 320; break;
+    case Phase::ERROR: hz = 650; ms = 600; break;
+    default: return;  // IDLE에는 소리 내지 않음
+  }
+  if (phase == Phase::ERROR) {
+    beep_queue_.clear();  // 이전 단계 큐보다 오류음을 먼저 알림
+    if (beep_timer_active_ && beep_timer_) beep_timer_->cancel();
+    beep_timer_active_ = false;
+  }
+  beep_queue_.emplace_back(hz, ms);
+  if (beep_timer_active_) return;
+  beep_timer_active_ = true;
+  beep_timer_ = create_wall_timer(std::chrono::milliseconds(180), [this]() {
+    if (beep_queue_.empty()) {
+      beep_timer_->cancel();
+      beep_timer_active_ = false;
+      return;
+    }
+    const auto [next_hz, next_ms] = beep_queue_.front();
+    beep_queue_.pop_front();
+    std_msgs::msg::Int32MultiArray tone;
+    tone.data = {next_hz, next_ms};
+    beep_pub_->publish(tone);
+    if (beep_queue_.empty()) {
+      beep_timer_->cancel();
+      beep_timer_active_ = false;
+    }
+  });
 }
 
 void MissionManager::result(const std::string & text) {

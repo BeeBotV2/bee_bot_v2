@@ -197,7 +197,7 @@ class OperatorTool(Node):
             from perception.msg import TrackedObjectArray  # type: ignore
             self.create_subscription(
                 TrackedObjectArray, '/tracked_objects',
-                lambda m: self.state.on_objects(m.objects), LIVE)
+                lambda m: self.state.on_objects(m.objects, m.header.frame_id), LIVE)
         except Exception:
             pass
         try:
@@ -272,6 +272,14 @@ class OperatorTool(Node):
             from nav2_msgs.action import NavigateToPose  # type: ignore
             self.create_subscription(NavigateToPose.Impl.FeedbackMessage, '/navigate_to_pose/_action/feedback',
                                      lambda m: self.state.on_nav_feedback(m.feedback), LIVE)
+        except Exception:
+            pass
+        try:  # 각 skill의 실제 진행 단계 (stage feedback) — feedback은 skill이 바뀔 때만 저빈도로 발행
+            from plan.action import Skill  # type: ignore
+            for skill in ('navigate', 'approach', 'pick', 'pick_far', 'place', 'load', 'unload', 'stand', 'pose', 'inspect'):
+                self.create_subscription(
+                    Skill.Impl.FeedbackMessage, f'/skills/{skill}/_action/feedback',
+                    lambda m, name=skill: self.state.on_skill_feedback(name, m.feedback.stage), LIVE)
         except Exception:
             pass
 

@@ -39,6 +39,7 @@ coordinator:
     approach_m: 0.20         # [m] 다가간 뒤 로봇 중심 ~ 물체 중심 (stand 궤적 실측 안전 한계 0.234m 아래로 여유를 둠)
 mission_manager:             # 주사위 기억 미션 (documents/mission/README.md) — 좌표는 경기장(arena) m · 왼쪽 아래 기둥 원점 · +Y 위
   ros__parameters:
+    phase_beeps: true         # OpenCR: 미션 단계별 음 높이 · DONE/ERROR는 긴 끝 신호 (false면 끔)
     # 로봇을 켠 자리의 arena 자세 [x, y, yaw] — 운영 규칙: 출발 관측 위치에서 −X(π)를 보고 켬. 다르면 launch 인자 start_pose:=x,y,yaw
     start_pose_arena: [0.734, 0.950, 3.14159]
     start_zone: [0.434, 0.650, 1.034, 1.250]   # 출발 구역 [x0, y0, x1, y1] (복귀 판정·RViz)

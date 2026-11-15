@@ -34,6 +34,7 @@
 //   좌표: 설정은 경기장(arena, m) — start_pose_arena 하나로 map으로 바꾼다 (mission_solver arena_to_map).
 //   판단(정렬·배정·할당·칸·판정)은 전부 mission_solver 순수 함수. 이 노드는 순서·기록·skill 요청만.
 #include <functional>
+#include <deque>
 #include <map>
 #include <set>
 #include <string>
@@ -56,6 +57,7 @@
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_msgs/msg/int32_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -93,6 +95,7 @@ private:
   void finish(bool ok, const std::string & why = "");
   void note(const std::string & text);           // 지금 하는 일 → /mission/state
   void result(const std::string & text);         // 퍽·장소 결과 (실패해도 계속) → /mission/state · build.json
+  void beep_phase(Phase phase);                  // 단계마다 pitch가 올라감 · 완료/오류는 긴 끝 신호
   void stop(const std::string & why);            // ERROR — coordinator 정지
 
   // skill 요청 — 계획 하나를 ExecutePlan action으로 보내고 result를 기다림. run_retry는 실패하면 retries번까지 다시
@@ -215,6 +218,9 @@ private:
 
   // 진행 상태
   Phase phase_ = Phase::IDLE;
+  bool phase_beeps_ = true;
+  bool beep_timer_active_ = false;
+  std::deque<std::pair<int, int>> beep_queue_;
   std::string note_, error_;
   bool active_ = false;
   using ExecuteGoalHandle = rclcpp_action::ClientGoalHandle<ExecutePlan>;
@@ -308,6 +314,8 @@ private:
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp_action::Client<ExecutePlan>::SharedPtr execute_client_;
   rclcpp::Publisher<MissionState>::SharedPtr state_pub_;
+  rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr beep_pub_;
+  rclcpp::TimerBase::SharedPtr beep_timer_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr walls_pub_;  // /arena/walls (map, latched) → nvblox_map이 /map에 겹침
   void publish_walls();
