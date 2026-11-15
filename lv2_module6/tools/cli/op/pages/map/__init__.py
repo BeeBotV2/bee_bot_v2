@@ -688,6 +688,10 @@ class MapPage(Menu):
             fb = st.skill_feedback
             if fb and fb[:2] == task[:2] and time.monotonic() - fb[4] < 3.0:
                 active += f' · {fb[3]}'
+        if st.nav is not None:
+            (distance, recoveries, elapsed), received = st.nav
+            if now - received < 3.0:
+                active += f' · Nav2 {distance:.2f}m · 회복 {recoveries} · 주행 {elapsed:.0f}s'
         status = f'미션 {phase}{active}'
         short = {'puck': 'P', 'puck_lying': 'P', 'location_box': 'B', 'start_box': 'B',
                  'traffic_light': 'T', 'person': 'H', 'obstacle': '!'}
