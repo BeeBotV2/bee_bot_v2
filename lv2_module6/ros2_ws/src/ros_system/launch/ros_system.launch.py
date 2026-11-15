@@ -422,6 +422,8 @@ def slam_nodes():
         Node(package='ros_system', executable='cuvslam_slam', name='cuvslam_slam', output='screen', condition=on,
              parameters=[{'publish_map_tf': True,
                           'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int)}]),
+        # cuvslam_slam의 map→odom(/cuvslam/map_odom)을 30 Hz로 계속 TF로 (src/map_tf_relay.cpp) — 계산이 멈춰도 TF는 안 끊김
+        Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_depth_gate', output='screen',
              condition=IfCondition(PythonExpression([*slam_nvblox, ' and not ', *one_proc, ' and not ', *gate_cpp])),
              parameters=[gate_params('pole_front_cam')]),

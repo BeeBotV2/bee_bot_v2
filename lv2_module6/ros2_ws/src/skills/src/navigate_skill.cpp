@@ -303,10 +303,33 @@ private:
     RCLCPP_INFO(get_logger(), "구간 %s 표 → 경로 %zu점 (표대로면 끝이 목표와 %.2f m%s · 끝 map %.2f, %.2f) FollowPath — %s", leg.c_str(),
                 g.path.poses.size(), raw_end, anchor_ ? " → 목표에 맞춤" : "", e.x, e.y, file.c_str());
     stage("표 " + leg + " 경로 따라가기");
+    send_follow(std::make_shared<Follow::Goal>(g), leg, goal, flags, seq, done);
+    return true;
+  }
+
+  // FollowPath 보내기 — 걸리면(실패) 이 seq에서 한 번 뒤로 빼고, 지금 자리에서 가장 가까운 점부터 남은 경로로 다시 (11-16 시뮬: 문 모서리에 걸려 실패)
+  void send_follow(std::shared_ptr<Follow::Goal> g, const std::string & leg, const Pose & goal, const std::set<std::string> & flags,
+                   uint64_t seq, Done done) {
     rclcpp_action::Client<Follow>::SendGoalOptions opt;
-    const auto finish = [this, leg, goal, flags, seq, done](bool ok, const std::string & why) {
+    const auto finish = [this, g, leg, goal, flags, seq, done](bool ok, const std::string & why) {
       if (seq != nav_seq_) return;
       if (ok) { RCLCPP_INFO(get_logger(), "구간 %s 경로 끝 — 도착", leg.c_str()); done(true, ""); return; }
+      if (unstuck_seq_ != seq && unstick(seq, [this, g, leg, goal, flags, seq, done]() {
+            Pose2d p;
+            if (odom_pose(p, "map") && g->path.poses.size() > 2) {
+              size_t k = 0;
+              double best = 1e9;
+              for (size_t j = 0; j < g->path.poses.size(); ++j) {
+                const auto & q = g->path.poses[j].pose.position;
+                const double d = std::hypot(q.x - p.x, q.y - p.y);
+                if (d < best) { best = d; k = j; }
+              }
+              g->path.poses.erase(g->path.poses.begin(), g->path.poses.begin() + static_cast<long>(std::min(k, g->path.poses.size() - 2)));
+              g->path.header.stamp = now();
+              RCLCPP_WARN(get_logger(), "구간 %s 걸림 뒤 남은 경로 %zu점으로 다시", leg.c_str(), g->path.poses.size());
+            }
+            send_follow(g, leg, goal, flags, seq, done);
+          })) return;
       if (!fallback_nav2_) {
         RCLCPP_WARN(get_logger(), "구간 %s 경로 따라가기 실패 (%s) — 멈춤", leg.c_str(), why.c_str());
         done(false, "route_follow_failed");
@@ -324,8 +347,7 @@ private:
       finish(r.code == rclcpp_action::ResultCode::SUCCEEDED,
              r.result ? fmt("error %u %s", static_cast<unsigned>(r.result->error_code), r.result->error_msg.c_str()) : "aborted");
     };
-    follow_->async_send_goal(g, opt);
-    return true;
+    follow_->async_send_goal(*g, opt);
   }
 
   // 표의 i번째 동작 — 끝나면 odom을 기대 자세와 비교. 엇나가거나 실패하면 남은 길은 Nav2로
