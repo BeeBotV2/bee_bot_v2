@@ -157,6 +157,11 @@ ArenaCorr corr_after_step(const ArenaCorr & c, const ArenaCorr & s) {
   return {co * x + si * y, -si * x + co * y, std::remainder(c.dth - s.dth, 2 * M_PI), c.n};
 }
 
+ArenaCorr compose_corr(const ArenaCorr & a, const ArenaCorr & b) {
+  const double co = std::cos(a.dth), si = std::sin(a.dth);
+  return {co * b.dx - si * b.dy + a.dx, si * b.dx + co * b.dy + a.dy, std::remainder(a.dth + b.dth, 2 * M_PI), a.n};
+}
+
 ArenaCorr fit_arena_corr(std::vector<CorrPair> pairs, double min_sep, double max_shift, double max_rot, double outlier_m) {
   ArenaCorr c;
   while (!pairs.empty()) {

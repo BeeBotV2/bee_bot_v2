@@ -1700,9 +1700,18 @@ void MissionManager::wall_tick() {
   wall_why_.clear();
   const bool first = !wall_ok_;
   wall_ok_ = true;
-  wall_ = f;
-  if (first || corr_moved(f.c, acorr_, acorr_step_m_, acorr_step_rad_))
-    commit_corr(f.c, "walls", fmt("맞은 칸 %.0f · rms %.1f cm", f.inliers, f.rms * 100));
+  wall_ = f;  // 격자 그대로의 차이 (다음 정합의 시작점)
+  ArenaCorr c = f.c;
+  if (loc_on_) {
+    // 이미 로봇 위치로 넘긴 몫을 뺌 — 격자의 예전 벽은 안 옮겨져 같은 차이가 다시 보임 (loc_sent_ 설명)
+    //   다시 본 벽이 새 자리로 쌓이면 차이가 줄어 '남은 것'이 넘긴 쪽과 반대가 됨 → 되돌리지 않고 0 (넘침 없이 덜 고치는 쪽)
+    if (std::hypot(f.c.dx, f.c.dy) < loc_min_m_ && std::abs(f.c.dth) < loc_min_rad_) loc_sent_ = {};  // 격자가 다 맞음 — 처음부터
+    c = corr_after_step(f.c, loc_sent_);
+    if (c.dx * f.c.dx + c.dy * f.c.dy < 0) c.dx = c.dy = 0;
+    if (c.dth * f.c.dth < 0) c.dth = 0;
+  }
+  if (first || corr_moved(c, acorr_, acorr_step_m_, acorr_step_rad_))
+    commit_corr(c, "walls", fmt("맞은 칸 %.0f · rms %.1f cm", f.inliers, f.rms * 100));
 }
 
 // 보정 → 로봇 위치 — 근거가 충분하면 보정 조각을 cuvslam_slam에 넘기고 (map' = 조각⁻¹ · map) 그만큼 이쪽 보정·관측에서 뺌.
@@ -1722,7 +1731,7 @@ void MissionManager::loc_tick() {
     mk.qx = q.x;
     mk.qy = q.y;
   }
-  if (wall_ok_) wall_.c = corr_after_step(wall_.c, st);
+  if (acorr_src_ == "walls") loc_sent_ = compose_corr(loc_sent_, st);  // wall_.c(격자 그대로)는 안 건드림 — 다음 정합이 거기서 시작
   loc_last_ = wall_s();
   RCLCPP_INFO(get_logger(), "도면 보정 → 로봇 위치 %+.3f %+.3f %+.1f° (%s) · 남은 보정 %+.3f %+.3f %+.1f°", st.dx, st.dy, st.dth * 180 / M_PI,
               acorr_src_.c_str(), acorr_.dx, acorr_.dy, acorr_.dth * 180 / M_PI);

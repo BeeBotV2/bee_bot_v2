@@ -95,7 +95,7 @@ def main():
             'py_helpers_one_process': 'false'}  # 노드 하나하나 보려고 따로 — 한 프로세스(기본)는 아래 py_helpers 검사
     on = nodes(**base)
     off = nodes(**base, use_slam='false')
-    slam = {'cuvslam_slam', 'nvblox_node', 'nvblox_map', 'pole_depth_gate'}
+    slam = {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'nvblox_map', 'pole_depth_gate'}
     rtab = {'rtabmap', 'rgbdx_sync', 'scan_cam_gate', 'scan_cloud_merge', 'pole_rgbd_sync', 'gripper_rgbd_sync'}  # 예전 SLAM — 남아 있으면 안 됨
     # 지도 파일: 매핑이면 끌 때 저장(불러오기 없음) · 위치추정이면 시작할 때 불러오기(저장 안 함 — 불러온 지도를 안 덮어씀)
     m = {**base, 'nvblox_map': '/maps/a/nvblox.nvblx'}

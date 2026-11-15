@@ -340,6 +340,24 @@ TEST(ArenaCorr, StepToLocalizationKeepsTotal) {
   EXPECT_LT(std::hypot(r.dx, r.dy), 0.03);
 }
 
+// 넘긴 조각을 이어 두면(compose_corr) 격자가 그대로일 때 같은 차이를 다시 봐도 남은 보정이 0으로 줄어 더 안 넘김 (위치 흘러감 방지)
+TEST(ArenaCorr, ComposeSentStepsStopsAtFit) {
+  const ArenaCorr f{0.13, -0.10, -0.026, 1000};  // 11-16 실기 벽 정합 차이
+  ArenaCorr sent;
+  int steps = 0;
+  for (; steps < 50; ++steps) {
+    const auto rem = corr_after_step(f, sent);  // 격자는 그대로 → 매번 같은 f를 봄
+    if (std::hypot(rem.dx, rem.dy) < 0.02 && std::abs(rem.dth) < 0.0087) break;
+    sent = compose_corr(sent, corr_step(rem, 0.05, M_PI / 180));
+  }
+  EXPECT_LT(steps, 12);
+  EXPECT_NEAR(sent.dx, f.dx, 0.03);  // 넘긴 합 ≈ f (넘치지 않음)
+  EXPECT_NEAR(sent.dy, f.dy, 0.03);
+  const ArenaCorr s1{0.05, 0.0, 0.017, 1}, s2{0.02, -0.04, 0.01, 1};
+  const auto a = corr_after_step(corr_after_step(f, s1), s2), b = corr_after_step(f, compose_corr(s1, s2));
+  EXPECT_NEAR(a.dx, b.dx, 1e-9); EXPECT_NEAR(a.dy, b.dy, 1e-9); EXPECT_NEAR(a.dth, b.dth, 1e-9);
+}
+
 TEST(ArenaCorr, ApplyUnapplyRoundTripAndToMap) {
   const auto m = arena_to_map({3.670, 3.152, 0.3}, kStart);
   const auto c = apply_corr(kTrue, m);  // mission_manager to_map = apply_corr(acorr_, arena_to_map(...))

@@ -2,7 +2,16 @@
 //   cuvslam_slam(파이썬)은 카메라 프레임을 처리할 때만 map→odom을 냈음 → Jetson CPU 몰림에 노드가 1 s 멈추면 TF도 끊겨
 //   controller "Failed to transform end pose"(102)로 출발 실패. map→odom은 천천히 바뀌는 보정이라 마지막 값을 계속 내면 됨
 //   (AMCL · slam_toolbox와 같은 방식: 계산과 TF 내기를 나눔). 시각 = 지금 + future_s (받는 쪽 transform_tolerance 안에서 늘 최신)
+// 실시간 우선순위 (11-16): 시작할 때 SCHED_FIFO MAP_TF_RELAY_RT_PRIO(기본 50 · 0 = 안 함) — CPU가 몰려도 먼저 돎.
+//   rclcpp::init 전에 올려 DDS 스레드도 물려받음. 계정 rtprio 한도 필요 (/etc/security/limits.d/90-bee-rtprio.conf, 다시 로그인)
+//   — 없으면 경고만 하고 보통 우선순위로 계속
+#include <sched.h>
+
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <string>
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -40,8 +49,22 @@ private:
 };
 
 int main(int argc, char ** argv) {
+  const char * env = std::getenv("MAP_TF_RELAY_RT_PRIO");
+  const int prio = env ? std::atoi(env) : 50;
+  std::string rt = "보통 우선순위 (MAP_TF_RELAY_RT_PRIO=0)";
+  bool ok = false;
+  if (prio > 0) {
+    sched_param sp{};
+    sp.sched_priority = prio;
+    ok = sched_setscheduler(0, SCHED_FIFO, &sp) == 0;
+    rt = ok ? "SCHED_FIFO " + std::to_string(prio)
+            : std::string("실시간 우선순위 못 올림 (") + std::strerror(errno) + ") — 보통 우선순위로 (계정 rtprio 한도 확인)";
+  }
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<MapTfRelay>());
+  auto node = std::make_shared<MapTfRelay>();
+  if (ok) RCLCPP_INFO(node->get_logger(), "%s", rt.c_str());
+  else RCLCPP_WARN(node->get_logger(), "%s", rt.c_str());
+  rclcpp::spin(node);
   rclcpp::shutdown();
   return 0;
 }

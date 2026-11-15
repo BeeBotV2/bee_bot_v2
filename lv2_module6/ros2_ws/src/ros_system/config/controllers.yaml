@@ -43,8 +43,18 @@ diff_drive_controller:
     # 바퀴 회전이 IMU·cuVSLAM(둘이 서로 맞음)보다 11~12% 크게 나옴 (실기 bag 11-15: 0.38/0.34 · 0.61/0.55 · 0.85/0.76 rad/s)
     #   — 바퀴가 옆으로 끌리는 몫만큼 유효 간격이 넓음 (0.287 × 1.12 ≈ 0.32). odom 회전과 회전 명령의 바퀴 속도 둘 다에 들어감
     #   (안 맞추면 바퀴 odom yaw가 100 s에 42° 틀어지고, 로봇이 명령보다 약 10% 덜 돎). 확인: 제자리 360° × 3을 IMU·테이프와 비교
-    wheel_separation_multiplier: 1.12
-    wheel_radius: 0.033
+    # 11-16: 반지름 고침 → 회전식(r / (b·k))이 그대로이도록 배수도 같은 비율로 (1.12 × 0.03112/0.033 = 1.056).
+    #   위 11~12% 중 약 6%는 반지름 몫이었음. 2단계(360° × 3)로 이 값을 다시 확인
+    wheel_separation_multiplier: 1.056
+    # 11-16 실측 (isaac/loops/odom_calib.py, real_logs/odom_calib_1116_*.csv): 줄자 1.88 m 직진 2회에 odom 1.9936·1.9929 m
+    #   → 0.033 × 1.88 / 1.993 = 0.03112 (공칭 33 mm보다 6% 작음 — 타이어 눌림·적재 무게)
+    wheel_radius: 0.03112
+    # 11-16: 직진 1.88 m 3회 모두 IMU가 오른쪽으로 −4.36 · −1.85 · −2.29° (평균 −2.8°, 자이로 편향 0.0002°/s라 실제 휨)
+    #   → 왼쪽 바퀴가 0.287 × 0.0494 / 1.88 ≈ 0.75% 더 감 — 왼쪽 반지름을 크게 알려 줘야 odom·명령 둘 다 맞음
+    #   (끝점이 눈으로는 왼쪽 50 mm였던 건 출발 정렬 ~2.5° — IMU 부호는 왼쪽 회전으로 확인함)
+    #   단 바닥 기울기·요철일 수도 있어 보류 — 같은 줄 왕복(갔다가 180° 돌아 다시 직진)에서 두 구간 IMU yaw 부호가 같으면
+    #   바퀴 탓 → left_wheel_radius_multiplier ≈ 1.0075, 반대면 바닥 탓 → 1.0 그대로
+    # left_wheel_radius_multiplier: 1.0075
     base_frame_id: base_footprint
     odom_frame_id: odom
     enable_odom_tf: false       # odom→base_footprint TF는 EKF 하나만 (둘 다 내면 TF가 싸운다)

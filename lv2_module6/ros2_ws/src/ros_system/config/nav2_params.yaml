@@ -87,7 +87,7 @@ controller_server:
       # 0.3은 좁은 미로의 마지막 접근(남은 거리 < 0.3)에서 10초마다 105를 냈다 — 0.15로 낮춘다.
       required_movement_radius: 0.15
       # 이 시간(초) 안에 위 거리만큼 못 움직이면 막힘 → 컨트롤러 실패 → BT가 복구(Spin·BackUp·Wait).
-      movement_time_allowance: 15.0
+      movement_time_allowance: 6.0     # 11-16: 15 → 6 (벽에 막혔을 때 15 s씩 기다림 — 사용자 "생각하는 시간이 너무 김")
 
     # 도착 판단 — 목표 위치·방향 허용 오차 안에 들어오면 성공.
     goal_checker:
@@ -162,7 +162,7 @@ controller_server:
         min_vel_y: 0.0
         max_vel_y: 0.0
         # 최대 회전 속도. 예전 프리셋 A 값 (rl_nav_tuner 제거됨 — 고정값).
-        max_vel_theta: 1.82
+        max_vel_theta: 0.91    # 11-16: 1.82 → 0.91 (회전 절반)
         # 병진 속도 크기(√(vx²+vy²))의 최소·최대. 차동 구동이라 사실상 vx와 같다.
         min_speed_xy: 0.0
         max_speed_xy: 0.26
@@ -305,7 +305,7 @@ controller_server:
         max_lookahead_dist: 0.80
         lookahead_time: 1.5
         use_velocity_scaled_lookahead_dist: false
-        rotate_to_heading_angular_vel: 1.0
+        rotate_to_heading_angular_vel: 0.5   # 11-16: 1.0 → 0.5 (회전 절반)
         rotate_to_heading_min_angle: 0.785
         use_rotate_to_heading: true
         allow_reversing: false
@@ -318,7 +318,7 @@ controller_server:
         angular_dist_threshold: 0.785
         angular_disengage_threshold: 0.3925
         forward_sampling_distance: 0.5
-        rotate_to_heading_angular_vel: 1.0
+        rotate_to_heading_angular_vel: 0.5   # 11-16: 1.0 → 0.5 (회전 절반)
         max_angular_accel: 3.2
         simulate_ahead_time: 1.0
         rotate_to_goal_heading: false
@@ -394,8 +394,8 @@ behavior_server:
     robot_base_frame: base_footprint
     transform_tolerance: 0.2
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
+    max_rotational_vel: 0.5    # 11-16: 1.0 → 0.5 (회전 절반 — Spin: 표 재생 회전)
+    min_rotational_vel: 0.2
     rotational_acc_lim: 3.2
     enable_stamped_cmd_vel: true
 

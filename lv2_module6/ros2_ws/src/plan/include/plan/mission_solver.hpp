@@ -70,6 +70,9 @@ Pose2 unapply_corr(const ArenaCorr & c, const Pose2 & m);
 ArenaCorr corr_step(const ArenaCorr & c, double max_m, double max_rad);
 // 조각 s를 로봇 위치로 넘긴 뒤 남는 보정 r — apply_corr(s, apply_corr(r, x)) == apply_corr(c, x) (n 유지)
 ArenaCorr corr_after_step(const ArenaCorr & c, const ArenaCorr & s);
+// 두 보정을 잇기 — apply_corr(compose_corr(a, b), x) == apply_corr(a, apply_corr(b, x)) (n = a.n). 넘긴 조각 합치기:
+//   corr_after_step(corr_after_step(c, s1), s2) == corr_after_step(c, compose_corr(s1, s2))
+ArenaCorr compose_corr(const ArenaCorr & a, const ArenaCorr & b);
 // 짝(도면 map 점 m ↔ 인지 map 점 q)으로 보정을 맞춤. 1개거나 도면 점끼리 min_sep보다 가까우면 이동만, 아니면 이동+회전 (2D 최소제곱).
 //   잔차가 outlier_m을 넘는 짝은 가장 큰 것부터 하나씩 빼고 다시 (2개 남을 때까지) · 회전은 ±max_rot, 이동은 max_shift로 자름
 //   n = 쓴 짝 수 (0 = 짝 없음 → 보정 0)
