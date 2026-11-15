@@ -140,6 +140,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   stand_find_m_ = declare_parameter<double>("stand_find_m", 0.10);  // [m] stand 뒤 선 퍽을 누운 가운데에서 이 안에서 찾음 → pick
   verify_radius_ = declare_parameter<double>("verify_radius", 0.15);
   verify_in_place_ = declare_parameter<bool>("verify_in_place", true);
+  declare_parameter<std::string>("start_stop", "start");  // 미션 시작 때 로봇이 선 곳 (leg 이름) — 시뮬 구간 시험용 (ros2 param set)
   // 방문 순서 (1부터) — 경기장 고정이라 오프라인 A*(tools/plan/route_order.py, 도면 벽)로 정한 값. 비거나 틀리면 1, 2, 3, …
   survey_order_ = visit_order(declare_parameter<std::vector<int64_t>>("survey_order", std::vector<int64_t>{}), start_boxes_.size());
   build_loc_order_ = visit_order(declare_parameter<std::vector<int64_t>>("build_location_order", std::vector<int64_t>{}), 3);
@@ -260,6 +261,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   beep_pub_ = create_publisher<std_msgs::msg::Int32MultiArray>("/cmd/beep", 10);
   markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/mission/markers", latched);
   walls_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/arena/walls", latched);
+  walls_only_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/arena/walls_only", latched);
   publish_walls();
   corr_pub_ = create_publisher<std_msgs::msg::String>("/arena/correction", latched);
   if (wall_fit_) {  // nvblox 격자는 보통 토픽(주기 발행) — best effort로 받으면 reliable 발행도 받음
@@ -356,6 +358,7 @@ void MissionManager::on_command(const std::string & cmd) {
   verify_json_.clear();
   verified_.clear();
   last_place_loc_ = -1;
+  stop_ = get_parameter("start_stop").as_string();  // 미션은 출발 자리에서 시작 (운영 규칙) · 시뮬 구간 시험은 그 상자 앞 (S4 등)
   seen_tags_.clear();
   lying_.clear();
   corr_.assign(locations_.size(), {0.0, 0.0});
@@ -457,6 +460,7 @@ void MissionManager::go_observe() {
     return;
   }
   const auto p = to_map(barcode_pose_.x, barcode_pose_.y, barcode_pose_.yaw);
+  stop_.clear();  // 관측 자리로 옮김 — 출발 자리 표(start_*)는 안 맞음
   run({SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", p.x, p.y, p.yaw))},
     [this](bool ok, const std::string & why) { finish(ok, "observe_nav_failed:" + why); });
 }
@@ -1099,7 +1103,7 @@ void MissionManager::go_home(bool corrected) {
   // 처음엔 Nav2로 · 보정은 approach로 (구역 가운데로 저속 직선 — Nav2 허용 오차 0.10보다 정확). 보정은 park_home 정책
   //   (skill_approach — 시뮬 drive_env park: 5 cm · 10° 안에 3 s 정지, 81.1 → 96.5 %)
   run({stow(), SubGoal().set__skill(corrected ? "approach" : "navigate").set__target(fmt("%.4f,%.4f,%.4f", p.x, p.y, p.yaw))
-                 .set__relation(corrected ? "park_home" : "")},
+                 .set__relation(corrected ? "park_home" : leg_to("start"))},  // " leg:L3_start" — 앞 공백은 skill이 무시
     [this, corrected](bool ok, const std::string & why) {
       if (!ok && !corrected) { finish(false, "return_nav:" + why); return; }
       Pose2 r;
@@ -1404,12 +1408,14 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   const auto f = to_map(poses[k].x + push * std::cos(poses[k].yaw), poses[k].y + push * std::sin(poses[k].yaw), poses[k].yaw);
   const double t_start = wall_s();
   // navigate "look"(도착 전 팔 올리기)은 안 씀 (11-13 headless: 팔이 pole_front_cam을 가려 보던 상자를 잃고, 0.25 m에선 gripper_cam에 잘려 보임)
-  run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near"),
+  const std::string to = box_label(box);
+  run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near" + leg_to(to)),
        // 상자 도킹: 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12).
        //   11-16: f도 같은 가운데(cx, cy — 인지 평균 또는 도면) 기준이라 Nav2 목표 · 힌트 · 인지가 한 상자를 가리킴
        SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", f.x, f.y, f.yaw) + fmt(",%.4f,%.4f", approach_gap_, box.half))
          .set__relation("dock_box")},
-    [this, box, px, py, done, k, poses, push, n, t_start, retried, cx, cy](bool ok, const std::string & why) {
+    [this, box, px, py, done, k, poses, push, n, t_start, retried, cx, cy, to](bool ok, const std::string & why) {
+      stop_ = ok ? to : "";  // 붙었으면 그 상자 앞 (exit으로 같은 자리로 물러난 뒤 다음 구간 표가 시작) · 실패면 모름
       // 출발하자마자 navigate 실패(5 s 안)는 경로·자리 탓이 아니라 일시 오류 — 같은 자리로 한 번 더 (11-15 실기 S3: 출발 0.4 s 만에
       //   error 102 'Unable to transform goal pose' → 바로 반대 변(+y)으로 넘어가 상자를 빙 돌아 좁은 틈으로 감)
       if (!ok && why == "nav_failed" && !retried && wall_s() - t_start < 5.0) {
@@ -1820,6 +1826,8 @@ void MissionManager::publish_walls() {
         g.data[static_cast<size_t>(cy) * g.info.width + cx] = 100;
     }
   }
+  // 벽만 따로 (11-16) — collision_monitor 옆·뒤 입력(ros_system grid_obstacle_cloud). 상자를 넣으면 상자에 붙는 approach(1.6 cm)를 막음
+  walls_only_pub_->publish(g);
   // 시작 박스 · 장소 상자도 칸 100 (11-14) — 7 cm 낮은 상자는 다가가면 카메라 광선이 로컬 코스트맵에서 가까운 면을 지워
   //   DWB가 몸으로 긁고 돌다 밀었다 (시뮬 상자 3을 0.5 m). 붙는 건 approach(코스트맵 안 씀)라 지도에 있어도 붙음
   size_t nb = 0;

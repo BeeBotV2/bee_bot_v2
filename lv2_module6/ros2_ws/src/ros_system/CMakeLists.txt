@@ -30,6 +30,12 @@ else()
 endif()
 install(TARGETS cpp_helpers DESTINATION lib/${PROJECT_NAME})
 
+# 도면 벽 → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor가 옆·뒤 벽을 보게
+find_package(sensor_msgs REQUIRED)
+add_executable(grid_obstacle_cloud src/grid_obstacle_cloud.cpp)
+target_link_libraries(grid_obstacle_cloud rclcpp::rclcpp tf2_ros::tf2_ros ${nav_msgs_TARGETS} ${sensor_msgs_TARGETS})
+install(TARGETS grid_obstacle_cloud DESTINATION lib/${PROJECT_NAME})
+
 # cuvslam_slam C++판 (src/cuvslam_slam.cpp, 11-16) — cuVSLAM C++ API(cuvslam2.h)를 바로 부름. 둘 다 있어야 빌드 (없으면 파이썬판만):
 #   헤더 = PyCuVSLAM 소스(v17.0.1, NVIDIA Community License라 저장소에 안 넣음) CUVSLAM_SRC_DIR/libs/cuvslam/cuvslam2.h
 #   라이브러리 = pip로 깐 cuvslam 패키지 안 libcuvslam.so (같은 소스로 빌드한 것 — documents/jetson-orin-nano/CUVSLAM.md)
