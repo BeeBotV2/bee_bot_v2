@@ -8,7 +8,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
-#include "tf2/utils.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
@@ -46,7 +45,8 @@ private:
     const auto & g = *grid_;
     const double res = g.info.resolution, ox = g.info.origin.position.x, oy = g.info.origin.position.y;
     const double rx = inv.transform.translation.x, ry = inv.transform.translation.y;
-    const double yaw = tf2::getYaw(t.transform.rotation), c = std::cos(yaw), s = std::sin(yaw);
+    const auto & q = t.transform.rotation;  // 평면 yaw (tf2::getYaw는 tf2_geometry_msgs 링크가 필요해 직접)
+    const double yaw = std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)), c = std::cos(yaw), s = std::sin(yaw);
     const double tx = t.transform.translation.x, ty = t.transform.translation.y;
     const int r = static_cast<int>(std::ceil(radius_ / res));
     const int ci = static_cast<int>(std::floor((rx - ox) / res)), cj = static_cast<int>(std::floor((ry - oy) / res));
