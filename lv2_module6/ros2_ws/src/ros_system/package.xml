@@ -12,9 +12,6 @@
   <depend>tf2_ros</depend>          <!-- map_tf_relay -->
   <depend>geometry_msgs</depend>
 
-  <depend>rclcpp</depend>
-  <depend>tf2_ros</depend>
-  <depend>geometry_msgs</depend>
   <depend>tf2</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
