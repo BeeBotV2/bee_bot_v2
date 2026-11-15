@@ -11,7 +11,7 @@
 #   ./start.sh map:=slam                    # 지도 매핑 (새 폴더 map/<날짜_시각>/)
 #   (map 인자 없으면 bringup 기본 map:=none — 지도·SLAM·Nav2 없이 뜸. 주행·미션 안 됨)
 #   ./start.sh --build [launch 인자]        # 저장소에서 실행할 때 colcon build 후 실행
-#   LAUNCH_FILE=stand_test.launch.py ./start.sh  # 팔 테스트용 가벼운 실행
+#   LAUNCH_FILE=stand_test.launch.py ./start.sh  # 팔 테스트용 가벼운 실행 (= isaac/loops/manipulator-launcher.sh)
 #
 # 두 가지 위치에서 동작한다.
 #   - 저장소 lv2_module6/ros2_ws/ : install/이 없거나 --build면 src/를 빌드
@@ -310,7 +310,7 @@ foxglove_hint() {
 }
 case "${LAUNCH_FILE:-bringup.launch.py}" in bringup.launch.py) foxglove_hint "$@" ;; esac
 
-# 실행할 launch (기본 전체 bringup) — LAUNCH_FILE=stand_test.launch.py면 가벼운 팔 테스트용
+# 실행할 launch (기본 전체 bringup) — isaac/loops/manipulator-launcher.sh가 LAUNCH_FILE=stand_test.launch.py로 가벼운 팔 테스트용을 고름
 LAUNCH_FILE="${LAUNCH_FILE:-bringup.launch.py}"
 echo "=== ros2 launch bringup $LAUNCH_FILE $*"
 exec ros2 launch bringup "$LAUNCH_FILE" "$@"

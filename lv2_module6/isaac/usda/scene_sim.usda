@@ -7,8 +7,8 @@
                 double radius = 5
             }
             dictionary Perspective = {
-                double3 position = (-0.3321603676609302, -3.8599483016406757, 0.9119804949270236)
-                double3 target = (-0.7224208174515804, -2.2306889574595674, -0.003749752974889442)
+                double3 position = (-1.9267210734200264, -2.5065436836984656, 2.408491593424651)
+                double3 target = (-2.1739018983191962, -2.3766486606563384, 0.46463423849856356)
             }
             dictionary Right = {
                 double3 position = (0, -5, 0)
@@ -44,9 +44,9 @@ def Xform "World"
         prepend payload = @./beebot/beebot.usda@
     )
     {
-        quatf xformOp:orient = (0.08636859, 0, 0, 0.99626327)
+        quatf xformOp:orient = (6.123234e-17, 0, 0, -1)
         float3 xformOp:scale = (1, 1, 1)
-        double3 xformOp:translate = (-0.6808730737752141, -2.597499998994426, 0.0000013708473702855883)
+        double3 xformOp:translate = (-1.987, -2.468, 0.000001370847368953321)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
         over "Geometry"
@@ -180,6 +180,20 @@ def Xform "World"
                     over "sphere_3"
                     {
                         rel physics:simulationOwner
+                    }
+
+                    over "battery_link"
+                    {
+                    }
+
+                    over "imu_link"
+                    {
+                        over "Imu_Sensor"
+                        {
+                            quatd xformOp:orient = (1, 0, 0, -0)
+                            double3 xformOp:translate = (0, -2.384185791015625e-7, 0)
+                            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
+                        }
                     }
                 }
             }
@@ -348,6 +362,23 @@ def Xform "World"
                 )
             }
         }
+
+        over "ActionGraph"
+        {
+            over "ros2_publish_clock"
+            {
+                custom uint64 inputs:context
+                custom string inputs:nodeNamespace
+                custom string inputs:qosProfile
+                custom uint64 inputs:queueSize
+            }
+
+            over "isaac_read_simulation_time"
+            {
+                custom uint64 inputs:referenceTimeDenominator
+                custom int64 inputs:referenceTimeNumerator
+            }
+        }
     }
 
     def Xform "Environment"
@@ -499,7 +530,7 @@ def Xform "World"
     {
         float3 xformOp:rotateXYZ = (0, 0, 0)
         float3 xformOp:scale = (1, 1, 1)
-        double3 xformOp:translate = (-2.611635884753067, -2.314750165208043, 9.221745402854253e-7)
+        double3 xformOp:translate = (-2.611635884753067, -2.1086272564876127, 9.221745402854253e-7)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:translate:pivot", "xformOp:rotateXYZ", "xformOp:scale", "!invert!xformOp:translate:pivot"]
 
         over "light"
@@ -528,6 +559,19 @@ def Xform "World"
                 }
             }
         }
+    }
+
+    def "barcode" (
+        prepend references = @./barcode/barcode.usda@
+        variants = {
+            string code = "P2-01"
+        }
+    )
+    {
+        float3 xformOp:rotateXYZ = (0, 0, 1.56)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (-2.7317, -2.42, 0.23601356360770823)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
     }
 
     def Xform "start_boxes"
@@ -948,7 +992,7 @@ def "Render" (
                 bool omni:rtx:scene:useViewLightingMode
                 rel orderedVars = </Render/Vars/LdrColor>
                 custom bool overrideClipRange = 0
-                uniform int2 resolution = (1280, 720)
+                uniform int2 resolution = (1733, 1018)
             }
 
             def RenderProduct "Replicator" (
@@ -980,6 +1024,21 @@ def "Render" (
                 custom bool overrideClipRange = 0
                 uniform int2 resolution = (640, 480)
             }
+
+            def RenderProduct "Replicator_02" (
+                prepend apiSchemas = ["OmniRtxSettingsCommonAdvancedAPI_1", "OmniRtxSettingsRtAdvancedAPI_1", "OmniRtxSettingsPtAdvancedAPI_1", "OmniRtxSettingsParticleFieldAPI_1", "OmniRtxPostColorGradingAPI_1", "OmniRtxPostChromaticAberrationAPI_1", "OmniRtxPostBloomPhysicalAPI_1", "OmniRtxPostMatteObjectAPI_1", "OmniRtxPostCompositingAPI_1", "OmniRtxPostDofAPI_1", "OmniRtxPostMotionBlurAPI_1", "OmniRtxPostTvNoiseAPI_1", "OmniRtxPostTonemapIrayReinhardAPI_1", "OmniRtxPostDebugSettingsAPI_1", "OmniRtxDebugSettingsAPI_1"]
+                hide_in_stage_window = true
+                no_delete = true
+            )
+            {
+                rel camera = </World/beebot/Geometry/base_footprint/base_link/arm_base_link/shoulder_link/upper_arm_link/forearm_link/wrist_link/gripper_link/gripper_cam_link/gripper_cam_color_optical_frame/gripper_cam_rgb>
+                bool omni:rtx:material:db:syncLoads = 1
+                bool omni:rtx:rt:ecoMode:enabled
+                bool omni:rtx:scene:hydra:materialSyncLoads = 1
+                rel orderedVars = </Render/Vars/LdrColor>
+                custom bool overrideClipRange = 0
+                uniform int2 resolution = (640, 480)
+            }
         }
     }
 
@@ -992,6 +1051,7 @@ def "Render" (
             </Render/OmniverseKit/HydraTextures/omni_kit_widget_viewport_ViewportTexture_0>,
             </Render/OmniverseKit/HydraTextures/Replicator>,
             </Render/OmniverseKit/HydraTextures/Replicator_01>,
+            </Render/OmniverseKit/HydraTextures/Replicator_02>,
         ]
     }
 
@@ -1036,10 +1096,10 @@ over "OmniverseKit_Persp" (
     float exposure:time = 0.02
     float focalLength = 18.147562
     float focusDistance = 400
-    custom uniform vector3d omni:kit:centerOfInterest = (0, 0, -1.9092802613012985)
-    float3 xformOp:rotateXYZ = (61.33937, -1.0098261e-12, 13.4704)
+    custom uniform vector3d omni:kit:centerOfInterest = (0, 0, -1.9638107071480169)
+    float3 xformOp:rotateXYZ = (8.174556, -9.915379e-13, 62.2778)
     float3 xformOp:scale = (1, 1, 1)
-    double3 xformOp:translate = (-0.3321603676609302, -3.8599483016406757, 0.9119804949270236)
+    double3 xformOp:translate = (-1.9267210734200264, -2.5065436836984656, 2.408491593424651)
     uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
 }
 

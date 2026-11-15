@@ -36,6 +36,9 @@ def launch_setup(context):
     arm['grasp_check'] = ParameterValue(LaunchConfiguration('grasp_check'), value_type=bool)
     arm['grasp_min_effort'] = ParameterValue(LaunchConfiguration('grasp_min_effort'), value_type=float)
     basket, stand = table('basket.yaml'), table('stand_table.yaml')
+    # 전류 없는 그리퍼(Isaac grasp_min_effort 0) — stand 쥠 판정도 위치·멈춤만으로 (skills.yaml stand_grip_current_a보다 뒤에 넘겨야 먹음)
+    if float(LaunchConfiguration('grasp_min_effort').perform(context)) == 0.0:
+        stand['stand_grip_current_a'] = 0.0
 
     def skill(cls, name, *extra):
         return ComposableNode(package='skills', plugin=f'skills::{cls}', name=name, parameters=[config, *extra])
@@ -46,7 +49,9 @@ def launch_setup(context):
             composable_node_descriptions=[
                 skill('PoseSkill', 'skill_pose', arm, basket),
                 skill('InspectSkill', 'skill_inspect', arm),
-                skill('PickSkill', 'skill_pick', arm, basket),  # basket: pose_carry_* (적재함 쪽에서 퍽으로 갈 때 경유)
+                # sag_fade: pick만 켬 (arm.yaml false를 덮음) — 끄면 닿는 구간 시작에서 처짐 적분이 한 번에 0 → j3 −33 mrad 툭 (11-14 실기 6/12회).
+                #   load는 끈 채로 (fade로 칸 위에 처진 채 도착 → 놓을 때 +x, arm.yaml 설명)
+                skill('PickSkill', 'skill_pick', arm, basket, {'sag_fade': True}),  # basket: pose_carry_* (적재함 쪽에서 퍽으로 갈 때 경유)
                 skill('PickFarSkill', 'skill_pick_far', arm, basket),  # 박스 먼 쪽 퍽 (pick이 pick_unreachable일 때) · basket: pick과 같음
                 skill('PlaceSkill', 'skill_place', arm, basket),  # basket: pose_carry_* (적재함 쪽에서 놓을 자리로 갈 때 경유)
                 skill('LoadSkill', 'skill_load', arm, basket),
