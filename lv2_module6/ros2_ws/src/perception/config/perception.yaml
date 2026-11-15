@@ -102,4 +102,6 @@ body_filter:
     input_topic: /pole_front_cam/depth/color/points
     output_topic: /pole_front_cam/depth/color/points_filtered   # Nav2 costmap·collision_monitor가 본다
     padding: 0.10            # [m] 충돌 상자를 이만큼 키워서 뺀다 — 0.03이면 기본 자세(팔 접힘)에서 손목·그리퍼 점 약 8%가 상자 밖에 남아 collision_monitor가 늘 정지시켰음(실기 2026-11-09: 0.06=14개 · 0.08/0.10/0.12=0개). 0.10 = 0.08에 여유 2cm. 더 키우면 그리퍼 앞 진짜 장애물까지 지워지니 0.12 넘기지 말 것
+    base_padding: 0.02       # [m] 차체 링크(base_links)만 — 0.10을 차체에도 붙이면 몸 둘레 앞 0.17·옆 0.25 m 점이 지워져 collision_monitor가 벽을 못 봄 (11-15)
+    base_links: [base_link, wheel_left_link, wheel_right_link, battery_link, pole_front_cam_link, pole_back_cam_link]   # 팔(arm_base_link~finger, gripper_cam)은 padding 0.10
     stride: 4                # RGBD 점구름 4점당 1점만 Nav2/collision_monitor에 전달 (성능)
