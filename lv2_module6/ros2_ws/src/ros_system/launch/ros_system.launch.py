@@ -209,6 +209,7 @@ def generate_launch_description():
         flag('use_nav2', 'true', '진짜 Nav2 서버 (planner · controller · behavior · bt_navigator) — 바퀴 명령 체인(velocity_smoother · collision_monitor)은 use_cmd_chain'),
         flag('nav2_composition', 'true', 'Nav2 서버·관리자를 한 프로세스(nav2_container, 컴포넌트)로 — 메모리 절약 · false면 서버마다 프로세스 (예전)'),
         flag('py_helpers_one_process', 'true', 'python 보조 노드(pole_depth_gate · nvblox_map · rewind)를 한 프로세스(py_helpers)로 — 메모리 절약 · false면 따로 (예전)'),
+        flag('cuvslam_impl', 'auto', 'cuvslam_slam 구현: cpp(src/cuvslam_slam.cpp · GPU 입력) · py(scripts/cuvslam_slam.py) · auto = C++판이 빌드돼 있으면 cpp (11-16)'),
         flag('cuvslam_frame_skip', '1', 'cuVSLAM N장에 1장만 추적 (1=전부 15 Hz · 2=7.5 Hz) — CPU 줄이기 현장 비교용 (11-15)'),
         flag('depth_gate_cpp', 'true', 'pole_depth_gate를 C++(perception depth_gate)로 — 파이썬판은 15 Hz depth를 매번 복사 (bag 재생 11-14: 파이썬 6 % → C++ 2 %) · false면 예전 파이썬(scan_cam_gate)'),
         flag('nav2_params_file', share('config', 'nav2_params.yaml'), 'Nav2 파라미터 파일'),
@@ -414,13 +415,24 @@ def slam_nodes():
     back = ["('", LaunchConfiguration('use_cameras'), "'.lower() == 'true' or '", LaunchConfiguration('pole_back_cam_external'),
             "'.lower() == 'true') and '", LaunchConfiguration('use_pole_back_cam'), "'.lower() == 'true'"]
 
+    # cuvslam_impl auto: C++판(cuvslam_slam_cpp)이 설치돼 있으면 그것 — cuVSLAM 헤더·라이브러리 없는 곳(도커·CI)은 빌드에서 빠짐
+    try:
+        from ament_index_python.packages import get_package_prefix
+        cpp_built = os.path.exists(os.path.join(get_package_prefix('ros_system'), 'lib', 'ros_system', 'cuvslam_slam_cpp'))
+    except Exception:  # noqa: BLE001
+        cpp_built = False
+    impl = LaunchConfiguration('cuvslam_impl')
+    cuvslam_exe = PythonExpression(["'cuvslam_slam_cpp' if ('", impl, "' == 'cpp' or ('", impl, "' == 'auto' and ",
+                                    str(cpp_built), ")) else 'cuvslam_slam'"])
+
     def camera_remaps(i, cam):
         return [(f'camera_{i}/depth/image', f'/{cam}/aligned_depth_to_color/image_nvblox'),
                 (f'camera_{i}/depth/camera_info', f'/{cam}/aligned_depth_to_color/camera_info'),
                 (f'camera_{i}/color/image', f'/{cam}/color/image_raw'),
                 (f'camera_{i}/color/camera_info', f'/{cam}/color/camera_info')]
     return [
-        Node(package='ros_system', executable='cuvslam_slam', name='cuvslam_slam', output='screen', condition=on,
+        # 노드 이름은 둘 다 cuvslam_slam (파라미터·진단·토픽 같음) — 실행 파일만 고름
+        Node(package='ros_system', executable=cuvslam_exe, name='cuvslam_slam', output='screen', condition=on,
              parameters=[{'publish_map_tf': True,
                           'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int)}]),
         # map→odom TF 이어 내기 (C++, 11-16) — cuvslam_slam이 낸 /cuvslam/map_to_odom을 30 Hz로 TF로 (파이썬이 멈춰도 안 끊김)

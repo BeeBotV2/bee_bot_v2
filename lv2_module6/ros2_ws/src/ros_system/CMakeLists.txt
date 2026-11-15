@@ -12,6 +12,36 @@ target_compile_features(map_tf_relay PUBLIC cxx_std_17)
 target_link_libraries(map_tf_relay PUBLIC rclcpp::rclcpp tf2_ros::tf2_ros ${geometry_msgs_TARGETS})
 install(TARGETS map_tf_relay DESTINATION lib/${PROJECT_NAME})
 
+# cuvslam_slam C++판 (src/cuvslam_slam.cpp, 11-16) — cuVSLAM C++ API(cuvslam2.h)를 바로 부름. 둘 다 있어야 빌드 (없으면 파이썬판만):
+#   헤더 = PyCuVSLAM 소스(v17.0.1, NVIDIA Community License라 저장소에 안 넣음) CUVSLAM_SRC_DIR/libs/cuvslam/cuvslam2.h
+#   라이브러리 = pip로 깐 cuvslam 패키지 안 libcuvslam.so (같은 소스로 빌드한 것 — documents/jetson-orin-nano/CUVSLAM.md)
+set(CUVSLAM_SRC_DIR "$ENV{HOME}/cuvslam/src" CACHE PATH "PyCuVSLAM 소스 (cuvslam2.h)")
+execute_process(COMMAND python3 -c "import cuvslam, os; print(os.path.dirname(cuvslam.__file__))"
+  OUTPUT_VARIABLE CUVSLAM_PY_DIR OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+find_path(CUVSLAM_INCLUDE_DIR cuvslam2.h PATHS "${CUVSLAM_SRC_DIR}/libs/cuvslam" NO_DEFAULT_PATH)
+find_library(CUVSLAM_LIB NAMES cuvslam PATHS "${CUVSLAM_PY_DIR}" NO_DEFAULT_PATH)
+find_package(CUDAToolkit QUIET)
+find_package(Eigen3 QUIET)
+if(CUVSLAM_INCLUDE_DIR AND CUVSLAM_LIB AND CUDAToolkit_FOUND AND Eigen3_FOUND)
+  find_package(message_filters REQUIRED)
+  find_package(sensor_msgs REQUIRED)
+  find_package(nav_msgs REQUIRED)
+  find_package(std_msgs REQUIRED)
+  find_package(visualization_msgs REQUIRED)
+  add_executable(cuvslam_slam_cpp src/cuvslam_slam.cpp)
+  target_compile_features(cuvslam_slam_cpp PRIVATE cxx_std_17)
+  target_include_directories(cuvslam_slam_cpp PRIVATE include "${CUVSLAM_INCLUDE_DIR}")
+  target_link_libraries(cuvslam_slam_cpp "${CUVSLAM_LIB}" CUDA::cudart Eigen3::Eigen rclcpp::rclcpp tf2_ros::tf2_ros
+    message_filters::message_filters ${geometry_msgs_TARGETS} ${sensor_msgs_TARGETS} ${nav_msgs_TARGETS} ${std_msgs_TARGETS}
+    ${visualization_msgs_TARGETS})
+  # libcuvslam.so가 pip 패키지 폴더에 있어 실행할 때 찾게 (설치 위치가 바뀌면 다시 빌드)
+  set_target_properties(cuvslam_slam_cpp PROPERTIES INSTALL_RPATH "${CUVSLAM_PY_DIR}" BUILD_RPATH "${CUVSLAM_PY_DIR}")
+  install(TARGETS cuvslam_slam_cpp DESTINATION lib/${PROJECT_NAME})
+  message(STATUS "cuvslam_slam_cpp: ${CUVSLAM_INCLUDE_DIR} · ${CUVSLAM_LIB}")
+else()
+  message(WARNING "cuvslam_slam_cpp 안 만듦 (cuvslam2.h · libcuvslam.so · CUDA · Eigen 중 없음) — launch cuvslam_impl:=py로")
+endif()
+
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME})
 # nvblox에 줄 depth에서 자기 몸(카메라 0.5 m 안)을 빼는 노드 (scripts/scan_cam_gate.py — 지금은 pole_front_cam만, gate_by_pose false)
@@ -41,6 +71,12 @@ install(DIRECTORY "${URDF_DIR}/" DESTINATION share/${PROJECT_NAME}/urdf PATTERN 
 
 # --- 테스트: colcon test --packages-select ros_system
 if(BUILD_TESTING)
+  # cuvslam_slam C++판 계산 (slam_math.hpp) — test_map_gate.py와 같은 시나리오 (cuVSLAM·GPU 없이)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(Eigen3 REQUIRED)
+  ament_add_gtest(test_slam_math test/test_slam_math.cpp TIMEOUT 60)
+  target_include_directories(test_slam_math PRIVATE include)
+  target_link_libraries(test_slam_math Eigen3::Eigen)
   # URDF: 모델 폴더마다 xacro로 펼쳐지고(mock 인자 포함) 링크·관절 트리가 올바른지
   foreach(X ${URDF_XACROS})
     get_filename_component(D "${X}" DIRECTORY)
