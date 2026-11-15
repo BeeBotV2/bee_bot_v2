@@ -60,7 +60,7 @@ TOPICS = ('^/(tf|tf_static|odom|odometry/filtered|cuvslam/odom|imu|cmd_vel|cmd_v
           'plan|unsmoothed_plan|transformed_global_plan|collision_monitor_state|collision_monitor/triggering_points|'
           'polygon_approach|polygon_slowdown|local_costmap/published_footprint|task/.*|skills/(pose|navigate|approach)/.*|'
           'navigate_to_pose/_action/.*|state/(emergency|operation_mode|collision)|rosout|joint_states|tracked_objects|'
-          'arena/correction)$')
+          'arena/correction|nvblox_node/static_occupancy_grid)$')  # 격자 = 벽 정합 재생용 (mission_manager arena_corr_wall_grid)
 TOPICS_FULL = TOPICS[:-2] + '|map|local_costmap/costmap|global_costmap/costmap)$'
 SIDES = {'west': (-1, 0, 0.0), 'east': (1, 0, math.pi), 'south': (0, -1, math.pi / 2), 'north': (0, 1, -math.pi / 2)}
 
