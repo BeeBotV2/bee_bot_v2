@@ -21,6 +21,10 @@ if(BUILD_TESTING)
   ament_add_test(test_launch GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     COMMAND ros2 launch "${CMAKE_CURRENT_SOURCE_DIR}/launch/bringup.launch.py" --show-args
     TIMEOUT 60)
+  # core_composition (11-16 메모리): 컨테이너로 묶어도 노드 이름·파라미터가 따로 띄울 때와 같은지
+  ament_add_test(test_core_composition GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/test/test_core_composition.py"
+    TIMEOUT 60)
 endif()
 
 ament_package()

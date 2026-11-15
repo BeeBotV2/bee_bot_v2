@@ -84,7 +84,7 @@ const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedOb
 
 class MissionManager : public rclcpp::Node {
 public:
-  MissionManager();
+  explicit MissionManager(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
   using Done = std::function<void(bool ok, const std::string & reason)>;
@@ -333,7 +333,7 @@ private:
   std::string run_dir_;
   perception::msg::TrackedObjectArray::ConstSharedPtr objects_;
 
-  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;  // shared_tf — 같은 프로세스 plan 노드와 같이 씀
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   rclcpp_action::Client<ExecutePlan>::SharedPtr execute_client_;
   rclcpp::Publisher<MissionState>::SharedPtr state_pub_;

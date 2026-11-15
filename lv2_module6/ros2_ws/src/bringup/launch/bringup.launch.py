@@ -4,6 +4,7 @@
   ros2 launch bringup bringup.launch.py use_ros_system:=false            # 📦 대신 faker 등 다른 입력 (faker.launch.py가 씀)
   ros2 launch bringup bringup.launch.py learning_enabled:=false           # 학습 노드 Δ=0 · 프리셋 A 고정 (비교 기준)
   ros2 launch bringup bringup.launch.py use_foxglove:=true                # Foxglove 브리지 켬 (기본 false · ws://<로봇>:8765)
+  ros2 launch bringup bringup.launch.py core_composition:=false           # 작은 C++ 노드를 예전처럼 노드마다 프로세스 (기본 true = 컨테이너 control_nodes · mission_nodes)
 지도 (실기·테스트베드 공통 — 지도 한 벌 = 폴더 하나 <map_dir>/<map_name>/ nvblox.nvblx · map.pgm · map.yaml):
   ros2 launch bringup bringup.launch.py map:=slam                 # 매핑: 새 폴더 <날짜_시각>/ (map_name:=으로 이름 지정, 있는 이름이면 거부)
   ros2 launch bringup bringup.launch.py map:=saved                # 위치추정: 가장 최근 폴더 (기본)
@@ -35,7 +36,7 @@ from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDesc
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.actions import LoadComposableNodes, Node
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -57,6 +58,41 @@ def hand_relative_exe():
 
 
 HAND_RELATIVE_PY_ARG = ('hand_relative_py', 'false', 'true면 hand_relative 예전 파이썬판 (scripts/hand_relative.py) · 기본 C++')
+
+
+# core_composition:=true(기본, 11-16 메모리) — 작은 C++ 노드를 컨테이너 둘에 (프로세스마다 DDS 참여자·스레드 ~15개·FastDDS SHM ~15 MB가 듦)
+#   control_nodes: arm_safety_monitor · manual_control · body_filter · signal_decoder (미션과 상관없이 늘 뜨는 것)
+#   mission_nodes: coordinator · mission_manager · grasp_scorer (use_mission) — plan 둘은 TF 리스너도 하나 (plan/shared_tf.hpp)
+#   노드 이름·파라미터·토픽은 따로 띄울 때와 같음. state_manager(재시작 담당 · Isaac node_params가 다시 띄움)·perception_node(무거움)는 따로
+#   /cmd/restart node <이름>은 컨테이너 안 노드는 안 됨 (all은 됨) — 그게 필요하면 core_composition:=false
+COMPONENTS = {'arm_safety_monitor': 'control::ArmSafetyMonitor', 'manual_control': 'control::ManualControl',
+              'body_filter': 'perception::BodyFilter', 'signal_decoder': 'perception::SignalDecoderNode',
+              'coordinator': 'plan::Coordinator', 'mission_manager': 'plan::MissionManager', 'grasp_scorer': 'ml::GraspScorer'}
+
+
+def component(package, executable, overrides=None, condition=None):
+    # node()와 같은 파라미터 · 같은 이름 (실행 파일 기본 노드 이름 = 실행 파일 이름)
+    config = PathJoinSubstitution([FindPackageShare(package), 'config', f'{package}.yaml'])
+    return ComposableNode(package=package, plugin=COMPONENTS[executable], name=executable,
+                          parameters=[config, overrides or {}], condition=condition)
+
+
+def when(*names, composed, extra=None):
+    """launch 인자 names가 모두 true · core_composition이 composed와 같을 때 (extra = PythonExpression 조각 하나 더)"""
+    parts = []
+    for n in names:
+        parts += ["'", LaunchConfiguration(n), "'.lower() == 'true' and "]
+    parts += ["'", LaunchConfiguration('core_composition'), "'.lower() " + ('==' if composed else '!=') + " 'true'"]
+    if extra:
+        parts += [' and ', *extra]
+    return IfCondition(PythonExpression(parts))
+
+
+def container(name, nodes, condition):
+    # _mt: 노드마다 기본 콜백 그룹(서로 막지 않음)이라 body_filter 점구름이 arm_safety_monitor 100 Hz를 늦추지 않음 · 스레드 3개면 충분
+    return ComposableNodeContainer(name=name, namespace='', package='rclcpp_components', executable='component_container_mt',
+                                   output='screen', parameters=[{'thread_num': 3}], condition=condition,
+                                   composable_node_descriptions=nodes)
 
 
 # ros_system에 그대로 넘기는 하드웨어·서버 인자 (기본값 = 실기). 테스트베드 faker가 대역에 맞게 덮어씀
@@ -268,6 +304,7 @@ def foxglove(context):
 
 def generate_launch_description():
     learning = {'enabled': LaunchConfiguration('learning_enabled')}
+    start_pose = {'start_pose_arena': ParameterValue(LaunchConfiguration('start_pose'), value_type=None)}
     return LaunchDescription([
         DeclareLaunchArgument('use_ros_system', default_value='true',
                               description='false면 ros_system(📦)을 띄우지 않음'),
@@ -284,6 +321,9 @@ def generate_launch_description():
                                 description=f'false면 {n}을 띄우지 않음 (faker가 그 대역 fake_{n}을 띄울 때)') for n in ML_NODES],
         DeclareLaunchArgument('learning_enabled', default_value='true',
                               description='false면 학습 노드가 Δ=0 · 기본 프리셋 (노드는 그대로 뜸)'),
+        DeclareLaunchArgument('core_composition', default_value='true',
+                              description='작은 C++ 노드를 컨테이너 둘(control_nodes · mission_nodes)에 — 메모리 절약 (11-16) · '
+                                          'false면 노드마다 프로세스 (예전, /cmd/restart node <이름>이 그 노드에 됨)'),
         DeclareLaunchArgument('operation', default_value='MANUAL',
                               description='초기 조작 모드: MANUAL(기본) | AUTO'),
         DeclareLaunchArgument('start_pose', default_value='',
@@ -338,7 +378,7 @@ def generate_launch_description():
             'cv_threads': ParameterValue(LaunchConfiguration('cv_threads'), value_type=int)},
             condition=IfCondition(LaunchConfiguration('use_perception'))),
         # coordinator: 계획 단계를 skill 노드에 맡기는 순서 담당 (적재함 장부 · 모드·비상정지 취소)
-        node('plan', 'coordinator', condition=IfCondition(LaunchConfiguration('use_mission'))),
+        node('plan', 'coordinator', condition=when('use_mission', composed=False)),
         # skill 노드 — 단계마다 액션 서버 /skills/<skill> (팔: arm_skills 컨테이너 · 주행: base_skills). 학습 정책은 skill마다 models/skills/<skill>/
         #   시작 자세(stow)는 skill_pose
         GroupAction([IncludeLaunchDescription(
@@ -346,20 +386,31 @@ def generate_launch_description():
             launch_arguments={'grasp_check': LaunchConfiguration('grasp_check')}.items())],
             condition=IfCondition(LaunchConfiguration('use_mission'))),
         # 주사위 미션 — /cmd/mission start로 시작 (abort로 멈춤). 출발 자세만 launch 인자로 덮어씀
-        node('plan', 'mission_manager', condition=IfCondition(PythonExpression(
-            ["'", LaunchConfiguration('use_mission'), "'.lower() == 'true' and '", LaunchConfiguration('use_mission_manager'),
-             "'.lower() == 'true' and '", LaunchConfiguration('start_pose'), "' == ''"]))),
-        node('plan', 'mission_manager', {'start_pose_arena': ParameterValue(LaunchConfiguration('start_pose'), value_type=None)},
-             condition=IfCondition(PythonExpression(
-                 ["'", LaunchConfiguration('use_mission'), "'.lower() == 'true' and '", LaunchConfiguration('use_mission_manager'),
-                  "'.lower() == 'true' and '", LaunchConfiguration('start_pose'), "' != ''"]))),
-        *[node('ml', n, learning, condition=IfCondition(PythonExpression(
-            ["'", LaunchConfiguration('use_mission'), "'.lower() == 'true' and '", LaunchConfiguration(f'use_{n}'), "'.lower() == 'true'"])))
-          for n in ML_NODES],
-        node('control', 'arm_safety_monitor'),
-        node('control', 'manual_control'),
-        node('perception', 'body_filter'),
-        node('perception', 'signal_decoder', condition=IfCondition(LaunchConfiguration('use_perception'))),
+        node('plan', 'mission_manager', condition=when('use_mission', 'use_mission_manager', composed=False,
+                                                       extra=["'", LaunchConfiguration('start_pose'), "' == ''"])),
+        node('plan', 'mission_manager', start_pose,
+             condition=when('use_mission', 'use_mission_manager', composed=False,
+                            extra=["'", LaunchConfiguration('start_pose'), "' != ''"])),
+        *[node('ml', n, learning, condition=when('use_mission', f'use_{n}', composed=False)) for n in ML_NODES],
+        node('control', 'arm_safety_monitor', condition=when(composed=False)),
+        node('control', 'manual_control', condition=when(composed=False)),
+        node('perception', 'body_filter', condition=when(composed=False)),
+        node('perception', 'signal_decoder', condition=when('use_perception', composed=False)),
+        # core_composition:=true — 위 노드를 컨테이너 둘에 (COMPONENTS 설명)
+        container('control_nodes', [
+            component('control', 'arm_safety_monitor'),
+            component('control', 'manual_control'),
+            component('perception', 'body_filter'),
+            component('perception', 'signal_decoder', condition=IfCondition(LaunchConfiguration('use_perception'))),
+        ], condition=when(composed=True)),
+        container('mission_nodes', [
+            component('plan', 'coordinator'),
+            component('plan', 'mission_manager', condition=when('use_mission_manager', composed=True,
+                                                                extra=["'", LaunchConfiguration('start_pose'), "' == ''"])),
+            component('plan', 'mission_manager', start_pose,
+                      condition=when('use_mission_manager', composed=True, extra=["'", LaunchConfiguration('start_pose'), "' != ''"])),
+            *[component('ml', n, learning, condition=IfCondition(LaunchConfiguration(f'use_{n}'))) for n in ML_NODES],
+        ], condition=when('use_mission', composed=True)),
         node('perception', hand_relative_exe(), condition=IfCondition(LaunchConfiguration('use_hand_relative'))),  # 손 카메라 상대값 → rl_arm_correction 정책 입력
         node('manager', 'state_manager', {'operation': LaunchConfiguration('operation'),
                                           'map_mode': LaunchConfiguration('map_mode'),

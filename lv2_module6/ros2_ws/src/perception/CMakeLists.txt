@@ -103,6 +103,13 @@ foreach(node body_filter signal_decoder static_esdf_slice depth_gate hand_relati
   target_link_libraries(${node} ${PROJECT_NAME}_nodes)
 endforeach()
 install(TARGETS body_filter signal_decoder static_esdf_slice depth_gate hand_relative DESTINATION lib/${PROJECT_NAME})
+# 컴포넌트 (11-16 메모리) — 같은 클래스를 컨테이너 한 프로세스에 올림 (bringup core_composition). 실행 파일은 그대로
+find_package(rclcpp_components REQUIRED)
+set_target_properties(${PROJECT_NAME}_nodes PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(${PROJECT_NAME}_components SHARED src/components.cpp)
+target_link_libraries(${PROJECT_NAME}_components ${PROJECT_NAME}_nodes rclcpp_components::component)
+rclcpp_components_register_nodes(${PROJECT_NAME}_components "perception::BodyFilter" "perception::SignalDecoderNode" "perception::DepthGate" "perception::StaticEsdfSlice")
+install(TARGETS ${PROJECT_NAME}_components LIBRARY DESTINATION lib)
 
 # YOLO 인지 노드 — C++판이 perception_node (bringup·launch가 이 이름으로 띄움, 11/11 젯슨 CPU 때문에 C++로)
 #   계산 함수 perception_core · YOLO 실행 yolo_onnx · 노드 perception_node (설명은 include/perception/<이름>.hpp)

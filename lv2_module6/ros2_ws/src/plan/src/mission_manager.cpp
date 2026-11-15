@@ -1,5 +1,6 @@
 // mission_manager 구현 — 노드 설명·입출력은 include/plan/mission_manager.hpp, main은 mission_manager_main.cpp
 #include "plan/mission_manager.hpp"
+#include "plan/shared_tf.hpp"
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 
@@ -89,8 +90,8 @@ const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedOb
   return best;
 }
 
-MissionManager::MissionManager()
-: rclcpp::Node("mission_manager") {
+MissionManager::MissionManager(const rclcpp::NodeOptions & options)
+: rclcpp::Node("mission_manager", options) {
   phase_beeps_ = declare_parameter<bool>("phase_beeps", true);
   const auto sp = declare_parameter<std::vector<double>>("start_pose_arena", {0.734, 0.950, M_PI});
   start_ = {sp.at(0), sp.at(1), sp.at(2)};
@@ -252,8 +253,7 @@ MissionManager::MissionManager()
   plan_seq_ = static_cast<uint32_t>(std::time(nullptr) % 1000) * 1000;
   if (log_dir_.rfind("~/", 0) == 0 && std::getenv("HOME")) log_dir_ = std::string(std::getenv("HOME")) + log_dir_.substr(1);
 
-  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
-  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+  std::tie(tf_buffer_, tf_listener_) = shared_tf(*this);  // 같은 프로세스 plan 노드와 TF 하나 (plan/shared_tf.hpp)
   const auto latched = rclcpp::QoS(1).reliable().transient_local();
   execute_client_ = rclcpp_action::create_client<ExecutePlan>(this, "/task/execute_plan");
   state_pub_ = create_publisher<MissionState>("/mission/state", latched);
