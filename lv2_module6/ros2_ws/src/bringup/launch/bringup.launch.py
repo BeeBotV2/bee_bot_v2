@@ -342,10 +342,10 @@ def generate_launch_description():
                               description='지도 폴더들이 있는 곳 — <map_dir>/<map_name>/nvblox.nvblx (비면 ~/.ros/beebot_maps)'),
         DeclareLaunchArgument('map_name', default_value='',
                               description='지도 폴더 이름 — slam: 비우면 날짜_시각으로 새로 · saved: 비우면 가장 최근'),
-        # 주행 중 인지 끄기 (11-15 기본 켬): /skills/navigate 중엔 YOLO·AprilTag·상자 depth를 navigation_infer_hz(0 = 끔)로,
-        #   Nav2 남은 거리가 navigation_full_near_m 안이면 평소대로 (도착 직전 상자 측정 — approach). body_filter·nvblox·cuVSLAM은 그대로
+        # C++ cuVSLAM CPU 여유를 주행 인지에 일부 재사용 (11-16): 이동 중 YOLO·AprilTag·상자 depth를 2 Hz로,
+        #   Nav2 남은 거리가 navigation_full_near_m 안이면 평소대로 (도착 직전 상자 측정 — approach). 저메모리 profile은 0 Hz를 별도 override
         DeclareLaunchArgument('navigation_throttle', default_value='true'),
-        DeclareLaunchArgument('navigation_infer_hz', default_value='0.0'),
+        DeclareLaunchArgument('navigation_infer_hz', default_value='2.0'),
         DeclareLaunchArgument('navigation_full_near_m', default_value='1.0'),
         DeclareLaunchArgument('cv_threads', default_value='2'),
         DeclareLaunchArgument('perception', default_value='auto',
