@@ -16,7 +16,7 @@ PLAN = Path(__file__).resolve().parents[2] / 'ros2_ws' / 'src' / 'plan' / 'confi
 P = yaml.safe_load(PLAN.read_text())['mission_manager']['ros__parameters']
 RES = 0.05
 R = 0.151 + 0.06      # [m] 못 가는 거리 (로봇 반폭 + 여유)
-PREF = 0.35           # [m] 벽에서 이 안은 비용을 더함 (통로·문 가운데로)
+PREF = 0.45           # [m] 벽에서 이 안은 비용을 더함 (통로·문 가운데로) — 11-16: 0.35면 벽 끝을 안쪽으로 끼고 돌다 collision_monitor 정지
 W = P['arena_walls']; SEG = [W[i:i + 4] for i in range(0, len(W), 4)]
 KO = P.get('keepout_zones', []); HALF = P['box_half']; TURN = P['nav_turn_m']; STAND = P['standoff']
 SB = [(P['start_boxes'][i], P['start_boxes'][i + 1]) for i in range(0, len(P['start_boxes']), 2)]
@@ -101,6 +101,27 @@ def simplify(p, tol):
     return simplify(p[:k + 1], tol)[:-1] + simplify(p[k:], tol) if dist[k] > tol else [p[0], p[-1]]
 
 
+def push_corners(c, r_search=0.15):
+    """꺾이는 점마다 둘레 r_search 안에서 벽까지 거리(D)가 가장 큰 칸으로 옮김 — 앞뒤 직선도 R 밖일 때만.
+    벽 끝을 왼쪽에 끼고 돌 때 몸 앞 왼쪽이 벽 끝 1~2 cm까지 붙어 정지했음 (시뮬 정지 71번이 로봇 기준 앞 0.12 · 왼쪽 0.08~0.16)"""
+    out = list(c)
+    k_r = int(round(r_search / RES))
+    def clear_line(a, b):
+        n = max(2, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (RES / 2)))
+        return all(D[cell((a[0] + (b[0] - a[0]) * t / n, a[1] + (b[1] - a[1]) * t / n))] > R for t in range(n + 1))
+    for i in range(1, len(out) - 1):
+        ci, cj = cell(out[i]); best = (D[ci, cj], out[i])
+        for di in range(-k_r, k_r + 1):
+            for dj in range(-k_r, k_r + 1):
+                ni, nj = ci + di, cj + dj
+                if not (0 <= ni < nx_ and 0 <= nj < ny_) or math.hypot(di, dj) > k_r: continue
+                q = (ni * RES, nj * RES)
+                if D[ni, nj] > best[0] + 0.01 and clear_line(out[i - 1], q) and clear_line(q, out[i + 1]):
+                    best = (D[ni, nj], q)
+        out[i] = best[1]
+    return out
+
+
 def moves(pts, yaw0, yaw1):
     out, head = [], yaw0
     def turn(a, b):
@@ -123,14 +144,14 @@ def main(out_dir):
     for k, ((na, a), (nb, b)) in enumerate(zip(stops, stops[1:]), 1):
         pts = astar(a, b)
         if pts is None: print(f'{k:2d} {na}_{nb}: 경로 없음'); continue
-        corners = simplify(pts, 0.05)
+        corners = push_corners(simplify(pts, 0.05))
         mv = moves(corners, a[2], b[2])
         stem = out_dir / f'auto_{k:02d}_{na}_{nb}'
         L = sum(v for t, v in mv if t == 'forward')
         Path(f'{stem}.motion.csv').write_text(f'# auto {na}_{nb} · plan.yaml 실측 벽 A* (R {R} · PREF {PREF}) · 직진 {L:.2f} m · turn = 도 (왼쪽 +) · forward = m\n'
                                              'action,value\n' + ''.join(f'{t},{v}\n' for t, v in mv))
-        Path(f'{stem}.txt').write_text(f'# auto {na}_{nb} · arena x y\n' + ''.join(f'{x:.3f} {y:.3f}\n' for x, y in pts))
-        dmin = min(float(D[cell(p)]) for p in pts[1:-1]) if len(pts) > 2 else 0
+        Path(f'{stem}.txt').write_text(f'# auto {na}_{nb} · arena x y (꺾이는 점)\n' + ''.join(f'{x:.3f} {y:.3f}\n' for x, y in corners))
+        dmin = min(float(D[cell(q)]) for q in corners[1:-1]) if len(corners) > 2 else 0
         print(f'{k:2d} {na}_{nb}: 직진 {L:.2f} m · 꺾임 {len(corners) - 2} · 벽까지 최소 {dmin:.2f} m · '
               + ' → '.join(f'{"직" if t == "forward" else "회"}{v:+g}' for t, v in mv))
 
