@@ -408,6 +408,23 @@ private:
     return legs;
   }
 
+  // 뒤로 unstick_m_ 빼고 then (이 seq에서 한 번만) — 못 하면 false
+  bool unstick(uint64_t seq, std::function<void()> then) {
+    if (unstick_m_ <= 0.0 || !backup_->action_server_is_ready()) return false;
+    unstuck_seq_ = seq;
+    RCLCPP_WARN(get_logger(), "걸림 — %.2f m 뒤로 뺀 뒤 같은 점으로 다시", unstick_m_);
+    BackUp::Goal b;
+    b.target.x = unstick_m_;
+    b.speed = 0.05f;
+    b.time_allowance.sec = 10;
+    rclcpp_action::Client<BackUp>::SendGoalOptions bo;
+    bo.result_callback = [this, seq, then](const rclcpp_action::ClientGoalHandle<BackUp>::WrappedResult &) {
+      if (seq == nav_seq_) then();
+    };
+    backup_->async_send_goal(b, bo);
+    return true;
+  }
+
   // 가르친 경로 → 경유점 (map). 로봇 자리 = 플래너 경로 첫 점. 없거나 안 맞으면 빈 목록
   std::vector<Pose> route_legs(const Pose & robot, const Pose & goal) {
     std::vector<Pose> legs;
@@ -470,6 +487,9 @@ private:
         ok = true;
       }
       if (ok && !last) { drive(legs, i + 1, flags, seq, done); return; }
+      // 진척 없음(벽 끝에 걸림) — 한 번만 뒤로 빼고 같은 점으로 다시 (11-16 시뮬 반복: 걸린 자리에서 다음 구간도 전부 실패)
+      if (!ok && why == "nav_no_progress" && unstuck_seq_ != seq && unstick(seq, [this, legs, i, flags, seq, done]() {
+            drive(legs, i, flags, seq, done); })) return;
       done(ok, ok ? "" : why);
     };
     if (stall_s_ > 0.0 || *look || near) {
@@ -513,18 +533,9 @@ private:
       *finished = true;
       const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED;
       // 출발 칸이 막힘(205 START_OCCUPIED) — 한 번만 뒤로 빼고 같은 점으로 다시
-      if (!ok && r.result && r.result->error_code == 205 && unstick_m_ > 0.0 && unstuck_seq_ != seq && backup_->action_server_is_ready()) {
-        unstuck_seq_ = seq;
-        RCLCPP_WARN(get_logger(), "출발 칸이 막힘 (205) — %.2f m 뒤로 뺀 뒤 다시", unstick_m_);
-        BackUp::Goal b;
-        b.target.x = unstick_m_;
-        b.speed = 0.05f;
-        b.time_allowance.sec = 10;
-        rclcpp_action::Client<BackUp>::SendGoalOptions bo;
-        bo.result_callback = [this, legs, i, flags, seq, done](const rclcpp_action::ClientGoalHandle<BackUp>::WrappedResult &) {
-          if (seq == nav_seq_) drive(legs, i, flags, seq, done);
-        };
-        backup_->async_send_goal(b, bo);
+      if (!ok && r.result && r.result->error_code == 205 && unstuck_seq_ != seq &&
+          unstick(seq, [this, legs, i, flags, seq, done]() { drive(legs, i, flags, seq, done); })) {
+        RCLCPP_WARN(get_logger(), "출발 칸이 막힘 (205) — 뒤로 뺀 뒤 다시");
         return;
       }
       finish(ok, ok ? "" : "nav_failed");
