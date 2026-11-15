@@ -215,6 +215,10 @@ class CuvslamSlam(Node):
         self.map_tf_tolerance = Duration(seconds=float(self.declare_parameter('map_tf_tolerance', 0.5).value))
         self.depth_scale = float(self.declare_parameter('depth_scale_factor', 1000.0).value)  # 16UC1 mm → m
         self.min_depth = float(self.declare_parameter('min_depth', 0.5).value)  # [m] 이 안 픽셀(자기 팔)은 추적에서 뺌
+        # N장에 한 장만 추적 (1 = 전부 · 2 = 15 → 7.5 Hz) — CPU 줄이기 시험용 (11-15). 빠른 제자리 회전(최대 1.8 rad/s)에서
+        #   추적을 잃는지 '잃음' 수로 확인한 뒤 기본값을 바꿀 것. 속도(EKF)·map→odom은 처리한 프레임 사이 간격으로 그대로 계산됨
+        self.frame_skip = max(1, int(self.declare_parameter('frame_skip', 1).value))
+        self.frame_n = 0
         self.near_raw = max(math.ceil(self.min_depth * self.depth_scale) - 1, 0)  # depth 원값 < min_depth·scale ⇔ ≤ 이 값 (정수)
         # EKF에 주는 속도 분산 — 실측으로 맞출 값 (σ 0.05 m/s · 0.05 rad/s에서 시작)
         self.lin_var = float(self.declare_parameter('linear_variance', 0.0025).value)
@@ -350,10 +354,13 @@ class CuvslamSlam(Node):
                 slam_cfg.enable_reading_internals = True  # get_slam_landmarks · get_pose_graph
         self.tracker = cuvslam.Tracker(cuvslam.Rig([cam]), odom_cfg, slam_cfg)
         self.get_logger().info(f'cuVSLAM {cuvslam.get_version()[0]} 시작 ({"단독 SLAM" if slam_cfg else "시각 오도메트리"}) · '
-                               f'{self.info.width}x{self.info.height} · 카메라 {frame}')
+                               f'{self.info.width}x{self.info.height} · 카메라 {frame}' + (f' · {self.frame_skip}장에 1장 추적' if self.frame_skip > 1 else ''))
 
     def on_rgbd(self, c, d):
         if self.info is None:
+            return
+        self.frame_n += 1
+        if self.frame_skip > 1 and self.frame_n % self.frame_skip:
             return
         if self.tracker is None:
             self.start(c.header.frame_id)
@@ -484,8 +491,8 @@ class CuvslamSlam(Node):
         ps.pose.orientation.z, ps.pose.orientation.w = math.sin(base[2] / 2), math.cos(base[2] / 2)
         self.path.header.stamp = stamp
         self.path.poses.append(ps)
-        del self.path.poses[:-3000]  # 최근 3000개(15Hz면 약 3분20초)만 — 계속 쌓이면 발행이 무거워짐
-        # 경로는 3Hz 정도로만 · 받는 쪽(RViz·bag)이 있을 때만 — 3000개 Path 변환이 한 번 26 ms (실기 Orin, CPU ~8%)
+        del self.path.poses[:-300]  # 최근 300개(15Hz면 약 20초)만 — 11-15: 3000개는 Path 변환이 한 번 26 ms(CPU ~8%)라 줄임 (보기용)
+        # 경로는 3Hz 정도로만 · 받는 쪽(RViz·Foxglove)이 있을 때만 — TUI·현장 녹화는 이 토픽을 안 받음 (map→odom은 /tf에 있음)
         if self.ok % 5 == 0 and self.path_pub.get_subscription_count() > 0:
             self.path_pub.publish(self.path)
 
