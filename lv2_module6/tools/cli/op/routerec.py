@@ -20,35 +20,49 @@ def to_arena(mx: float, my: float, start=START) -> tuple[float, float]:
     return start[0] + c * mx - s * my, start[1] + s * mx + c * my
 
 
-def record(node, tf_buf, name: str, start=START) -> int:
-    import rclpy
-    from rclpy.time import Time
-    ROUTES.mkdir(parents=True, exist_ok=True)
-    out = ROUTES / f'{name}.txt'
-    pts: list[tuple[float, float]] = []
-    print(f'경로 녹화: {name} — 수동으로 몰고, 목표 자리에서 멈춘 뒤 Enter (취소 Ctrl+C)')
-    while True:
-        rclpy.spin_once(node, timeout_sec=0.1)
-        try:
-            tr = tf_buf.lookup_transform('map', 'base_footprint', Time()).transform.translation
-            p = to_arena(tr.x, tr.y, start)
-            if not pts or math.hypot(p[0] - pts[-1][0], p[1] - pts[-1][1]) >= STEP_M:
-                pts.append(p)
-                print(f'\r  점 {len(pts)}개 · 지금 arena ({p[0]:.2f}, {p[1]:.2f})   ', end='', flush=True)
-        except Exception:
-            pass
-        if select.select([sys.stdin], [], [], 0)[0]:
-            sys.stdin.readline()
-            break
-    print()
-    if len(pts) < 2:
-        print('점이 2개 미만 — 저장 안 함 (map TF가 없나?)')
-        return 1
+def _save(out: Path, name: str, pts) -> None:
     length = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
     out.write_text(f'# {name} · {time.strftime("%Y-%m-%d %H:%M")} · {len(pts)}점 · {length:.2f} m · arena x y\n'
                    + ''.join(f'{x:.3f} {y:.3f}\n' for x, y in pts))
-    print(f'저장: {out} ({len(pts)}점 · {length:.2f} m) — 시작 ({pts[0][0]:.2f}, {pts[0][1]:.2f}) → 끝 ({pts[-1][0]:.2f}, {pts[-1][1]:.2f})')
-    return 0
+    print(f'\n저장: {out.name} ({len(pts)}점 · {length:.2f} m) — 시작 ({pts[0][0]:.2f}, {pts[0][1]:.2f}) → 끝 ({pts[-1][0]:.2f}, {pts[-1][1]:.2f})')
+
+
+def record(node, tf_buf, name: str, start=START) -> int:
+    """한 번에 쭉 몰면서 구간마다 Enter — <이름>_01.txt, _02.txt …로 나눠 저장 (끝 점 = 다음 구간 시작).
+    q + Enter = 지금 구간까지 저장하고 끝 · Ctrl+C = 지금 구간은 버리고 끝."""
+    import rclpy
+    from rclpy.time import Time
+    ROUTES.mkdir(parents=True, exist_ok=True)
+    seg, pts, saved = 1, [], 0
+    print(f'경로 녹화: {name} — 수동으로 몰다가 구간 끝(상자 앞)에서 멈추고 Enter = 그 구간 저장 · 이어서 다음 구간\n'
+          f'  q + Enter = 끝 · 저장 폴더 {ROUTES}')
+    try:
+        while True:
+            rclpy.spin_once(node, timeout_sec=0.1)
+            try:
+                tr = tf_buf.lookup_transform('map', 'base_footprint', Time()).transform.translation
+                p = to_arena(tr.x, tr.y, start)
+                if not pts or math.hypot(p[0] - pts[-1][0], p[1] - pts[-1][1]) >= STEP_M:
+                    pts.append(p)
+                    print(f'\r  구간 {seg} · 점 {len(pts)}개 · 지금 arena ({p[0]:.2f}, {p[1]:.2f})   ', end='', flush=True)
+            except Exception:
+                pass
+            if not select.select([sys.stdin], [], [], 0)[0]:
+                continue
+            quit_ = sys.stdin.readline().strip().lower() == 'q'
+            if len(pts) >= 2 and math.hypot(pts[-1][0] - pts[0][0], pts[-1][1] - pts[0][1]) >= 0.3:
+                _save(ROUTES / f'{name}_{seg:02d}.txt', f'{name} 구간 {seg}', pts)
+                saved += 1
+                seg += 1
+                pts = pts[-1:]   # 다음 구간은 이 자리에서 시작
+            elif not quit_:
+                print('\n  구간이 0.3 m보다 짧음 — 저장 안 함 (계속 몰기)')
+            if quit_:
+                break
+    except KeyboardInterrupt:
+        print('\n  Ctrl+C — 지금 구간은 버림')
+    print(f'끝 — 구간 {saved}개 저장')
+    return 0 if saved else 1
 
 
 if __name__ == '__main__':   # 자체 확인: 출발 자리(map 원점) = arena 출발 · map +x(로봇 앞) = arena −x

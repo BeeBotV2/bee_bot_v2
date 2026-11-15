@@ -484,7 +484,7 @@ ROS 층 선택 (모든 명령 앞에 붙임):
     bag.add_argument('--no-sys', action='store_true', help='start: 부하(sys.csv) 기록 끔')
 
     route = sub.add_parser('route', help='가르친 경로 녹화 — 수동으로 몰며 ~/.ros/routes/<이름>.txt (AUTO navigate가 경유점으로 씀)')
-    route.add_argument('name', help='경로 이름 (예: 01_start_S4) — 고르는 건 시작·끝 위치로 함, 이름은 표시용')
+    route.add_argument('name', help='경로 이름 (예: day1) — 한 번에 몰며 구간마다 Enter → <이름>_01.txt, _02.txt … (고르는 건 시작·끝 위치, 이름은 표시용)')
 
     drive = sub.add_parser('drive', help='바퀴 수동 주행 (MANUAL 모드)')
     drive.add_argument('direction', type=str.lower, choices=('forward', 'back', 'left', 'right', 'stop'))
