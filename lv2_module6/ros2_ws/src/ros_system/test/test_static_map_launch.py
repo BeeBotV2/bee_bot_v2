@@ -73,7 +73,7 @@ class StaticMapTests(unittest.TestCase):
                          {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'nvblox_map', 'pole_depth_gate', 'rewind'})
         self.assertEqual(set(self.active(self.context(use_slam='false', map_backend='static_2d'))), {'rewind'})
         # helpers_cpp:=false = 예전 파이썬 (py_helpers 한 프로세스, #214)
-        self.assertEqual(set(self.active(self.context(helpers_cpp='false'))), {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'py_helpers', 'pole_depth_gate'})
+        self.assertEqual(set(self.active(self.context(helpers_cpp='false'))), {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'py_helpers', 'pole_depth_gate'})
         self.assertEqual(set(self.active(self.context(helpers_cpp='false', depth_gate_cpp='false'))),
                          {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'py_helpers'})
         exe = lambda ctx, n: self.active(ctx)[n].node_executable.perform(ctx)  # noqa: E731 — PythonExpression (helper_exe)
