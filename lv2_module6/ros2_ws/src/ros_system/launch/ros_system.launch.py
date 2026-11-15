@@ -299,6 +299,7 @@ def nav2_nodes():
         ('nav2_collision_monitor', 'collision_monitor', 'nav2_collision_monitor::CollisionMonitor', [], [], 'use_cmd_chain'),  # 입출력 토픽은 yaml
     ]
     managers = [('lifecycle_manager_base', 'use_cmd_chain'), ('lifecycle_manager_navigation', 'use_nav2')]
+    standalone = 'controller_server'  # MPPI/RL controller composition crashed on Jetson
 
     def server(package, executable, name, remaps, extra, on):
         return Node(package=package, executable=executable, name=name, output='screen', condition=when(on, '!nav2_composition'),
@@ -309,7 +310,10 @@ def nav2_nodes():
             ComposableNode(package=package, plugin=plugin, name=name, parameters=params + extra, remappings=remaps)])
     lm = ('nav2_lifecycle_manager', 'lifecycle_manager', 'nav2_lifecycle_manager::LifecycleManager')
     return [
-        *[server(pkg, exe, exe, r, x, on) for pkg, exe, _, r, x, on in servers],
+        *[server(pkg, exe, exe, r, x, on) for pkg, exe, _, r, x, on in servers if exe != standalone],
+        *[Node(package=pkg, executable=exe, name=exe, output='screen', condition=when(on),
+               parameters=params + x, remappings=r, **QUICK_STOP)
+          for pkg, exe, _, r, x, on in servers if exe == standalone],
         # nav2_container_params:=true면 컨테이너 프로세스 전체에 --params-file — 서버가 안에서 만드는 자식 노드(local_costmap/local_costmap ·
         #   global_costmap/global_costmap)는 컴포넌트 파라미터(서버 이름 구역만)를 못 받아, false(기본)면 costmap이 Nav2 기본값으로 뜸
         #   (voxel_layer 대신 빈 obstacle_layer · rolling_window false · footprint [] — local costmap 안 보임). nav2_bringup은 true와 같음.
@@ -320,7 +324,7 @@ def nav2_nodes():
                                                        LaunchConfiguration('use_cmd_chain'), "'.lower() == 'true') and '",
                                                        LaunchConfiguration('nav2_container_params'), f"'.lower() {op} 'true'"])),
                parameters=p, **QUICK_STOP) for op, p in (('==', params), ('!=', []))],
-        *[component(pkg, plugin, exe, r, x, on) for pkg, exe, plugin, r, x, on in servers],
+        *[component(pkg, plugin, exe, r, x, on) for pkg, exe, plugin, r, x, on in servers if exe != standalone],
         TimerAction(period=LIFECYCLE_DELAY_S, actions=[
             *[server(lm[0], lm[1], name, [], [], on) for name, on in managers],
             *[component(lm[0], lm[2], name, [], [], on) for name, on in managers],
