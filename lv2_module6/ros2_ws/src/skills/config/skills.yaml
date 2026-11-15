@@ -25,6 +25,7 @@ skill_navigate:
             3.229, 4.621, 1.0, 0.0, 0.350, 0.30, 0.30,
             1.090, 3.182, 1.0, 0.0, 0.320, 0.30, 0.30]
     start_pose_arena: [0.734, 0.950, 3.14159]   # plan.yaml과 같게 — 문(arena)을 map으로 옮길 때
+    door_use_correction: false   # 문에 /arena/correction을 얹을지 — costmap 벽(/arena/walls)과 같은 기준이 되게 끔 (보정은 로봇 위치로 들어감)
     door_goal_skip_m: 0.30   # [m] 목표가 나가기 점 + 이만큼 안이면 나가기 점을 뺌 (문 바로 너머 상자 앞 자리)
 skill_approach:
   ros__parameters:

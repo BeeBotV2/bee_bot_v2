@@ -38,6 +38,20 @@ g.reset()                                                     # /initialpose 뒤
 g.update((0.0, 0.0, 0.0), 121.0)
 assert not g.update((1.0, 0.0, 0.0), 121.1)[1] and g.locked
 
+# 도면 보정 → 로봇 위치 (11-15): 조각 c를 받으면 모든 map 자세가 c⁻¹만큼 옮겨짐 → compose(c, 도면)에 보이던 물체가 도면 자리로
+ns2 = {'math': math}
+exec(SRC[SRC.index('def compose('):SRC.index('def body_twist(')], ns2)  # noqa: S102
+exec(SRC[SRC.index('def apply_map_correction('):SRC.index('class MapGate')], ns2)  # noqa: S102
+cmp, inv, amc = ns2['compose'], ns2['inverse'], ns2['apply_map_correction']
+off0, raw, c = (0.3, -0.2, 0.4), (2.0, 1.0, -0.5), (0.05, -0.03, math.radians(1.0))
+base0 = cmp(off0, raw)
+base1 = cmp(amc(off0, c), raw)
+want = cmp(inv(c), base0)
+assert all(abs(a - b) < 1e-9 for a, b in zip(base1, want)), (base1, want)
+obj_nominal = (1.5, 2.5, 0.0)
+seen_before = cmp(c, obj_nominal)                              # 지금 map에서 물체가 보이는 자리
+seen_after = cmp(inv(c), seen_before)                          # 같은 물체가 새 map에서 보이는 자리 = 도면 자리
+assert all(abs(a - b) < 1e-9 for a, b in zip(seen_after[:2], obj_nominal[:2]))
 
 # 11-15 실기: odom 원점에서 4.7 m · EKF와 cuVSLAM yaw가 몇 도 다름 → 로봇 자리에서 도는 보정인데 map→odom 이동은 크게 보임
 c5 = math.radians(5.0)
