@@ -479,7 +479,7 @@ global_costmap:
       #   직사각형+padding이면 inscribed 0.129라 벽 0.13 m까지 경로를 냄 → 문틈 모서리를 자르고 RL이 따라가 막힘. 옆 반폭 0.151 + 5 cm
       robot_radius: 0.20   # 11-15: 0.22 → 0.20 — 문틈 빈 공간 0.57 m에서 카메라 벽이 위치 오차만큼 겹쳐도 8.5 cm까지 안 막힘 (0.22면 7 cm)
       resolution: 0.05
-      track_unknown_space: true
+      track_unknown_space: false   # 11-15: /arena/walls는 벽·상자 말고 −1(모름) — 빈칸으로 읽어야 플래너가 벽 옆 팽창을 빈 곳보다 싸게 보지 않음
       always_send_full_costmap: true
       # 전역 계획: 정적 벽 + 카메라에 보인 장애물(상자 — map.pgm에는 벽만 있음) + 팽창.
       # (11-13 obstacle_layer 추가: 없으면 Smac이 상자를 통과하는 경로를 내고 MPPI가 상자 앞에서 멈춤.
@@ -491,6 +491,10 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+        # 11-15: /map(nvblox 실시간 + 벽 겹침) 대신 /arena/walls(mission_manager — plan.yaml 실측 벽 한 칸 + 시작·장소 상자, 경기장 보정 반영).
+        #   /map은 카메라 depth를 계속 쌓아 문틀이 두껍고 어긋남 (실기 bag: 왼쪽 문 빈 공간 0.57 → 0.45 m, 아래 벽 끝 2.86 → 3.05)
+        #   → robot_radius 0.20으로 문이 막혀 출발 칸 막힘(206)·7 m 우회. mission_manager가 안 뜨면(use_mission:=false) 전역 지도가 없음
+        map_topic: /arena/walls
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
