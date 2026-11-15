@@ -27,7 +27,7 @@
 //              → 12개 한 번에 할당 (mission_solver allocate)
 //     → BUILD 퍽마다: 장소 앞 → 장소 태그로 칸 위치 보정 → [적재함 칸에서 꺼냄 | 못 실은 퍽은 시작 박스에서 직접 집어 옴]
 //              (적재함이면 unload <칸>) → place 칸 "x,y,z" → 내려다보고 10 mm 밖·쓰러짐이면 다시 집어 놓기
-//     → VERIFY 장소마다 새로 본 퍽만으로 칸별 판정 + 12개 중복·누락 → RETURN 출발 구역 가운데 → 외곽이 구역 안인지
+//     → VERIFY 장소마다 새로 본 퍽만으로 칸별 판정 (verify_in_place: 장소의 마지막 퍽을 놓은 그 자리에서 · 못 한 장소만 다시 감) + 12개 중복·누락 → RETURN 출발 구역 가운데 → 외곽이 구역 안인지
 //              확인·보정 → home_hold_s 정지 → DONE
 //   실패: skill마다 retries번 다시 · 그래도 안 되면 그 퍽·장소만 실패로 results에 남기고 다음으로 (복귀까지).
 //     관측(신호·바코드) 오류와 복귀 이동 실패만 ERROR로 멈추고 coordinator 정지
@@ -116,7 +116,8 @@ private:
   void build(size_t i);
   void bring(size_t i);                          // 그 퍽을 장소 앞에서 손에 쥘 때까지 (적재함 · 시작 박스)
   void place_check(size_t i, int tries);         // 놓기 → 내려다보고 확인 → 벗어났으면 다시
-  void verify(size_t k);   // k = 재확인 순서 (build_location_order 거꾸로)
+  void verify(size_t k);   // k = 재확인 순서 (build_location_order 거꾸로) — 그 자리에서 이미 한 장소는 건너뜀
+  void verify_at(size_t li, std::function<void()> then);  // 지금 선 자리에서 장소 li 재검증 (가서 서는 건 부르는 쪽)
   void go_home(bool corrected = false);
 
   // 장소 상자로 장소 li 칸 보정 — 지금 /tracked_objects에 그 태그의 location_box가 있으면 corr_[li]를 갱신
@@ -292,6 +293,9 @@ private:
   void update_corr(const perception::msg::TrackedObjectArray & m);
   std::vector<std::string> results_;
   std::string build_json_, verify_json_;
+  bool verify_in_place_ = true;   // 장소의 마지막 퍽을 놓은 그 자리에서 바로 재검증 (11-15) · false = 다 놓은 뒤 L3·L2·L1 다시 감
+  std::set<size_t> verified_;     // 이번 회차에 재검증한 장소
+  int last_place_loc_ = -1;       // 마지막으로 놓기를 시작한 장소 (= 로봇이 그 앞에 섬)
   std::vector<std::vector<int>> seen_tags_;      // 재검증 — 장소마다 본 tag (12개 중복·누락)
   // planner: rule (jobs_ 순서대로) | plan_next (학습된 플래너가 다음 퍽·복귀 시점을 고름 — 퍽 하나 처리는 bring 그대로)
   std::string planner_;
