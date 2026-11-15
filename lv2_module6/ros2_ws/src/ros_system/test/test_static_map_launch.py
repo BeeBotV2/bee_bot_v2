@@ -49,7 +49,7 @@ class StaticMapTests(unittest.TestCase):
 
     def test_static_keeps_localization_removes_reconstruction(self):
         ctx = self.context(map_backend='static_2d', static_map_yaml=str(self.map))
-        self.assertEqual(set(self.active(ctx)), {'cuvslam_slam', 'map_tf_relay', 'map_server', 'lifecycle_manager_map', 'rewind', 'static_esdf_slice'})
+        self.assertEqual(set(self.active(ctx)), {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'map_server', 'lifecycle_manager_map', 'rewind', 'static_esdf_slice'})
         with patch.object(self.mod.importlib.util, 'find_spec', return_value=object()), patch.object(self.mod, 'get_package_share_directory', return_value='/installed') as pkg:
             for action in self.mod.check_slam(ctx):
                 action.execute(ctx)
@@ -65,12 +65,12 @@ class StaticMapTests(unittest.TestCase):
 
     def test_original_backend_and_no_map(self):
         # nvblox 기본 — nvblox_map · rewind는 C++ cpp_helpers 한 프로세스 (11-16) · pole_depth_gate는 C++(perception depth_gate) 따로
-        self.assertEqual(set(self.active(self.context())), {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'cpp_helpers', 'pole_depth_gate'})
+        self.assertEqual(set(self.active(self.context())), {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'cpp_helpers', 'pole_depth_gate'})
         # 파이썬 depth gate는 cpp_helpers에 못 넣어 따로
         self.assertEqual(set(self.active(self.context(depth_gate_cpp='false'))),
-                         {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'cpp_helpers', 'pole_depth_gate'})
+                         {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'cpp_helpers', 'pole_depth_gate'})
         self.assertEqual(set(self.active(self.context(py_helpers_one_process='false'))),
-                         {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'nvblox_map', 'pole_depth_gate', 'rewind'})
+                         {'cuvslam_slam', 'map_tf_relay', 'grid_obstacle_cloud', 'nvblox_node', 'nvblox_map', 'pole_depth_gate', 'rewind'})
         self.assertEqual(set(self.active(self.context(use_slam='false', map_backend='static_2d'))), {'rewind'})
         # helpers_cpp:=false = 예전 파이썬 (py_helpers 한 프로세스, #214)
         self.assertEqual(set(self.active(self.context(helpers_cpp='false'))), {'cuvslam_slam', 'map_tf_relay', 'nvblox_node', 'py_helpers', 'pole_depth_gate'})

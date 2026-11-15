@@ -313,6 +313,9 @@ private:
   bool verify_in_place_ = true;   // 장소의 마지막 퍽을 놓은 그 자리에서 바로 재검증 (11-15) · false = 다 놓은 뒤 L3·L2·L1 다시 감
   std::set<size_t> verified_;     // 이번 회차에 재검증한 장소
   int last_place_loc_ = -1;       // 마지막으로 놓기를 시작한 장소 (= 로봇이 그 앞에 섬)
+  std::string stop_;              // 로봇이 지금 선 곳 (start · S1~S6 · L1~L3, 모르면 '') — navigate에 'leg:<여기>_<갈 곳>'을 붙임 (움직임 정답표, 11-15)
+  std::string box_label(const Box & box) const;  // 시작 박스 → S<n> · 장소 → L<n> · 아니면 ''
+  std::string leg_to(const std::string & to) const { return stop_.empty() || to.empty() ? "" : " leg:" + stop_ + "_" + to; }
   std::vector<std::vector<int>> seen_tags_;      // 재검증 — 장소마다 본 tag (12개 중복·누락)
   // planner: rule (jobs_ 순서대로) | plan_next (학습된 플래너가 다음 퍽·복귀 시점을 고름 — 퍽 하나 처리는 bring 그대로)
   std::string planner_;
@@ -340,6 +343,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Int32MultiArray>::SharedPtr beep_pub_;
   rclcpp::TimerBase::SharedPtr beep_timer_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markers_pub_;
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr walls_only_pub_;  // /arena/walls_only — 벽만 (상자·금지 구역 없음) → collision_monitor 옆·뒤 입력
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr walls_pub_;  // /arena/walls (map, latched) → nvblox_map이 /map에 겹침
   void publish_walls();
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_, barcode_sub_;
