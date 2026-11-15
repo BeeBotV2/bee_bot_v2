@@ -31,8 +31,6 @@
 #include "perception/msg/tracked_object_array.hpp"
 #include "skills/arm_io.hpp"
 #include "skills/skill_node.hpp"
-#include "tf2_ros/buffer.h"
-#include "tf2_ros/transform_listener.h"
 
 namespace skills {
 
@@ -80,8 +78,6 @@ public:
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m) { odom_ = m; });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("/imu", rclcpp::SensorDataQoS().keep_last(1),
       [this](sensor_msgs::msg::Imu::ConstSharedPtr m) { imu_ = m; });
-    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
-    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     objects_sub_ = create_subscription<perception::msg::TrackedObjectArray>("/tracked_objects", rclcpp::QoS(5).reliable(),
       [this](perception::msg::TrackedObjectArray::ConstSharedPtr m) { on_objects(*m); });
     serve("approach", [this](const SkillGoal & g, Done done) { start(g, done); });
@@ -290,10 +286,10 @@ private:
     if (frame_ == "map") return true;
     geometry_msgs::msg::Transform t;
     try {
-      t = tf_buffer_->lookupTransform(frame_, "map", stamp.nanoseconds() ? tf2_ros::fromRclcpp(stamp) : tf2::TimePointZero).transform;
+      t = arm_.tf().lookupTransform(frame_, "map", stamp.nanoseconds() ? tf2_ros::fromRclcpp(stamp) : tf2::TimePointZero).transform;
     } catch (const std::exception &) {
       try {
-        t = tf_buffer_->lookupTransform(frame_, "map", tf2::TimePointZero).transform;
+        t = arm_.tf().lookupTransform(frame_, "map", tf2::TimePointZero).transform;
       } catch (const std::exception &) {
         return false;
       }
@@ -308,7 +304,7 @@ private:
 
   bool robot_pose(double & x, double & y, double & yaw) const {
     try {
-      const auto t = tf_buffer_->lookupTransform(frame_, "base_footprint", tf2::TimePointZero).transform;
+      const auto t = arm_.tf().lookupTransform(frame_, "base_footprint", tf2::TimePointZero).transform;
       x = t.translation.x;
       y = t.translation.y;
       yaw = yaw_of(t.rotation);
@@ -497,8 +493,6 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   nav_msgs::msg::Odometry::ConstSharedPtr odom_;
   sensor_msgs::msg::Imu::ConstSharedPtr imu_;
-  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
-  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 };
 
 }  // namespace skills
