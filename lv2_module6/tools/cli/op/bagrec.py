@@ -23,7 +23,7 @@ MAX_S = float(os.environ.get('BEE_BAG_MAX_S', '1800'))
 STOP_WAITS = ((signal.SIGINT, 10.0), (signal.SIGTERM, 5.0))   # stop(): 이 신호를 보내고 이만큼 기다림 → 그래도 살아 있으면 SIGKILL
 
 # 진단 프리셋 — 명령 체인 · odom · TF · 지도 · 상태 (영상·점구름 원본은 뺌, bee_diag/rec_diag.sh 와 같은 목록)
-DIAG_REGEX = ('^/(tf|tf_static|joint_states|imu|odom|odometry/filtered|cuvslam/odom|cuvslam/path|cmd_vel.*|cmd/.*|state/.*|'
+DIAG_REGEX = ('^/(tf|tf_static|joint_states|imu|odom|odometry/filtered|cuvslam/odom|cmd_vel.*|cmd/.*|state/.*|'
               'collision_monitor_state|polygon_.*|diagnostics_agg|rosout|plan|local_plan|map|tracked_objects|'
               'global_costmap/costmap|local_costmap/costmap)$')
 
