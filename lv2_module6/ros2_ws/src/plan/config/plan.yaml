@@ -87,7 +87,7 @@ mission_manager:             # 주사위 기억 미션 (documents/mission/README
     #   도면 상자와 짝지어 arena → map 변환에 (dx, dy, dθ)를 더함. 다가설 자리·장소·복귀·/arena/walls 전부 (회차 시작마다 0부터)
     #   기록: 로그 "도면 보정 dx … (근거 n개)" · <회차>/arena_correction.jsonl · /arena/correction (latched JSON)
     #   영상 끝에 잘린 상자(cut)와 같은 관측의 재발행(last_seen 그대로)은 안 셈
-    arena_correction: false        # 11-15 사용자: 상자 보정 끔 — 벽 정합(arena_corr_wall_fit)만
+    arena_correction: true         # 상자 인지·marks 수집 활성. arena_corr_boxes=false라 box-fit은 끔
     arena_corr_idle: true          # 미션이 없을 때도 보정해 /arena/correction으로 냄 (approach_loop.py --real이 그 값으로 목표를 잡음) — 미션 시작하면 0부터
     arena_corr_gate: 0.6           # [m] 인지 상자가 (지금 보정한) 도면 상자에서 이 안이고 다른 상자는 그보다 0.25 m 넘게 멀 때만 짝
     arena_corr_range: 2.5          # [m] 로봇에서 이보다 먼 상자는 안 씀 (depth 오차)
@@ -103,7 +103,7 @@ mission_manager:             # 주사위 기억 미션 (documents/mission/README
     #   벽 전부가 근거라 상자 인지 없이 회전까지. 맞으면 보정(dx, dy, dθ)은 벽으로, 상자 인지는 상자마다 위치(marks)만 — 상자 둘로 맞춘
     #   회전은 10°씩 틀림 (11-15 bag approach_1115_094224 재생). 안 맞으면(벽이 한 방향만 · 칸 부족) 예전처럼 상자로
     #   상자(7 cm)는 격자에 없음 (esdf_slice_min_height 0.08) — 벽만
-    arena_corr_wall_fit: false     # 11-15 사용자: 끔 (시뮬: 정합이 ±15 cm씩 튐 — 상자 보정 arena_correction도 끔 → 보정 없음)
+    arena_corr_wall_fit: true      # 기본 벽 정합 활성 — src/n/RMS 기록 및 목표 좌표에 사용. map→odom 이동은 아래 스위치가 별도 제어
     arena_corr_boxes: false        # 상자 인지로 보정 안 함 (벽 정합만 · 안 맞으면 보정 없음) — 상자마다 인지 위치(marks)는 계속 /arena/correction에
     arena_corr_wall_gate: 0.3      # [m] 도면 벽에서 이 안의 칸만 (그 밖 = 상자·사람·도면에 없는 것)
     arena_corr_wall_min_cells: 60  # 맞은 칸(벽 겉면 — 빈 칸과 맞닿은 점유 칸)이 이보다 적으면 안 씀 (5 cm 칸 → 벽 3 m)
@@ -118,8 +118,8 @@ mission_manager:             # 주사위 기억 미션 (documents/mission/README
     #   11-15 밤 끔: 시뮬에서 정지한 로봇 위치가 2분 동안 60번 5 cm씩 밀려 7 m까지 흘러감 — '남은 보정'이 0으로 안 줄고(+0.07~0.12 m)
     #   같은 방향으로 계속 (위치를 옮기면 nvblox 지도도 따라 옮겨져 벽 정합이 같은 차이를 다시 봄 · 시뮬 벽은 plan 벽과 ≤11 cm 다름).
     #   실기 녹화 중 map 1~4 m 튐(day1_03~06)도 같은 원인으로 보임. 고치기 전까지 false
-    #   11-16: 넘긴 몫(loc_sent_)을 벽 정합 차이에서 빼 같은 차이를 다시 넘기지 않게 고쳤지만 사용자 요청으로 계속 끔
-    arena_corr_to_localization: false   # 11-15 끔 (시뮬: 벽 정합이 ±15 cm씩 튀어 위치가 30 cm 틀어짐 — 정합 품질 손볼 때까지 기록만)
+    #   11-16: 넘긴 몫(loc_sent_)을 벽 정합 차이에서 빼 같은 차이를 다시 넘기지 않게 고침
+    arena_corr_to_localization: false   # 단계 1: wall-fit 결과를 정답 위치와 비교할 동안 map→odom은 이동시키지 않음
     arena_corr_loc_min_n: 3          # 상자 근거 이만큼(또는 벽 정합)일 때만 — 상자 1~2개로는 안 옮김
     arena_corr_loc_step_m: 0.05      # [m] 한 번에 넘기는 조각 (MapGate 잠금 0.30 m보다 훨씬 작게)
     arena_corr_loc_step_rad: 0.0175  # [rad] (1°)
