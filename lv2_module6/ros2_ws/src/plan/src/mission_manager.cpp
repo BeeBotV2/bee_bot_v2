@@ -347,6 +347,7 @@ void MissionManager::on_command(const std::string & cmd) {
   verify_json_.clear();
   verified_.clear();
   last_place_loc_ = -1;
+  stop_ = "start";  // 미션은 출발 자리에서 시작 (운영 규칙)
   seen_tags_.clear();
   lying_.clear();
   corr_.assign(locations_.size(), {0.0, 0.0});
@@ -446,6 +447,7 @@ void MissionManager::go_observe() {
     return;
   }
   const auto p = to_map(barcode_pose_.x, barcode_pose_.y, barcode_pose_.yaw);
+  stop_.clear();  // 관측 자리로 옮김 — 출발 자리 표(start_*)는 안 맞음
   run({SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", p.x, p.y, p.yaw))},
     [this](bool ok, const std::string & why) { finish(ok, "observe_nav_failed:" + why); });
 }
@@ -1088,7 +1090,7 @@ void MissionManager::go_home(bool corrected) {
   // 처음엔 Nav2로 · 보정은 approach로 (구역 가운데로 저속 직선 — Nav2 허용 오차 0.10보다 정확). 보정은 park_home 정책
   //   (skill_approach — 시뮬 drive_env park: 5 cm · 10° 안에 3 s 정지, 81.1 → 96.5 %)
   run({stow(), SubGoal().set__skill(corrected ? "approach" : "navigate").set__target(fmt("%.4f,%.4f,%.4f", p.x, p.y, p.yaw))
-                 .set__relation(corrected ? "park_home" : "")},
+                 .set__relation(corrected ? "park_home" : leg_to("start"))},  // " leg:L3_start" — 앞 공백은 skill이 무시
     [this, corrected](bool ok, const std::string & why) {
       if (!ok && !corrected) { finish(false, "return_nav:" + why); return; }
       Pose2 r;
@@ -1286,6 +1288,14 @@ void MissionManager::run_retry(std::vector<SubGoal> goals, Done done, int tries)
   });
 }
 
+std::string MissionManager::box_label(const Box & box) const {
+  for (size_t i = 0; i < start_boxes_.size(); ++i)
+    if (std::abs(start_boxes_[i].x - box.x) < 1e-6 && std::abs(start_boxes_[i].y - box.y) < 1e-6) return "S" + str(static_cast<int>(i) + 1);
+  for (size_t i = 0; i < loc_boxes_.size(); ++i)
+    if (std::abs(loc_boxes_[i].x - box.x) < 1e-6 && std::abs(loc_boxes_[i].y - box.y) < 1e-6) return "L" + str(static_cast<int>(i) + 1);
+  return "";
+}
+
 void MissionManager::go_near(const Box & box, double px, double py, Done done, size_t k, std::vector<Pose2> poses) {
   if (k == 0 && poses.empty() && !back_.empty()) {  // 지금 박스에 붙어 있으면 먼저 standoff까지 똑바로 물러남 (Nav2는 원 0.18이라 붙은 자리에선 출발 못 함)
     const std::string back = back_;  // 후진 거리 [m] — approach exit (odom 기준 똑바로, 11-13: 예전엔 map 자리로 가서 map이 밀리면 비틀림)
@@ -1356,11 +1366,13 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
                       - box.half - approach_gap_;
   const auto f = to_map(poses[k].x + push * std::cos(poses[k].yaw), poses[k].y + push * std::sin(poses[k].yaw), poses[k].yaw);
   // navigate "look"(도착 전 팔 올리기)은 안 씀 (11-13 headless: 팔이 pole_front_cam을 가려 보던 상자를 잃고, 0.25 m에선 gripper_cam에 잘려 보임)
-  run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near"),
+  const std::string to = box_label(box);
+  run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near" + leg_to(to)),
        // 상자 도킹: 도면 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12)
        SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", f.x, f.y, f.yaw) + fmt(",%.4f,%.4f", approach_gap_, box.half))
          .set__relation("dock_box")},
-    [this, box, px, py, done, k, poses, push, n](bool ok, const std::string & why) {
+    [this, box, px, py, done, k, poses, push, n, to](bool ok, const std::string & why) {
+      stop_ = ok ? to : "";  // 붙었으면 그 상자 앞 (exit으로 같은 자리로 물러난 뒤 다음 구간 표가 시작) · 실패면 모름
       // 붙은 뒤 exit은 Nav2 목표 자리(n)까지 물러남 — approach 시작 자리(@d)는 돌 공간이 없을 수 있음
       if (ok) { back_ = fmt("%.3f", std::hypot(box.x - n.x, box.y - n.y) - box.half - approach_gap_); done(true, ""); return; }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());

@@ -3,7 +3,9 @@
 //   navigate가 경유점으로 씀. 플래너가 costmap 값에 따라 벽에 붙거나 대각선으로 질러 멈추던 것 대신 사람이 고른 길로.
 //   경로 파일 = 한 줄에 "x y" (arena, m) · '#' 줄은 설명. 시작·끝이 로봇·목표 근처인 경로를 고름 (거꾸로도 — 복귀)
 //   쓰는 쪽: 꺾이는 점만 남김(Douglas-Peucker) → 점마다 다음 점을 보는 방향으로 NavigateToPose (문 경유점과 같은 방식)
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -81,6 +83,62 @@ inline std::vector<Pt> pick_route(const std::vector<std::vector<Pt>> & routes, P
   for (size_t i = 1; i < s.size(); ++i)  // 첫 점 = 로봇 자리라 뺌
     if (dist(s[i], g) > goal_m && dist(s[i], r) > 0.15) legs.push_back(s[i]);
   return legs;
+}
+
+}  // namespace skills
+
+namespace skills {
+
+// ---------- 움직임 정답표 재생 (11-15) — tools/cli/op/routerec.py가 바퀴+IMU odom으로 남긴 <이름>_NN_<구간>.motion.csv
+//   한 줄 = action,value: turn = 도 (왼쪽 +) · forward = m. 재생은 skill_navigate가 Nav2 Spin · DriveOnHeading으로
+struct Move { bool turn; double value; };  // turn: rad · forward: m
+
+inline std::vector<Move> load_motion(const std::string & file) {
+  std::vector<Move> out;
+  std::ifstream f(file);
+  for (std::string line; std::getline(f, line);) {
+    const auto c = line.find(',');
+    if (line.empty() || line[0] == '#' || c == std::string::npos) continue;
+    const std::string a = line.substr(0, c);
+    char * end = nullptr;
+    const double v = std::strtod(line.c_str() + c + 1, &end);
+    if (end == line.c_str() + c + 1) continue;  // 머리줄 "action,value"
+    if (a == "turn") out.push_back({true, v * M_PI / 180.0});
+    else if (a == "forward") out.push_back({false, v});
+  }
+  return out;
+}
+
+// 사람이 준 직진 속도의 중앙값 (.cmd.csv: t,linear,angular) — 0.02 m/s 넘는 전진만. 없으면 fallback
+inline double median_speed(const std::string & cmd_file, double fallback) {
+  std::vector<double> v;
+  std::ifstream f(cmd_file);
+  for (std::string line; std::getline(f, line);) {
+    if (line.empty() || line[0] == '#' || line[0] == 't') continue;
+    std::istringstream in(line);
+    std::string t, lin;
+    if (std::getline(in, t, ',') && std::getline(in, lin, ',')) {
+      const double x = std::strtod(lin.c_str(), nullptr);
+      if (x > 0.02) v.push_back(x);
+    }
+  }
+  if (v.empty()) return fallback;
+  std::sort(v.begin(), v.end());
+  return v[v.size() / 2];
+}
+
+struct Pose2d { double x, y, yaw; };
+
+// 한 동작 뒤 기대 자세 (odom)
+inline Pose2d after(const Pose2d & p, const Move & m) {
+  if (m.turn) return {p.x, p.y, p.yaw + m.value};
+  return {p.x + m.value * std::cos(p.yaw), p.y + m.value * std::sin(p.yaw), p.yaw};
+}
+
+// 기대 자세에서 얼마나 벗어났나 — 위치 [m] · 방향 [rad] (절댓값)
+inline std::pair<double, double> deviation(const Pose2d & expect, const Pose2d & actual) {
+  return {std::hypot(actual.x - expect.x, actual.y - expect.y),
+          std::abs(std::remainder(actual.yaw - expect.yaw, 2 * M_PI))};
 }
 
 }  // namespace skills

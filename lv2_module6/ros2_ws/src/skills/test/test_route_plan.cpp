@@ -46,3 +46,27 @@ TEST(RoutePlan, LoadFile) {
   ASSERT_EQ(p.size(), 3u);
   EXPECT_DOUBLE_EQ(p[2].second, 1.0);
 }
+
+TEST(RoutePlan, MotionTable) {
+  const char * f = "/tmp/test_route_motion.csv";
+  std::ofstream(f) << "# 설명\naction,value\nforward,1.0\nturn,90\nforward,0.5\n";
+  const auto m = skills::load_motion(f);
+  std::remove(f);
+  ASSERT_EQ(m.size(), 3u);
+  EXPECT_NEAR(m[1].value, M_PI / 2, 1e-9);
+  skills::Pose2d p{0.0, 0.0, 0.0};
+  for (const auto & mv : m) p = skills::after(p, mv);
+  EXPECT_NEAR(p.x, 1.0, 1e-9);
+  EXPECT_NEAR(p.y, 0.5, 1e-9);
+  const auto d = skills::deviation(p, {1.0, 0.8, M_PI / 2 + 0.1});
+  EXPECT_NEAR(d.first, 0.3, 1e-9);
+  EXPECT_NEAR(d.second, 0.1, 1e-9);
+}
+
+TEST(RoutePlan, MedianSpeed) {
+  const char * f = "/tmp/test_route_cmd.csv";
+  std::ofstream(f) << "# 설명\nt,linear_mps,angular_radps\n0,0.0,0.8\n1,0.15,0\n2,0.2,0\n3,0.15,0\n4,0,0\n";
+  EXPECT_DOUBLE_EQ(skills::median_speed(f, 0.1), 0.15);
+  std::remove(f);
+  EXPECT_DOUBLE_EQ(skills::median_speed("/nonexistent", 0.1), 0.1);
+}

@@ -13,9 +13,15 @@
 //     문은 경기장(arena) 좌표 — start_pose_arena로 map에 옮김 (door_use_correction이면 /arena/correction도 얹음 — 기본 끔)
 //   가르친 경로 (routes_dir, 11-15 teach & repeat): 사람이 수동으로 몬 경로(tools/field/route_record.py)의 시작이 로봇 근처 ·
 //     끝이 목표 근처면(거꾸로도) 문 경유점 대신 그 경로의 꺾이는 점들을 경유점으로 (skills/route_plan.hpp)
+//   움직임 정답표 (taught_routes, 11-15): goal.target에 "leg:<구간>"(mission_manager가 붙임 — 예 S4_S5)이 있고
+//     routes_dir에 *_<구간>.motion.csv가 있으면 Nav2 경로 계획 대신 표대로 Spin(회전) · DriveOnHeading(직진)을 차례로.
+//     동작마다 odom 자세를 표의 기대 자세와 비교해 route_dev_m · route_dev_deg 넘게 엇나가거나 동작이 실패하면
+//     남은 길은 예전처럼 Nav2로 (실패 아님). 속도 = 같은 구간 .cmd.csv의 사람 직진 속도 중앙값
 #include <sstream>
 #include "skills/arm_io.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
+#include "nav2_msgs/action/drive_on_heading.hpp"
+#include "nav2_msgs/action/spin.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "skills/progress_watch.hpp"
@@ -24,6 +30,7 @@
 #include "std_msgs/msg/string.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -38,10 +45,14 @@ public:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using ComputePath = nav2_msgs::action::ComputePathToPose;
   using Pose = geometry_msgs::msg::PoseStamped;
+  using Spin = nav2_msgs::action::Spin;
+  using Drive = nav2_msgs::action::DriveOnHeading;
   explicit NavigateSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_navigate", options), arm_(*this) {
     nav_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
     path_ = rclcpp_action::create_client<ComputePath>(this, "/compute_path_to_pose");
+    spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
+    drive_ = rclcpp_action::create_client<Drive>(this, "/drive_on_heading");
     stall_s_ = declare_parameter<double>("nav_stall_s", 15.0);       // 0이면 감시 안 함
     stall_gain_m_ = declare_parameter<double>("nav_stall_gain_m", 0.10);
     look_m_ = declare_parameter<double>("nav_look_m", 0.6);
@@ -60,6 +71,10 @@ public:
     route_start_m_ = declare_parameter<double>("route_start_m", 0.5);   // 경로 시작이 로봇에서 이 안이어야
     route_goal_m_ = declare_parameter<double>("route_goal_m", 0.4);     // 경로 끝이 목표에서 이 안이어야
     route_tol_m_ = declare_parameter<double>("route_simplify_m", 0.10); // 꺾이는 점만 남길 때 허용 오차
+    taught_ = declare_parameter<bool>("taught_routes", false);          // 움직임 정답표 재생 (launch taught_routes:=true)
+    dev_m_ = declare_parameter<double>("route_dev_m", 0.30);            // 표 기대 자세에서 이만큼 벗어나면 Nav2로
+    dev_rad_ = declare_parameter<double>("route_dev_deg", 15.0) * M_PI / 180.0;
+    route_speed_ = declare_parameter<double>("route_speed", 0.15);      // .cmd.csv가 없을 때 직진 속도 [m/s]
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
         if (!door_use_corr_) return;
@@ -76,29 +91,10 @@ public:
         std::istringstream in(g.target);
         for (std::string t; in >> t;) flags.insert(t);
         const uint64_t seq = ++nav_seq_;
-        if (doors_.size() < 7 || !path_->action_server_is_ready()) {
-          drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
-          return;
-        }
-        ComputePath::Goal pg;
-        pg.goal = goal;
-        pg.goal.header.stamp = now();
-        pg.use_start = false;
-        rclcpp_action::Client<ComputePath>::SendGoalOptions opt;
-        opt.result_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::WrappedResult & r) {
-          if (seq != nav_seq_) return;  // 그사이 멈춤
-          auto legs = std::make_shared<std::vector<Pose>>();
-          if (r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result && !r.result->path.poses.empty()) {
-            *legs = route_legs(r.result->path.poses.front(), goal);  // 가르친 경로가 있으면 그것 (문도 이미 사람이 지남)
-            if (legs->empty()) *legs = door_legs(r.result->path.poses, goal);
-          }
-          legs->push_back(goal);  // 경로 실패면 문 없이 그대로 (Nav2가 다시 계획하며 실패를 알림)
-          drive(legs, 0, flags, seq, done);
-        };
-        opt.goal_response_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::SharedPtr & h) {
-          if (!h && seq == nav_seq_) drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
-        };
-        path_->async_send_goal(pg, opt);
+        std::string leg;
+        for (const auto & f : flags) if (f.rfind("leg:", 0) == 0) leg = f.substr(4);
+        if (taught_ && !leg.empty() && start_replay(leg, goal, flags, seq, done)) return;
+        nav2(goal, flags, seq, done);
       });
     });
   }
@@ -108,10 +104,142 @@ protected:
     ++nav_seq_;  // 응답 전인 goal은 goal_response_callback이 취소
     if (nav_goal_) nav_->async_cancel_goal(nav_goal_);
     nav_goal_.reset();
+    if (spin_goal_) spin_->async_cancel_goal(spin_goal_);
+    spin_goal_.reset();
+    if (drive_goal_) drive_->async_cancel_goal(drive_goal_);
+    drive_goal_.reset();
     arm_.stop();
   }
 
 private:
+  // 예전 길: 플래너 경로 → 가르친 경로(map) 또는 문 경유점 → NavigateToPose
+  void nav2(const Pose & goal, const std::set<std::string> & flags, uint64_t seq, Done done) {
+    if (doors_.size() < 7 || !path_->action_server_is_ready()) {
+      drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
+      return;
+    }
+    ComputePath::Goal pg;
+    pg.goal = goal;
+    pg.goal.header.stamp = now();
+    pg.use_start = false;
+    rclcpp_action::Client<ComputePath>::SendGoalOptions opt;
+    opt.result_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::WrappedResult & r) {
+      if (seq != nav_seq_) return;  // 그사이 멈춤
+      auto legs = std::make_shared<std::vector<Pose>>();
+      if (r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result && !r.result->path.poses.empty()) {
+        *legs = route_legs(r.result->path.poses.front(), goal);  // 가르친 경로가 있으면 그것 (문도 이미 사람이 지남)
+        if (legs->empty()) *legs = door_legs(r.result->path.poses, goal);
+      }
+      legs->push_back(goal);  // 경로 실패면 문 없이 그대로 (Nav2가 다시 계획하며 실패를 알림)
+      drive(legs, 0, flags, seq, done);
+    };
+    opt.goal_response_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::SharedPtr & h) {
+      if (!h && seq == nav_seq_) drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
+    };
+    path_->async_send_goal(pg, opt);
+  }
+
+  bool odom_pose(Pose2d & p) {
+    try {
+      const auto t = arm_.tf().lookupTransform("odom", "base_footprint", tf2::TimePointZero).transform;
+      p = {t.translation.x, t.translation.y, yaw_of(t.rotation)};
+      return true;
+    } catch (const std::exception &) {
+      return false;
+    }
+  }
+
+  // 구간 표 찾기 → 재생 시작. 표·액션 서버·odom이 없으면 false (부르는 쪽이 Nav2로)
+  bool start_replay(const std::string & leg, const Pose & goal, const std::set<std::string> & flags, uint64_t seq, Done done) {
+    std::error_code ec;
+    std::string best;
+    std::filesystem::file_time_type best_t{};
+    const std::string tail = "_" + leg + ".motion.csv";
+    if (!routes_dir_.empty() && std::filesystem::is_directory(routes_dir_, ec))
+      for (const auto & e : std::filesystem::directory_iterator(routes_dir_, ec)) {
+        const std::string n = e.path().filename().string();
+        if (n.size() < tail.size() || n.compare(n.size() - tail.size(), tail.size(), tail) != 0) continue;
+        const auto t = std::filesystem::last_write_time(e.path(), ec);
+        if (best.empty() || t > best_t) { best = e.path().string(); best_t = t; }  // 다시 녹화한 최신 것
+      }
+    if (best.empty()) { RCLCPP_INFO(get_logger(), "구간 %s 표 없음 — Nav2", leg.c_str()); return false; }
+    auto moves = std::make_shared<std::vector<Move>>(load_motion(best));
+    Pose2d p;
+    if (moves->empty() || !spin_->action_server_is_ready() || !drive_->action_server_is_ready() || !odom_pose(p)) {
+      RCLCPP_WARN(get_logger(), "구간 %s 표 %s — 재생 못 함 (빈 표 · /spin·/drive_on_heading 없음 · odom TF 없음) → Nav2",
+                  leg.c_str(), best.c_str());
+      return false;
+    }
+    const double speed = std::clamp(median_speed(best.substr(0, best.size() - 11) + ".cmd.csv", route_speed_), 0.05, 0.22);
+    RCLCPP_INFO(get_logger(), "구간 %s 표대로 (%zu동작 · 직진 %.2f m/s) — %s", leg.c_str(), moves->size(), speed, best.c_str());
+    replay(leg, moves, 0, p, speed, goal, flags, seq, done);
+    return true;
+  }
+
+  // 표의 i번째 동작 — 끝나면 odom을 기대 자세와 비교. 엇나가거나 실패하면 남은 길은 Nav2로
+  void replay(const std::string & leg, std::shared_ptr<std::vector<Move>> moves, size_t i, Pose2d expect, double speed,
+              const Pose & goal, const std::set<std::string> & flags, uint64_t seq, Done done) {
+    if (seq != nav_seq_) return;
+    if (i >= moves->size()) {
+      RCLCPP_INFO(get_logger(), "구간 %s 표 끝 — 도착", leg.c_str());
+      done(true, "");
+      return;
+    }
+    const Move m = (*moves)[i];
+    const Pose2d next = after(expect, m);
+    const auto fallback = [this, leg, goal, flags, seq, done](const std::string & why) {
+      if (seq != nav_seq_) return;
+      RCLCPP_WARN(get_logger(), "구간 %s 표 재생 그만 (%s) — 남은 길은 Nav2", leg.c_str(), why.c_str());
+      nav2(goal, flags, seq, done);
+    };
+    const auto check = [this, leg, moves, i, next, speed, goal, flags, seq, done, fallback](bool ok, const std::string & why) {
+      if (seq != nav_seq_) return;
+      if (!ok) { fallback(why); return; }
+      Pose2d now_p;
+      if (!odom_pose(now_p)) { fallback("odom_tf"); return; }
+      const auto [dm, dr] = deviation(next, now_p);
+      if (dm > dev_m_ || dr > dev_rad_) {
+        fallback(fmt("엇나감 %.2f m · %.0f°", dm, dr * 180.0 / M_PI));
+        return;
+      }
+      replay(leg, moves, i + 1, next, speed, goal, flags, seq, done);
+    };
+    stage(fmt("표 %s %zu/%zu %s", leg.c_str(), i + 1, moves->size(),
+              (m.turn ? fmt("회전 %+.0f°", m.value * 180.0 / M_PI) : fmt("직진 %.2f m", m.value)).c_str()));
+    if (m.turn) {
+      Spin::Goal g;
+      g.target_yaw = static_cast<float>(m.value);
+      g.time_allowance.sec = static_cast<int32_t>(std::abs(m.value) / 0.3 + 10.0);
+      g.disable_collision_checks = true;  // 사람이 몬 길 — 벽 옆 회전도 그대로 (collision_monitor는 계속 켜짐)
+      rclcpp_action::Client<Spin>::SendGoalOptions opt;
+      opt.goal_response_callback = [this, seq, check](const rclcpp_action::ClientGoalHandle<Spin>::SharedPtr & h) {
+        if (seq != nav_seq_) { if (h) spin_->async_cancel_goal(h); return; }
+        if (h) spin_goal_ = h; else check(false, "spin_rejected");
+      };
+      opt.result_callback = [this, check](const rclcpp_action::ClientGoalHandle<Spin>::WrappedResult & r) {
+        spin_goal_.reset();
+        check(r.code == rclcpp_action::ResultCode::SUCCEEDED, "spin_failed");
+      };
+      spin_->async_send_goal(g, opt);
+    } else {
+      Drive::Goal g;
+      g.target.x = m.value;
+      g.speed = static_cast<float>(speed);
+      g.time_allowance.sec = static_cast<int32_t>(m.value / speed * 2.0 + 10.0);
+      g.disable_collision_checks = true;
+      rclcpp_action::Client<Drive>::SendGoalOptions opt;
+      opt.goal_response_callback = [this, seq, check](const rclcpp_action::ClientGoalHandle<Drive>::SharedPtr & h) {
+        if (seq != nav_seq_) { if (h) drive_->async_cancel_goal(h); return; }
+        if (h) drive_goal_ = h; else check(false, "drive_rejected");
+      };
+      opt.result_callback = [this, check](const rclcpp_action::ClientGoalHandle<Drive>::WrappedResult & r) {
+        drive_goal_.reset();
+        check(r.code == rclcpp_action::ResultCode::SUCCEEDED, "drive_failed");
+      };
+      drive_->async_send_goal(g, opt);
+    }
+  }
+
   // 경로가 지나는 문 → 들어가기 · 나가기 점 (map). 문 한 줄 = cx, cy, nx, ny (문 축 단위벡터), half_w (문 폭 절반),
   //   d_neg, d_pos (축 −쪽 · +쪽 점까지 문 가운데에서 [m]) — 모두 arena
   std::vector<Pose> door_legs(const std::vector<Pose> & path, const Pose & goal) {
@@ -275,9 +403,21 @@ private:
 
   rclcpp_action::Client<NavigateToPose>::SharedPtr nav_;
   rclcpp_action::Client<ComputePath>::SharedPtr path_;
+  rclcpp_action::Client<Spin>::SharedPtr spin_;
+  rclcpp_action::Client<Drive>::SharedPtr drive_;
+  rclcpp_action::ClientGoalHandle<Spin>::SharedPtr spin_goal_;
+  rclcpp_action::ClientGoalHandle<Drive>::SharedPtr drive_goal_;
+  bool taught_ = false;
+  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr corr_sub_;
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
   uint64_t nav_seq_ = 0;  // 보낸 goal 번호 — stop하면 올라가 옛 응답·결과를 가려냄
+  template <typename... A>
+  static std::string fmt(const char * f, A... a) {
+    char buf[160];
+    std::snprintf(buf, sizeof buf, f, a...);
+    return buf;
+  }
   static double yaw_of(const geometry_msgs::msg::Quaternion & q) {
     return std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
   }

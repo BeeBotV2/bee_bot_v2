@@ -277,6 +277,8 @@ def generate_launch_description():
                               description='초기 조작 모드: MANUAL(기본) | AUTO'),
         DeclareLaunchArgument('start_pose', default_value='',
                               description='mission_manager 출발 자세 arena [x, y, yaw] YAML (비면 plan.yaml start_pose_arena)'),
+        DeclareLaunchArgument('taught_routes', default_value='false',
+                              description='움직임 정답표 재생 (~/.ros/routes/*.motion.csv · tools/cli start.sh route로 녹화) — 구간 표가 있으면 Nav2 경로 대신 표대로'),
         DeclareLaunchArgument('grasp_check', default_value='true',
                               description='coordinator 잡기 판정(그리퍼 위치 + 전류) — 물리 없는 대역(faker)은 손가락이 끝까지 닫혀 늘 빈손이라 false'),
         DeclareLaunchArgument('restart_prepare', default_value='',
@@ -332,7 +334,8 @@ def generate_launch_description():
         #   시작 자세(stow)는 skill_pose
         GroupAction([IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare('skills'), 'launch', 'skills.launch.py'])),
-            launch_arguments={'grasp_check': LaunchConfiguration('grasp_check')}.items())],
+            launch_arguments={'grasp_check': LaunchConfiguration('grasp_check'),
+                              'taught_routes': LaunchConfiguration('taught_routes')}.items())],
             condition=IfCondition(LaunchConfiguration('use_mission'))),
         # 주사위 미션 — /cmd/mission start로 시작 (abort로 멈춤). 출발 자세만 launch 인자로 덮어씀
         node('plan', 'mission_manager', condition=IfCondition(PythonExpression(
