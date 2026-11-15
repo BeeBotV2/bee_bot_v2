@@ -19,6 +19,7 @@
 //     남은 길은 예전처럼 Nav2로 (실패 아님). 속도 = 같은 구간 .cmd.csv의 사람 직진 속도 중앙값
 #include <sstream>
 #include "skills/arm_io.hpp"
+#include "nav2_msgs/action/back_up.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
 #include "nav2_msgs/action/drive_on_heading.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
@@ -51,6 +52,7 @@ public:
   using Spin = nav2_msgs::action::Spin;
   using Drive = nav2_msgs::action::DriveOnHeading;
   using Follow = nav2_msgs::action::FollowPath;
+  using BackUp = nav2_msgs::action::BackUp;
   explicit NavigateSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_navigate", options), arm_(*this) {
     nav_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
@@ -58,6 +60,7 @@ public:
     spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
     drive_ = rclcpp_action::create_client<Drive>(this, "/drive_on_heading");
     follow_ = rclcpp_action::create_client<Follow>(this, "/follow_path");
+    backup_ = rclcpp_action::create_client<BackUp>(this, "/backup");
     stall_s_ = declare_parameter<double>("nav_stall_s", 15.0);       // 0이면 감시 안 함
     stall_gain_m_ = declare_parameter<double>("nav_stall_gain_m", 0.10);
     look_m_ = declare_parameter<double>("nav_look_m", 0.6);
@@ -88,7 +91,11 @@ public:
     // follow(기본) = 표를 map 경로로 바꿔 FollowPath — 컨트롤러가 local costmap(벽·장애물)을 보며 따라감 (사람이 몬 길 + 주변 인지)
     //   primitives = Spin · DriveOnHeading으로 거리·각도만 (눈 감고 셈 — 시뮬: odom 회전이 12% 많게 잡혀 10° 틀어져 벽으로)
     route_mode_ = declare_parameter<std::string>("route_mode", "follow");
-    anchor_ = declare_parameter<bool>("route_anchor_end", true);  // follow 경로 끝을 Nav2 목표(벽 여유를 둔 다가설 자리)에 맞춤
+    anchor_ = declare_parameter<bool>("route_anchor_end", true);
+    // 표대로면 끝이 목표에서 이보다 멀면 그 표는 안 믿고 Nav2 (11-15 시뮬: S5_S3 1.80 m — 녹화 때 시작 방향이 틀린 표 · 억지로 맞추면 경로가 휘어 막힘)
+    max_end_err_ = declare_parameter<double>("route_max_end_err_m", 0.6);
+    // Nav2가 '출발 칸이 막힘'(205)이면 이만큼 뒤로 빼고 한 번 다시 (상자·벽에 붙은 채 실패한 뒤 다음 이동이 전부 205로 끝났음)
+    unstick_m_ = declare_parameter<double>("nav_unstick_backup_m", 0.15);  // follow 경로 끝을 Nav2 목표(벽 여유를 둔 다가설 자리)에 맞춤
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
         if (!door_use_corr_) return;
@@ -228,6 +235,11 @@ private:
     g.path.header.stamp = now();
     auto pts = path_points(p, moves);
     const double raw_end = std::hypot(pts.back().x - goal.pose.position.x, pts.back().y - goal.pose.position.y);
+    if (raw_end > max_end_err_) {
+      RCLCPP_WARN(get_logger(), "구간 %s 표대로면 끝이 목표와 %.2f m (> %.2f) — 표를 안 믿고 Nav2 (다시 녹화 필요)", leg.c_str(), raw_end,
+                  max_end_err_);
+      return false;
+    }
     if (anchor_) anchor_end(pts, {goal.pose.position.x, goal.pose.position.y, yaw_of(goal.pose.orientation)});
     for (const auto & q : pts) {
       Pose ps;
@@ -494,12 +506,27 @@ private:
       *finished = true;
       finish(false, "nav_rejected");
     };
-    opt.result_callback = [this, seq, finished, finish](
+    opt.result_callback = [this, seq, finished, finish, legs, i, flags, done](
         const rclcpp_action::ClientGoalHandle<NavigateToPose>::WrappedResult & r) {
       if (seq == nav_seq_) nav_goal_.reset();
       if (*finished || seq != nav_seq_) return;
       *finished = true;
       const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED;
+      // 출발 칸이 막힘(205 START_OCCUPIED) — 한 번만 뒤로 빼고 같은 점으로 다시
+      if (!ok && r.result && r.result->error_code == 205 && unstick_m_ > 0.0 && unstuck_seq_ != seq && backup_->action_server_is_ready()) {
+        unstuck_seq_ = seq;
+        RCLCPP_WARN(get_logger(), "출발 칸이 막힘 (205) — %.2f m 뒤로 뺀 뒤 다시", unstick_m_);
+        BackUp::Goal b;
+        b.target.x = unstick_m_;
+        b.speed = 0.05f;
+        b.time_allowance.sec = 10;
+        rclcpp_action::Client<BackUp>::SendGoalOptions bo;
+        bo.result_callback = [this, legs, i, flags, seq, done](const rclcpp_action::ClientGoalHandle<BackUp>::WrappedResult &) {
+          if (seq == nav_seq_) drive(legs, i, flags, seq, done);
+        };
+        backup_->async_send_goal(b, bo);
+        return;
+      }
       finish(ok, ok ? "" : "nav_failed");
     };
     nav_->async_send_goal(goal, opt);
@@ -512,6 +539,9 @@ private:
   rclcpp_action::ClientGoalHandle<Spin>::SharedPtr spin_goal_;
   rclcpp_action::ClientGoalHandle<Drive>::SharedPtr drive_goal_;
   rclcpp_action::Client<Follow>::SharedPtr follow_;
+  rclcpp_action::Client<BackUp>::SharedPtr backup_;
+  uint64_t unstuck_seq_ = 0;
+  double max_end_err_ = 0.6, unstick_m_ = 0.15;
   rclcpp_action::ClientGoalHandle<Follow>::SharedPtr follow_goal_;
   std::string route_mode_ = "follow";
   bool anchor_ = true;

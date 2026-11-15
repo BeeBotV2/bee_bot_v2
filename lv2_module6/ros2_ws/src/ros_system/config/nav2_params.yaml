@@ -139,7 +139,7 @@ controller_server:
       lidar_inflation: 0.04    # [m] 사용자 안전 여유 (학습 1~5 cm) — 11-15: 0.02 → 0.04 (스캔은 앞 바퀴축 기준인데 몸이 뒤로 0.245 m — 문틈 모서리에 붙어 돎)
       max_lin: 0.26            # [m/s] 정책 출력 ±1 스케일
       max_ang: 1.82            # [rad/s]
-      extra_lin_vel: 0.0       # [m/s] 0~0.10 — 정책 출력에 더하는 추가 선속도 (max_lin 상한 유지, 0 = 끄기)
+      extra_lin_vel: 0.05      # [m/s] 0~0.10 — 정책 출력에 더하는 추가 선속도 (max_lin 상한 유지, 0 = 끄기) · 11-15: 0 → 0.05 (정책이 상한보다 느리게 감)
       extra_ang_vel: 0.0       # [rad/s] 0~0.50 — 정책 출력에 더하는 추가 각속도 (max_ang 상한 유지, 0 = 끄기)
       v_min_ratio: 0.0         # 후진 허용 비율 (음수 = 후진) — 11-15: -0.2 → 0 (카메라가 뒤를 못 보고 collision_monitor backward 반원 0.20이 몸 뒤끝 -0.245 안쪽이라 후진 감시 없음)
       # 바이패스 controller — mppi(기본) · dwb · rpp · rotation_shim 또는 전체 pluginlib 클래스명.
@@ -608,7 +608,7 @@ collision_monitor:
       type: "polygon"
       points: "[[0.0, -0.22], [0.30, -0.22], [0.30, 0.22], [0.0, 0.22]]"
       action_type: "slowdown"
-      slowdown_ratio: 0.5
+      slowdown_ratio: 0.7   # 11-15: 0.5 → 0.7 — 좁은 통로(0.57 m)에서 좌우 ±0.22에 벽이 자주 걸려 늘 절반 속도였음
       min_points: 4
       visualize: true
       polygon_pub_topic: polygon_slowdown
