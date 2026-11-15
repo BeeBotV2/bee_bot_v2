@@ -165,6 +165,8 @@ private:
   std::vector<size_t> survey_order_, build_loc_order_;  // 시작 박스 · 장소 방문 순서 (0부터, plan.yaml survey_order · build_location_order)
   size_t survey_k_ = 0;                                  // 지금 몇 번째 박스를 도는지 (survey_order_ 인덱스)
   std::vector<double> walls_;    // 경기장 벽 선분 [x0, y0, x1, y1, …] (arena, m) — 다가설 자리 거르기 · /arena/walls
+  std::vector<double> keepout_;  // 안 들어갈 구역 사각형 [x0, y0, x1, y1, …] (arena, m) — /arena/walls에 칸 100 · 다가설 자리 거르기
+  bool in_keepout(double x, double y) const;
   double nav_turn_m_ = 0.55;     // [m] Nav2 목표를 박스 가운데에서 이만큼까지 물림 (제자리 회전 공간)
   double wall_clearance_ = 0.22; // [m] 다가설 자리가 벽에서 이보다 가까우면 그 변은 안 감 (로봇 반경 0.16 + 여유)
   std::vector<std::pair<double, double>> locations_;

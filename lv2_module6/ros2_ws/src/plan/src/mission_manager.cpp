@@ -136,6 +136,7 @@ MissionManager::MissionManager()
   survey_order_ = visit_order(declare_parameter<std::vector<int64_t>>("survey_order", std::vector<int64_t>{}), start_boxes_.size());
   build_loc_order_ = visit_order(declare_parameter<std::vector<int64_t>>("build_location_order", std::vector<int64_t>{}), 3);
   walls_ = declare_parameter<std::vector<double>>("arena_walls", std::vector<double>{});
+  keepout_ = declare_parameter<std::vector<double>>("keepout_zones", std::vector<double>{});
   wall_clearance_ = declare_parameter<double>("wall_clearance", 0.22);
   place_tol_ = declare_parameter<double>("place_tol", 0.010);
   place_search_ = declare_parameter<double>("place_search", 0.05);
@@ -1304,6 +1305,10 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
     poses.erase(std::remove_if(poses.begin(), poses.end(), [this](const Pose2 & p) {
       const bool blocked = wall_distance(p.x, p.y, walls_) < wall_clearance_;
       if (blocked) RCLCPP_INFO(get_logger(), "다가설 자리 (%.2f, %.2f) — 벽에서 %.2f m 안이라 뺌", p.x, p.y, wall_clearance_);
+      else if (in_keepout(p.x, p.y)) {
+        RCLCPP_INFO(get_logger(), "다가설 자리 (%.2f, %.2f) — 금지 구역(keepout_zones) 안이라 뺌", p.x, p.y);
+        return true;
+      }
       return blocked;
     }), poses.end());
   }
@@ -1317,7 +1322,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
     const double clear = std::min(0.32, wall_distance(n.x, n.y, walls_));
     for (double d = (box.x - n.x) * c + (box.y - n.y) * s + 0.02; d <= nav_turn_m_ + 1e-6; d += 0.02) {
       const double x = box.x - d * c, y = box.y - d * s;
-      if (wall_distance(x, y, walls_) < clear) break;
+      if (wall_distance(x, y, walls_) < clear || in_keepout(x, y)) break;
       n.x = x; n.y = y;
     }
   }
@@ -1583,7 +1588,8 @@ void MissionManager::commit_corr(const ArenaCorr & c, const char * src, const st
 // 벽 정합 — nvblox 2D 점유 격자(/map 말고 원본: /map에는 도면 벽이 겹쳐 있어 자기 자신에 맞춰짐)의 점유 칸을 도면 벽에 맞춤.
 //   앞뒤 카메라가 본 벽 전부가 근거라 상자 인지 없이 회전이 잡힘. 지난 결과(없으면 지금 보정)에서 시작
 void MissionManager::wall_tick() {
-  if (!acorr_on_ || !(active_ || acorr_idle_) || !grid_ || walls_.size() < 4) return;
+  // arena_correction(상자)과 따로 — wall_fit만 켜도 벽으로 보정 (11-15)
+  if (!(active_ || acorr_idle_) || !grid_ || walls_.size() < 4) return;
   const auto & g = *grid_;
   std::vector<std::pair<double, double>> cells;
   const double res = g.info.resolution;
@@ -1619,7 +1625,7 @@ void MissionManager::wall_tick() {
 // 보정 → 로봇 위치 — 근거가 충분하면 보정 조각을 cuvslam_slam에 넘기고 (map' = 조각⁻¹ · map) 그만큼 이쪽 보정·관측에서 뺌.
 //   조각 = loc_step(5 cm · 1°)까지 · loc_period(2 s)마다 하나 — cuvslam MapGate(초당 5 cm · 5°)가 부드럽게 옮김, 잠금(0.30 m)에 안 걸림
 void MissionManager::loc_tick() {
-  if (!acorr_on_ || !(active_ || acorr_idle_) || acorr_.n == 0) return;
+  if (!(acorr_on_ || wall_fit_) || !(active_ || acorr_idle_) || acorr_.n == 0) return;
   if (!(acorr_src_ == "walls" || acorr_.n >= loc_min_n_)) return;   // 상자 하나 · 둘로는 위치를 안 옮김 (11-15: 상자 1개로 dy −0.2 m)
   if (std::hypot(acorr_.dx, acorr_.dy) < loc_min_m_ && std::abs(acorr_.dth) < loc_min_rad_) return;
   const ArenaCorr st = corr_step(acorr_, loc_step_m_, loc_step_rad_);
@@ -1714,8 +1720,30 @@ void MissionManager::publish_walls() {
       }
     }
   }
+  // 금지 구역 (keepout_zones, 11-15) — 칸 100으로 채움. /map(nvblox)에 그리면 카메라가 빈 바닥을 보며 지우지만 이 격자는 그대로
+  for (size_t i = 0; i + 3 < keepout_.size(); i += 4) {
+    const double ax0 = std::min(keepout_[i], keepout_[i + 2]), ax1 = std::max(keepout_[i], keepout_[i + 2]);
+    const double ay0 = std::min(keepout_[i + 1], keepout_[i + 3]), ay1 = std::max(keepout_[i + 1], keepout_[i + 3]);
+    for (double ax = ax0; ax <= ax1 + 1e-9; ax += res / 2) {
+      for (double ay = ay0; ay <= ay1 + 1e-9; ay += res / 2) {
+        const auto m = to_map(ax, ay, 0.0);
+        const int cx = static_cast<int>(std::floor((m.x - x0) / res)), cy = static_cast<int>(std::floor((m.y - y0) / res));
+        if (cx >= 0 && cy >= 0 && cx < static_cast<int>(g.info.width) && cy < static_cast<int>(g.info.height))
+          g.data[static_cast<size_t>(cy) * g.info.width + cx] = 100;
+      }
+    }
+  }
   walls_pub_->publish(g);
-  RCLCPP_INFO(get_logger(), "경기장 벽 %zu개 · 상자 %zu개 → /arena/walls (%ux%u)", walls_.size() / 4, nb, g.info.width, g.info.height);
+  RCLCPP_INFO(get_logger(), "경기장 벽 %zu개 · 상자 %zu개 · 금지 구역 %zu개 → /arena/walls (%ux%u)", walls_.size() / 4, nb,
+              keepout_.size() / 4, g.info.width, g.info.height);
+}
+
+bool MissionManager::in_keepout(double x, double y) const {
+  for (size_t i = 0; i + 3 < keepout_.size(); i += 4)
+    if (x >= std::min(keepout_[i], keepout_[i + 2]) && x <= std::max(keepout_[i], keepout_[i + 2]) &&
+        y >= std::min(keepout_[i + 1], keepout_[i + 3]) && y <= std::max(keepout_[i + 1], keepout_[i + 3]))
+      return true;
+  return false;
 }
 
 void MissionManager::write_log(const std::string & name, const std::string & json) const {
