@@ -104,6 +104,7 @@ private:
   void run_retry(std::vector<SubGoal> goals, Done done, int tries = 0);
   // 박스 위 점(arena)을 다룰 자리로 navigate + approach — 점에서 가까운 변부터, 실패하면 다음 변 (최대 approach_tries)
   void go_near(const Box & box, double px, double py, Done done, size_t k = 0, std::vector<Pose2> poses = {}, bool retried = false);
+  //   박스 가운데는 near_center(인지 평균 또는 도면) — px·py(도면 기준 점)도 같은 만큼 옮김. 변 · @거리 · standoff는 그대로
 
   void go_observe();
   void barcode_phase();
@@ -170,6 +171,11 @@ private:
   std::vector<double> keepout_;  // 안 들어갈 구역 사각형 [x0, y0, x1, y1, …] (arena, m) — /arena/walls에 칸 100 · 다가설 자리 거르기
   bool in_keepout(double x, double y) const;
   double nav_turn_m_ = 0.55;     // [m] Nav2 목표를 박스 가운데에서 이만큼까지 물림 (제자리 회전 공간)
+  // 다가설 자리 · Nav2 목표의 박스 가운데 = 인지 상자 평균(marks_, min_hits · gate 안)이면 그것, 아니면 도면 (approach_perceived, 11-16)
+  bool near_perceived_ = true;
+  std::pair<double, double> near_c_{0.0, 0.0};  // 이번 go_near가 쓰는 박스 가운데 (arena) — 다가설 자리를 정할 때 한 번 정함
+  std::pair<double, double> near_center(const Box & box);
+  std::string box_label(const Box & box) const;  // S1..S6 · L1..L3 (로그용 — 목록에 없으면 "")
   double wall_clearance_ = 0.22; // [m] 다가설 자리가 벽에서 이보다 가까우면 그 변은 안 감 (로봇 반경 0.16 + 여유)
   std::vector<std::pair<double, double>> locations_;
   std::vector<int> loc_tags_;

@@ -415,6 +415,51 @@ TEST(ArenaCorr, MatchLandmarkGateAndUnique) {
   EXPECT_EQ(match_landmark(0.0, 0.0, {}, 0.6), -1);
 }
 
+TEST(ArenaCorr, MapToArenaInverse) {  // mission_manager to_arena = map_to_arena(unapply_corr(acorr_, m), start)
+  const Pose2 a{3.670, 3.152, 0.3};
+  const auto back = map_to_arena(arena_to_map(a, kStart), kStart);
+  EXPECT_NEAR(back.x, a.x, 1e-9);
+  EXPECT_NEAR(back.y, a.y, 1e-9);
+  EXPECT_NEAR(back.yaw, a.yaw, 1e-9);
+}
+
+TEST(ArenaCorr, PerceivedCenter) {  // 다가설 자리 박스 가운데 (approach_perceived, 11-16)
+  bool used = false;
+  auto c = perceived_center(1.0, 2.0, 1.08, 1.95, 3, 3, 0.6, used);  // 3번 · 9 cm — 인지
+  EXPECT_TRUE(used);
+  EXPECT_DOUBLE_EQ(c.first, 1.08);
+  EXPECT_DOUBLE_EQ(c.second, 1.95);
+  c = perceived_center(1.0, 2.0, 1.08, 1.95, 2, 3, 0.6, used);  // 덜 봄 — 도면
+  EXPECT_FALSE(used);
+  EXPECT_DOUBLE_EQ(c.first, 1.0);
+  EXPECT_DOUBLE_EQ(c.second, 2.0);
+  c = perceived_center(1.0, 2.0, 1.7, 2.0, 10, 3, 0.6, used);  // gate 밖 (70 cm) — 다른 것을 본 것으로 · 도면
+  EXPECT_FALSE(used);
+  EXPECT_DOUBLE_EQ(c.first, 1.0);
+}
+
+TEST(ArenaCorr, PerceivedCenterNavGoalOnPerceivedBox) {
+  // 인지(map) → to_arena(보정 뺌) → 다가설 자리 → to_map(보정 얹음): 보정이 있어도 다가설 자리는 인지 상자 둘레 · 변 법선 거리 그대로
+  const double bx = 3.670, by = 3.152, half = 0.1, standoff = 0.25;
+  const auto qm = apply_corr(kTrue, arena_to_map({bx + 0.07, by - 0.04, 0}, kStart));  // 본 상자 (map) — 도면보다 (7, −4) cm
+  const auto qa = map_to_arena(unapply_corr(kTrue, qm), kStart);
+  bool used = false;
+  const auto c = perceived_center(bx, by, qa.x, qa.y, 5, 3, 0.6, used);
+  ASSERT_TRUE(used);
+  EXPECT_NEAR(c.first - bx, 0.07, 1e-9);
+  EXPECT_NEAR(c.second - by, -0.04, 1e-9);
+  const auto drawn = approach_poses(bx, by, half, bx, by, standoff);
+  const auto seen = approach_poses(c.first, c.second, half, bx + (c.first - bx), by + (c.second - by), standoff);  // 점도 같이 옮김
+  ASSERT_EQ(drawn.size(), seen.size());
+  for (size_t i = 0; i < seen.size(); ++i) {
+    EXPECT_NEAR(seen[i].x - drawn[i].x, 0.07, 1e-9);  // 같은 변 순서 · 같은 만큼만 옮겨짐
+    EXPECT_NEAR(seen[i].y - drawn[i].y, -0.04, 1e-9);
+    EXPECT_DOUBLE_EQ(seen[i].yaw, drawn[i].yaw);
+    const auto m = apply_corr(kTrue, arena_to_map(seen[i], kStart));  // Nav2 목표 (to_map)
+    EXPECT_NEAR(std::hypot(m.x - qm.x, m.y - qm.y), half + standoff, 1e-9);  // 인지 상자 가운데에서 변 + standoff
+  }
+}
+
 namespace {
 // 벽 선분 위를 step 간격으로 — 보정 c를 씌운 map 점 (지도 칸처럼)
 std::vector<std::pair<double, double>> wall_cells(const std::vector<std::array<double, 4>> & segs, const ArenaCorr & c, double step) {
