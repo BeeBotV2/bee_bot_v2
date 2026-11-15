@@ -97,7 +97,9 @@ mission_manager:             # 주사위 기억 미션 (documents/mission/README
     arena_corr_wall_min_cells: 60  # 맞은 칸(벽 겉면 — 빈 칸과 맞닿은 점유 칸)이 이보다 적으면 안 씀 (5 cm 칸 → 벽 3 m)
     arena_corr_wall_min_eig: 0.03  # x · y · 회전이 다 묶여야 (벽 한 줄만 보이면 그 벽을 따라가는 방향을 모름)
     arena_corr_wall_period: 2.0    # [s] 다시 맞추는 주기 (nvblox 격자 2 Hz)
-    arena_corr_walls_m: 0.15       # [m] /arena/walls(도면 벽)를 다시 보내는 최소 변화 — 보낼 때마다 Nav2 costmap이 다시 잡힘 · 0 = 안 보냄
+    arena_corr_walls_m: 0.0        # [m] /arena/walls(도면 벽)를 다시 보내는 최소 변화 — 보낼 때마다 Nav2 costmap이 다시 잡힘 · 0 = 안 보냄
+                                   #   11-15: 0.15 → 0 — 전역 경로가 /arena/walls를 봄. 상자 하나(근거 1개)로 dy −0.2 m 보정이 벽까지 옮겨 문이 실제보다 위로 →
+                                   #   경로가 위쪽 벽 끝으로 치우쳐 막힘. 벽은 실측·고정이라 안 옮김 (보정은 상자 목표에만)
     arena_corr_walls_rad: 0.087    # [rad] (5°)
     # 보정 → 로봇 위치 (11-15): 근거가 충분한 보정을 목표에만 얹지 않고 로봇 위치(map→odom)로 넘김 — 벽·문·costmap·nvblox·목표가 한 좌표
     #   cuvslam_slam이 /localization/map_correction을 받아 map 기준을 옮김 (MapGate 초당 5 cm·5°로 부드럽게)
