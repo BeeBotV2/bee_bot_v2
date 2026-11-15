@@ -161,4 +161,26 @@ inline std::vector<Pose2d> path_points(Pose2d p, const std::vector<Move> & moves
   return out;
 }
 
+// 경로 끝을 목표(goal)에 맞춤 — 시작은 그대로, 끝 오차(목표 − 끝)를 걸어온 길이 비율만큼 나눠 더함 · 마지막 방향 = 목표 방향.
+//   녹화 odom 오차가 끝으로 쌓여 6 m 구간 끝이 0.37 m 벗어나 벽 모서리에 걸렸음 (시뮬 11-15) — 목표는 mission_manager가 벽 여유를 두고 정한 자리
+inline void anchor_end(std::vector<Pose2d> & p, const Pose2d & goal) {
+  if (p.size() < 2) return;
+  double total = 0.0;
+  for (size_t k = 1; k < p.size(); ++k) total += std::hypot(p[k].x - p[k - 1].x, p[k].y - p[k - 1].y);
+  if (total < 1e-6) return;
+  const double ex = goal.x - p.back().x, ey = goal.y - p.back().y;
+  double run = 0.0;
+  std::vector<Pose2d> q(p);
+  for (size_t k = 1; k < p.size(); ++k) {
+    run += std::hypot(q[k].x - q[k - 1].x, q[k].y - q[k - 1].y);
+    p[k].x += ex * run / total;
+    p[k].y += ey * run / total;
+  }
+  for (size_t k = 1; k + 1 < p.size(); ++k) {  // 방향 = 다음 점 쪽 (옮긴 뒤 다시)
+    const double dx = p[k + 1].x - p[k].x, dy = p[k + 1].y - p[k].y;
+    if (std::hypot(dx, dy) > 1e-6) p[k].yaw = std::atan2(dy, dx);
+  }
+  p.back().yaw = goal.yaw;
+}
+
 }  // namespace skills

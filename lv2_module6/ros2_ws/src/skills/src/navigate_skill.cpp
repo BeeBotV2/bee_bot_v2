@@ -88,6 +88,7 @@ public:
     // follow(기본) = 표를 map 경로로 바꿔 FollowPath — 컨트롤러가 local costmap(벽·장애물)을 보며 따라감 (사람이 몬 길 + 주변 인지)
     //   primitives = Spin · DriveOnHeading으로 거리·각도만 (눈 감고 셈 — 시뮬: odom 회전이 12% 많게 잡혀 10° 틀어져 벽으로)
     route_mode_ = declare_parameter<std::string>("route_mode", "follow");
+    anchor_ = declare_parameter<bool>("route_anchor_end", true);  // follow 경로 끝을 Nav2 목표(벽 여유를 둔 다가설 자리)에 맞춤
     corr_sub_ = create_subscription<std_msgs::msg::String>(
       "/arena/correction", rclcpp::QoS(1).reliable().transient_local(), [this](std_msgs::msg::String::ConstSharedPtr m) {
         if (!door_use_corr_) return;
@@ -225,7 +226,10 @@ private:
     g.progress_checker_id = "progress_checker";
     g.path.header.frame_id = "map";
     g.path.header.stamp = now();
-    for (const auto & q : path_points(p, moves)) {
+    auto pts = path_points(p, moves);
+    const double raw_end = std::hypot(pts.back().x - goal.pose.position.x, pts.back().y - goal.pose.position.y);
+    if (anchor_) anchor_end(pts, {goal.pose.position.x, goal.pose.position.y, yaw_of(goal.pose.orientation)});
+    for (const auto & q : pts) {
       Pose ps;
       ps.header = g.path.header;
       ps.pose.position.x = q.x;
@@ -235,8 +239,8 @@ private:
       g.path.poses.push_back(ps);
     }
     const auto & e = g.path.poses.back().pose.position;
-    RCLCPP_INFO(get_logger(), "구간 %s 표 → 경로 %zu점 (끝 map %.2f, %.2f · Nav2 목표와 %.2f m) FollowPath — %s", leg.c_str(),
-                g.path.poses.size(), e.x, e.y, std::hypot(e.x - goal.pose.position.x, e.y - goal.pose.position.y), file.c_str());
+    RCLCPP_INFO(get_logger(), "구간 %s 표 → 경로 %zu점 (표대로면 끝이 목표와 %.2f m%s · 끝 map %.2f, %.2f) FollowPath — %s", leg.c_str(),
+                g.path.poses.size(), raw_end, anchor_ ? " → 목표에 맞춤" : "", e.x, e.y, file.c_str());
     stage("표 " + leg + " 경로 따라가기");
     rclcpp_action::Client<Follow>::SendGoalOptions opt;
     const auto finish = [this, leg, goal, flags, seq, done](bool ok, const std::string & why) {
@@ -510,6 +514,7 @@ private:
   rclcpp_action::Client<Follow>::SharedPtr follow_;
   rclcpp_action::ClientGoalHandle<Follow>::SharedPtr follow_goal_;
   std::string route_mode_ = "follow";
+  bool anchor_ = true;
   bool taught_ = false;
   double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052, settle_s_ = 0.8;
   bool fallback_nav2_ = false;

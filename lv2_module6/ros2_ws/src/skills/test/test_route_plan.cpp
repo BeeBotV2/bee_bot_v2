@@ -81,3 +81,15 @@ TEST(RoutePlan, PathPoints) {
   EXPECT_NEAR(p.back().y, 0.5, 1e-9);
   EXPECT_NEAR(p.back().yaw, M_PI, 1e-9);   // 끝 방향
 }
+
+TEST(RoutePlan, AnchorEnd) {
+  // 직진 2 m 경로 끝이 (2, 0) — 목표 (2, 0.4) · 방향 90°로 맞춤: 가운데 점은 0.2 m 옮김, 끝은 목표 그대로
+  std::vector<skills::Pose2d> p;
+  for (int k = 0; k <= 20; ++k) p.push_back({k * 0.1, 0.0, 0.0});
+  skills::anchor_end(p, {2.0, 0.4, M_PI / 2});
+  EXPECT_NEAR(p.front().y, 0.0, 1e-9);
+  EXPECT_NEAR(p[10].y, 0.2, 1e-9);
+  EXPECT_NEAR(p.back().x, 2.0, 1e-9);
+  EXPECT_NEAR(p.back().y, 0.4, 1e-9);
+  EXPECT_NEAR(p.back().yaw, M_PI / 2, 1e-9);
+}
