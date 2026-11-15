@@ -77,8 +77,16 @@ public:
   }
 
   // 후보 map→odom, 시각 t [s], 지금 odom 자세 → 낼 map→odom (accepted = 후보를 그대로 받았는지)
-  Pose2 update(const Pose2 & cand, double t, const Pose2 & odom, bool & accepted) {
+  //   rotating (11-16): 제자리·빠른 회전 중이면 지금 값을 그대로 둠 — 회전 중 cuVSLAM·EKF yaw가 서로 늦게 따라와 생기는
+  //   일시적 차이를 보정으로 넣지 않음 (멈춘 뒤 다시 따라감, 잠금·거름 수는 안 셈)
+  Pose2 update(const Pose2 & cand, double t, const Pose2 & odom, bool & accepted, bool rotating = false) {
     if (!t0_) t0_ = t;
+    if (rotating && held_) {
+      t_ = t;
+      ++held_rot;
+      accepted = false;
+      return *held_;
+    }
     if (!held_) {
       held_ = cand;
       t_ = t;
@@ -127,6 +135,7 @@ public:
 
   bool locked = false;
   long rejected = 0;
+  long held_rot = 0;  // 회전 중이라 그대로 둔 프레임 수
   std::optional<Pose2> resettled;  // 정착 중 다시 맞춘 크기 (x = 거리 m, y = 각 °) — 노드가 로그하고 지움
 
 private:

@@ -26,9 +26,14 @@ if(CUVSLAM_INCLUDE_DIR AND CUVSLAM_LIB AND CUDAToolkit_FOUND AND Eigen3_FOUND)
   find_package(nav_msgs REQUIRED)
   find_package(std_msgs REQUIRED)
   find_package(visualization_msgs REQUIRED)
-  add_executable(cuvslam_slam_cpp src/cuvslam_slam.cpp)
+  if(NOT CMAKE_CUDA_COMPILER)
+    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_NVCC_EXECUTABLE}")
+  endif()
+  set(CMAKE_CUDA_ARCHITECTURES 87)   # Orin
+  enable_language(CUDA)              # src/cuvslam_gpu.cu — 가까운 depth 마스크 커널
+  add_executable(cuvslam_slam_cpp src/cuvslam_slam.cpp src/cuvslam_gpu.cu)
   target_compile_features(cuvslam_slam_cpp PRIVATE cxx_std_17)
-  target_include_directories(cuvslam_slam_cpp PRIVATE include "${CUVSLAM_INCLUDE_DIR}")
+  target_include_directories(cuvslam_slam_cpp PRIVATE include src "${CUVSLAM_INCLUDE_DIR}")
   target_link_libraries(cuvslam_slam_cpp "${CUVSLAM_LIB}" CUDA::cudart Eigen3::Eigen rclcpp::rclcpp tf2_ros::tf2_ros
     message_filters::message_filters ${geometry_msgs_TARGETS} ${sensor_msgs_TARGETS} ${nav_msgs_TARGETS} ${std_msgs_TARGETS}
     ${visualization_msgs_TARGETS})

@@ -1,6 +1,6 @@
 // cuvslam_slam C++판 (11-16) — scripts/cuvslam_slam.py와 같은 일 · 같은 노드 이름 · 같은 파라미터 · 같은 토픽
-//   cuVSLAM C++ API(cuvslam2.h)를 바로 부르고, 영상은 CUDA mapped pinned 메모리에 써서 GPU 포인터로 넘김 (is_gpu_mem) —
-//   Jetson은 CPU·GPU가 같은 DRAM이라 GPU로 따로 복사하지 않음. 버퍼는 두 벌을 번갈아 씀 (앞 프레임을 cuVSLAM이 아직 읽어도 안전)
+//   cuVSLAM C++ API(cuvslam2.h)를 바로 부르고, 영상은 메시지에서 GPU 장치 메모리로 바로 올려(cudaMemcpy2D) 가까운 depth
+//   마스크도 GPU 커널로 만든 뒤 GPU 포인터로 넘김 (is_gpu_mem) — 버퍼는 두 벌을 번갈아 씀 (앞 프레임을 cuVSLAM이 아직 읽어도 안전)
 //   파이썬판은 프레임마다 numpy 변환 · 마스크 · map→odom 계산이 인터프리터에서 돌아 CPU 몰림에 1 s씩 멈췄음
 // 설명(MapGate · initialpose · 도면 보정 · BEE_CUVSLAM_LEVEL · BEE_MAP_FREEZE · BEE_CUVSLAM_VIS)은 파이썬판 머리말·주석과 같음
 #include <cuda_runtime.h>
@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "cuvslam2.h"
+#include "cuvslam_gpu.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
@@ -61,36 +62,40 @@ Eigen::Matrix4d mat(const geometry_msgs::msg::Transform & t) {
                          t.translation.z);
 }
 
-// mapped pinned 버퍼 하나 — host 포인터에 쓰고 dev 포인터를 cuVSLAM에 (실패하면 보통 메모리 · is_gpu_mem=false)
-struct Pinned {
-  void * host = nullptr;
-  void * dev = nullptr;
-  size_t bytes = 0;
+// 영상 버퍼 하나 — gpu면 장치 메모리(cudaMallocPitch, 메시지에서 cudaMemcpy2D로 바로 올림), 아니면 보통 메모리
+//   (mapped pinned는 cuVSLAM이 GPU 포인터로 안 봄 — cudaPointerGetAttributes가 Host · Orin은 concurrentManagedAccess=0이라 managed도 안 씀)
+struct Buf {
+  void * p = nullptr;
+  size_t pitch = 0;  // 행 바이트 (여백 포함)
+  uint32_t w = 0, h = 0;
+  size_t bpp = 0;
   bool gpu = false;
-  std::vector<uint8_t> fallback;
+  std::vector<uint8_t> host;
 
-  bool alloc(size_t n, bool want_gpu) {
+  bool fits(uint32_t W, uint32_t H, size_t B, bool G) const { return p && w == W && h == H && bpp == B && gpu == G; }
+  bool alloc(uint32_t W, uint32_t H, size_t B, bool G) {
     release();
-    bytes = n;
-    if (want_gpu && cudaHostAlloc(&host, n, cudaHostAllocMapped) == cudaSuccess &&
-        cudaHostGetDevicePointer(&dev, host, 0) == cudaSuccess) {
+    w = W;
+    h = H;
+    bpp = B;
+    if (G && cudaMallocPitch(&p, &pitch, W * B, H) == cudaSuccess) {
       gpu = true;
       return true;
     }
-    if (host) cudaFreeHost(host);
-    host = dev = nullptr;
+    p = nullptr;
     gpu = false;
-    fallback.assign(n, 0);
-    host = dev = fallback.data();
-    return false;
+    pitch = W * B;
+    host.assign(pitch * H, 0);
+    p = host.data();
+    return !G;
   }
   void release() {
-    if (gpu && host) cudaFreeHost(host);
-    host = dev = nullptr;
+    if (gpu && p) cudaFree(p);
+    p = nullptr;
     gpu = false;
-    fallback.clear();
+    host.clear();
   }
-  ~Pinned() { release(); }
+  ~Buf() { release(); }
 };
 
 }  // namespace
@@ -111,12 +116,18 @@ public:
     max_map_size_ = static_cast<uint32_t>(declare_parameter<int64_t>("max_map_size", 150));
     lin_var_ = declare_parameter<double>("linear_variance", 0.0025);
     ang_var_ = declare_parameter<double>("angular_variance", 0.0025);
-    // 영상을 GPU 포인터로 넘길지 (mapped pinned) — false면 CPU 버퍼 (cuVSLAM이 안에서 복사)
+    // 영상을 GPU 장치 메모리로 넘길지 (메시지 → cudaMemcpy2D · 마스크 커널) — false면 CPU 버퍼 (cuVSLAM이 안에서 복사)
     gpu_input_ = declare_parameter<bool>("gpu_input", true);
+    if (gpu_input_ && cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking) != cudaSuccess) {
+      RCLCPP_WARN(get_logger(), "CUDA 스트림 못 만듦 — CPU 입력으로");
+      gpu_input_ = false;
+    }
     const double jm = declare_parameter<double>("gate_jump_m", 0.30), jd = declare_parameter<double>("gate_jump_deg", 15.0);
     const double rm = declare_parameter<double>("gate_rate_m", 0.05), rd = declare_parameter<double>("gate_rate_deg", 5.0);
     const double ss = declare_parameter<double>("gate_settle_s", 15.0);
     if (declare_parameter<bool>("map_gate", true)) gate_.emplace(jm, jd, rm, rd, ss);
+    // [rad/s] odom 회전 속도가 이보다 크면 map→odom을 그대로 둠 (회전 중 보정 멈춤, 11-16) · 0 = 안 멈춤
+    hold_wz_ = declare_parameter<double>("gate_hold_wz", 0.2);
     if (env_on("BEE_MAP_FREEZE")) {
       const double inf = std::numeric_limits<double>::infinity();
       gate_.emplace(inf, inf, 0.0, 0.0, 0.0);
@@ -162,7 +173,9 @@ public:
     stats_ = create_wall_timer(std::chrono::seconds(10), [this]() {
       std::string s = "추적 " + std::to_string(ok_) + " · 잃음 " + std::to_string(lost_);
       if (publish_map_tf_) s += " · 경로 " + std::to_string(path_.poses.size());
-      if (gate_) s += " · 보정 거름 " + std::to_string(gate_->rejected) + (gate_->locked ? " · 잠금" : "");
+      if (gate_)
+        s += " · 보정 거름 " + std::to_string(gate_->rejected) + " · 회전 중 멈춤 " + std::to_string(gate_->held_rot) +
+             (gate_->locked ? " · 잠금" : "");
       s += gpu_used_ ? " · GPU 입력" : " · CPU 입력";
       RCLCPP_INFO(get_logger(), "%s", s.c_str());
     });
@@ -267,34 +280,29 @@ private:
                 frame_skip_ > 1 ? (" · " + std::to_string(frame_skip_) + "장에 1장 추적").c_str() : "");
   }
 
-  // 메시지 한 장 → pinned 버퍼 (행 끝 여백은 뺌). bpp = 픽셀당 바이트
-  bool copy_in(const Image & m, Pinned & b, size_t bpp) {
+  // 메시지 한 장 → 버퍼 (GPU면 cudaMemcpy2D가 행 여백까지 처리). bpp = 픽셀당 바이트
+  bool copy_in(const Image & m, Buf & b, size_t bpp) {
     const size_t row = static_cast<size_t>(m.width) * bpp;
     if (m.height == 0 || m.width == 0 || m.step < row || m.data.size() < static_cast<size_t>(m.height) * m.step) return false;
     if (m.is_bigendian && bpp > 1) return false;
-    const size_t n = row * m.height;
-    if (b.bytes != n) {
-      if (!b.alloc(n, gpu_input_) && gpu_input_)
-        RCLCPP_WARN(get_logger(), "mapped pinned 메모리 못 잡음 — CPU 버퍼로 (cuVSLAM이 안에서 복사)");
-    }
-    auto * dst = static_cast<uint8_t *>(b.host);
-    if (m.step == row) std::memcpy(dst, m.data.data(), n);
-    else
-      for (uint32_t r = 0; r < m.height; ++r) std::memcpy(dst + r * row, m.data.data() + r * m.step, row);
+    if (!b.fits(m.width, m.height, bpp, gpu_input_) && !b.alloc(m.width, m.height, bpp, gpu_input_))
+      RCLCPP_WARN(get_logger(), "GPU 메모리 못 잡음 — CPU 버퍼로 (cuVSLAM이 안에서 복사)");
+    if (b.gpu) return cudaMemcpy2DAsync(b.p, b.pitch, m.data.data(), m.step, row, m.height, cudaMemcpyHostToDevice, stream_) ==
+                      cudaSuccess;
+    auto * dst = static_cast<uint8_t *>(b.p);
+    for (uint32_t r = 0; r < m.height; ++r) std::memcpy(dst + r * b.pitch, m.data.data() + r * m.step, row);
     return true;
   }
 
-  // gpu = 셋(영상·마스크·depth) 다 mapped pinned일 때만 dev 포인터 — cuVSLAM은 한 번에 같은 종류만 받음
-  static cuvslam::Image as_image(const Pinned & b, bool gpu, uint32_t w, uint32_t h, int ch, cuvslam::ImageData::DataType dt,
-                                 size_t bpp, int64_t ns) {
+  static cuvslam::Image as_image(const Buf & b, int ch, cuvslam::ImageData::DataType dt, int64_t ns) {
     cuvslam::Image im;
-    im.pixels = gpu ? b.dev : b.host;
-    im.width = static_cast<int32_t>(w);
-    im.height = static_cast<int32_t>(h);
-    im.pitch = static_cast<int32_t>(w * bpp);
+    im.pixels = b.p;
+    im.width = static_cast<int32_t>(b.w);
+    im.height = static_cast<int32_t>(b.h);
+    im.pitch = static_cast<int32_t>(b.pitch);
     im.encoding = ch == 3 ? cuvslam::ImageData::Encoding::RGB : cuvslam::ImageData::Encoding::MONO;
     im.data_type = dt;
-    im.is_gpu_mem = gpu;
+    im.is_gpu_mem = b.gpu;
     im.timestamp_ns = ns;
     im.camera_index = 0;
     return im;
@@ -325,19 +333,32 @@ private:
     }
     auto & B = bufs_[flip_ ^= 1];  // 두 벌을 번갈아 — 앞 프레임 버퍼는 건드리지 않음
     if (!copy_in(c, B.rgb, ch) || !copy_in(d, B.depth, 2)) {
-      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "영상 크기·step이 맞지 않음 (잘린 버퍼 · big endian)");
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "영상 크기·step이 맞지 않음 (잘린 버퍼 · big endian · GPU 복사 실패)");
       return;
     }
-    const size_t n = static_cast<size_t>(c.width) * c.height;
-    if (B.mask.bytes != n) B.mask.alloc(n, gpu_input_);
-    ros_system::near_mask(static_cast<const uint16_t *>(B.depth.host), static_cast<uint8_t *>(B.mask.host), n, near_raw_);
-    // 셋 다 같은 종류(GPU/CPU)여야 — 하나라도 못 잡았으면 CPU로 넘김
-    const bool gpu = B.rgb.gpu && B.depth.gpu && B.mask.gpu;
-    gpu_used_ = gpu;
+    // 마스크도 depth와 같은 쪽에서 — GPU면 커널, 아니면 CPU (cuVSLAM은 한 번에 같은 종류만 받음)
+    const bool gpu = B.rgb.gpu && B.depth.gpu;
+    if (!B.mask.fits(c.width, c.height, 1, gpu)) B.mask.alloc(c.width, c.height, 1, gpu);
+    if (gpu && B.mask.gpu) {
+      if (near_mask_gpu(B.depth.p, B.depth.pitch, B.mask.p, B.mask.pitch, c.width, c.height, near_raw_, stream_) != cudaSuccess ||
+          cudaStreamSynchronize(stream_) != cudaSuccess) {
+        RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "GPU 마스크 실패: %s", cudaGetErrorString(cudaGetLastError()));
+        return;
+      }
+    } else {
+      for (uint32_t r = 0; r < c.height; ++r)
+        ros_system::near_mask(reinterpret_cast<const uint16_t *>(static_cast<const uint8_t *>(B.depth.p) + r * B.depth.pitch),
+                              static_cast<uint8_t *>(B.mask.p) + r * B.mask.pitch, c.width, near_raw_);
+    }
+    gpu_used_ = gpu && B.mask.gpu;
+    if (B.rgb.gpu != gpu_used_ || B.depth.gpu != gpu_used_) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "영상·depth·마스크 버퍼 종류가 섞임 (GPU/CPU) — 이 프레임 건너뜀");
+      return;
+    }
     using DT = cuvslam::ImageData::DataType;
-    const cuvslam::Odometry::ImageSet imgs{as_image(B.rgb, gpu, c.width, c.height, ch, DT::UINT8, ch, ns)};
-    const cuvslam::Odometry::ImageSet masks{as_image(B.mask, gpu, c.width, c.height, 1, DT::UINT8, 1, ns)};
-    const cuvslam::Odometry::ImageSet depths{as_image(B.depth, gpu, c.width, c.height, 1, DT::UINT16, 2, ns)};
+    const cuvslam::Odometry::ImageSet imgs{as_image(B.rgb, ch, DT::UINT8, ns)};
+    const cuvslam::Odometry::ImageSet masks{as_image(B.mask, 1, DT::UINT8, ns)};
+    const cuvslam::Odometry::ImageSet depths{as_image(B.depth, 1, DT::UINT16, ns)};
     cuvslam::PoseEstimate est;
     std::optional<cuvslam::Pose> slam_pose;
     try {
@@ -352,7 +373,10 @@ private:
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "cuVSLAM Track 실패: %s", e.what());
       return;
     }
-    if (vis_) last_vis_ = {c.header.stamp, ch, c.width, c.height, flip_};
+    if (vis_) {
+      last_vis_ = LastVis{c.header.stamp, ch, c.width, c.height, {}};
+      copy_gray(c, ch, last_vis_->gray);
+    }
     if (!est.world_from_rig) {
       ++lost_;
       prev_.reset();
@@ -399,9 +423,16 @@ private:
     last_base_ = base_raw;
     Pose2 base = ros_system::compose(map_offset_, base_raw);
     Pose2 mo = ros_system::map_to_odom(base, odom);
+    const double ts = rclcpp::Time(stamp).seconds();
+    bool rotating = false;
+    if (prev_odom_ && ts > prev_odom_->first) {
+      const double wz = std::remainder(odom.yaw - prev_odom_->second.yaw, 2 * M_PI) / (ts - prev_odom_->first);
+      rotating = hold_wz_ > 0.0 && std::abs(wz) > hold_wz_;
+    }
+    prev_odom_ = std::make_pair(ts, odom);
     if (gate_) {
       bool accepted = false;
-      mo = gate_->update(mo, rclcpp::Time(stamp).seconds(), odom, accepted);
+      mo = gate_->update(mo, ts, odom, accepted, rotating);
       if (gate_->resettled) {
         RCLCPP_WARN(get_logger(), "map→odom 출발 정착 중 다시 맞춤 — 보정이 %.2f m · %.1f° 바뀜 (gate_settle_s 안이라 잠그지 않고 받음 · "
                                   "map = cuVSLAM 출발 자리 기준)", gate_->resettled->x, gate_->resettled->y);
@@ -440,7 +471,6 @@ private:
   void publish_vis() {
     if (!odom_trk_ || !last_vis_) return;
     const auto & lv = *last_vis_;
-    const auto & B = bufs_[lv.buf];
     // 회색 영상(컬러면 G 채널) → bgr8 + 특징점 초록 점 (3x3)
     Image img;
     img.header.stamp = lv.stamp;
@@ -450,11 +480,7 @@ private:
     img.encoding = "bgr8";
     img.step = lv.w * 3;
     img.data.resize(static_cast<size_t>(img.step) * lv.h);
-    const auto * src = static_cast<const uint8_t *>(B.rgb.host);
-    for (size_t i = 0; i < static_cast<size_t>(lv.w) * lv.h; ++i) {
-      const uint8_t g = lv.ch == 3 ? src[i * 3 + 1] : src[i];
-      img.data[i * 3] = img.data[i * 3 + 1] = img.data[i * 3 + 2] = g;
-    }
+    for (size_t i = 0; i < lv.gray.size(); ++i) img.data[i * 3] = img.data[i * 3 + 1] = img.data[i * 3 + 2] = lv.gray[i];
     try {
       for (const auto & o : odom_trk_->GetLastObservations(0))
         for (int dy = -1; dy <= 1; ++dy)
@@ -548,6 +574,8 @@ private:
   std::string base_, odom_, map_;
   bool publish_map_tf_ = true, relay_ = true, gpu_input_ = true, gpu_used_ = false, level_ = false, vis_ = false;
   rclcpp::Duration map_tf_tolerance_{0, 0};
+  double hold_wz_ = 0.2;
+  std::optional<std::pair<double, Pose2>> prev_odom_;  // 직전 프레임 odom 자세 (회전 속도)
   double depth_scale_ = 1000.0, min_depth_ = 0.5, lin_var_ = 0.0025, ang_var_ = 0.0025;
   int64_t frame_skip_ = 1, frame_n_ = 0, last_ns_ = 0;
   uint16_t near_raw_ = 0;
@@ -561,16 +589,22 @@ private:
   std::unique_ptr<cuvslam::Odometry> odom_trk_;
   std::unique_ptr<cuvslam::Slam> slam_;
   struct Bufs {
-    Pinned rgb, depth, mask;
+    Buf rgb, depth, mask;
   };
+  cudaStream_t stream_ = nullptr;
   std::array<Bufs, 2> bufs_;
   int flip_ = 0;
   struct LastVis {
     builtin_interfaces::msg::Time stamp;
     int ch;
     uint32_t w, h;
-    int buf;
+    std::vector<uint8_t> gray;  // 보기용 회색 (컬러면 G 채널) — GPU 버퍼는 CPU에서 못 읽어 메시지에서 따로 둠
   };
+  static void copy_gray(const Image & c, int ch, std::vector<uint8_t> & g) {
+    g.resize(static_cast<size_t>(c.width) * c.height);
+    for (uint32_t y = 0; y < c.height; ++y)
+      for (uint32_t x = 0; x < c.width; ++x) g[y * c.width + x] = c.data[y * c.step + x * ch + (ch == 3 ? 1 : 0)];
+  }
   std::optional<LastVis> last_vis_;
   nav_msgs::msg::Path path_;
   sensor_msgs::msg::CameraInfo::ConstSharedPtr info_;

@@ -126,6 +126,7 @@ class MapGate:
         self.resettled = None
         self.locked = False
         self.rejected = 0
+        self.held_rot = 0  # 회전 중이라 그대로 둔 프레임 수
 
     def reset(self):
         self.held, self.t, self.locked = None, None, False
@@ -141,11 +142,16 @@ class MapGate:
         c, s = math.cos(a[2]), math.sin(a[2])
         return (-c * a[0] - s * a[1], s * a[0] - c * a[1], -a[2])
 
-    def update(self, cand, t, odom=(0.0, 0.0, 0.0)):
+    def update(self, cand, t, odom=(0.0, 0.0, 0.0), rotating=False):
         """후보 map→odom, 시각 t [s], 지금 odom 자세 (x, y, yaw) → (낼 map→odom, 후보를 그대로 받았는지)
         점프·속도 한계는 로봇 자세(map→odom ∘ odom)의 변화로 잰다 — odom 원점 거리에 상관없이 같은 기준"""
         if self.t0 is None:
             self.t0 = t
+        # 회전 중 (11-16): 지금 값을 그대로 둠 — 회전 중 cuVSLAM·EKF yaw가 서로 늦게 따라와 생기는 일시 차이를 보정으로 넣지 않음
+        if rotating and self.held is not None:
+            self.t = t
+            self.held_rot += 1
+            return self.held, False
         if self.held is None:
             self.held, self.t = tuple(cand), t
             return self.held, True
@@ -235,6 +241,9 @@ class CuvslamSlam(Node):
                             # [s] 첫 프레임 뒤 이만큼은 거르지 않음 — 출발 자리에 서서 bringup 중 (odom 시작 튐 흡수). 이 안에 주행 시작하지 말 것
                             float(self.declare_parameter('gate_settle_s', 15.0).value)) \
             if bool(self.declare_parameter('map_gate', True).value) else None
+        # [rad/s] odom 회전 속도가 이보다 크면 map→odom을 그대로 둠 (회전 중 보정 멈춤, 11-16) · 0 = 안 멈춤
+        self.hold_wz = float(self.declare_parameter('gate_hold_wz', 0.2).value)
+        self.prev_odom = None  # (t, (x, y, yaw))
         # BEE_MAP_FREEZE=1 (시험용, 11-13): 첫 map→odom(출발 자세 ≈ 항등)에 고정 — 보정 끔, TF map = EKF odom 그대로
         if os.environ.get('BEE_MAP_FREEZE') == '1':
             self.gate = MapGate(math.inf, math.inf, 0.0, 0.0)
@@ -277,7 +286,8 @@ class CuvslamSlam(Node):
         self.sync.registerCallback(self.on_rgbd)
         self.create_timer(10.0, lambda: self.get_logger().info(
             f'추적 {self.ok} · 잃음 {self.lost}' + (f' · 경로 {len(self.path.poses)}' if self.publish_map_tf else '')
-            + (f' · 보정 거름 {self.gate.rejected}' + (' · 잠금' if self.gate.locked else '') if self.gate else '')))
+            + (f' · 보정 거름 {self.gate.rejected} · 회전 중 멈춤 {self.gate.held_rot}' + (' · 잠금' if self.gate.locked else '')
+               if self.gate else '')))
         # BEE_CUVSLAM_VIS=1 (보기용, 11-15): 특징점·랜드마크·포즈 그래프를 RViz용으로 냄 — isaac_ros_visual_slam의 visual_slam/vis/*에 해당.
         #   트래커에 export를 켜야 해서 시작 때만 정함 · GPU→CPU 복사가 늘어 실기(Orin)에서는 끔
         self.vis = os.environ.get('BEE_CUVSLAM_VIS') == '1'
@@ -478,7 +488,13 @@ class CuvslamSlam(Node):
         base = compose(self.map_offset, base_raw)
         x, y, yaw = map_to_odom(base, odom_from_base)
         if self.gate is not None:
-            (x, y, yaw), ok = self.gate.update((x, y, yaw), Time.from_msg(stamp).nanoseconds * 1e-9, planar(odom_from_base))
+            ts, od = Time.from_msg(stamp).nanoseconds * 1e-9, planar(odom_from_base)
+            rotating = False
+            if self.prev_odom is not None and ts > self.prev_odom[0]:
+                wz = math.remainder(od[2] - self.prev_odom[1][2], 2 * math.pi) / (ts - self.prev_odom[0])
+                rotating = self.hold_wz > 0 and abs(wz) > self.hold_wz
+            self.prev_odom = (ts, od)
+            (x, y, yaw), ok = self.gate.update((x, y, yaw), ts, od, rotating)
             if self.gate.resettled:
                 self.get_logger().warning(
                     'map→odom 출발 정착 중 다시 맞춤 — 보정이 %.2f m · %.1f° 바뀜 (gate_settle_s 안이라 잠그지 않고 받음 · map = cuVSLAM 출발 자리 기준)'

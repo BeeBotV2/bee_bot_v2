@@ -143,3 +143,20 @@ TEST(SlamMath, BaseAndOdomGeometry) {
   EXPECT_NEAR(v.y, 0.0, 1e-9);
   EXPECT_NEAR(v.yaw, 0.5, 1e-9);
 }
+
+TEST(MapGate, HoldsWhileRotating) {
+  MapGate g;
+  bool ok = false;
+  g.update({0, 0, 0}, 0.0, {}, ok);
+  auto out = g.update({0.01, 0, 0.02}, 0.1, {}, ok, true);  // 회전 중 — 작은 보정도 안 넣음
+  EXPECT_FALSE(ok);
+  EXPECT_DOUBLE_EQ(out.x, 0.0);
+  EXPECT_EQ(g.held_rot, 1);
+  EXPECT_EQ(g.rejected, 0);
+  EXPECT_FALSE(g.locked);
+  out = g.update({1.0, 0, 0}, 0.2, {}, ok, true);  // 회전 중엔 큰 차이도 잠그지 않음 (멈춘 뒤 판단)
+  EXPECT_FALSE(g.locked);
+  out = g.update({0.001, 0, 0}, 0.3, {}, ok, false);  // 멈춘 뒤 다시 따라감
+  EXPECT_TRUE(ok);
+  EXPECT_DOUBLE_EQ(out.x, 0.001);
+}
