@@ -1,6 +1,6 @@
 """Traffic light blink sequence for the dice-memory mission (Isaac Sim Script Editor).
 
-Open scene_sim.usda, press Play, paste this file into the Script Editor and Run.
+Open maze_map_1711.usda, press Play, paste this file into the Script Editor and Run.
 Edit SEQUENCE below: a fixed string like "RGRRGRGGYGYG" (public practice Q1), or None for a
 random valid sequence (R/Y/G each 1..6, total 12) drawn from SEED, so the same SEED always
 gives the same sequence. Random sequences are limited to counts the pucks under /World/pucks can
@@ -13,7 +13,7 @@ Rule: each blink = one color ON 1 s + all OFF 1 s; after the 12th blink all ligh
 for 3 s (the trailing 1 s off plus END_OFF_S more), then the same sequence repeats forever.
 Every run starts with all lights OFF for 3 s before the first blink.
 Timing follows timeline (sim) time, so it pauses with the simulation and matches use_sim_time.
-Light state is written to the session layer: Ctrl+S never saves a lit lamp into scene_sim.usda.
+Light state is written to the session layer: Ctrl+S never saves a lit lamp into maze_map_1711.usda.
 
 Comments/strings stay English: the Script Editor breaks Korean text.
 """
@@ -68,7 +68,7 @@ def puck_counts():
     stage = omni.usd.get_context().get_stage()
     root = stage.GetPrimAtPath(PUCKS)
     if not root:
-        raise RuntimeError(f"{PUCKS} not found, open scene_sim.usda")
+        raise RuntimeError(f"{PUCKS} not found, open maze_map_1711.usda")
     n = Counter()
     for p in root.GetChildren():
         _, shape, color, *_ = p.GetName().split("_")

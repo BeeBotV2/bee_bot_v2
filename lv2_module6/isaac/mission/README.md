@@ -2,15 +2,15 @@
 
 Isaac Sim을 beebot 하드웨어로 두고, 실기와 같은 bringup 전체로 주사위 미션 한 판을 돌린다. 신호등과 시작 바코드는 읽었다고 치고 넣어 준다. 명령은 `lv2_module6`에서 실행한다.
 
-| 파일 | 하는 일 |
-| --- | --- |
-| `make_map.py` | 장면 USD 벽 · 기둥 → `map/<장면>/map.pgm` · `map.yaml` (Nav2 벽 지도) |
-| `mission.rviz` | RViz 화면: 지도 · costmap · Nav2 경로 · footprint · 미션 마커 · 점구름 · 검출 영상 |
-| `run_mission.py` | `/cmd/mission start` → BARCODE·READ 단계에 바코드·신호 넣기 → DONE/ERROR까지 단계 출력 |
-| `rviz.sh` | `mission.rviz`를 시뮬 시계로 띄움 |
-| `plan_to_map.py` | `plan.yaml` 실측 벽(`arena_walls`) → 실기용 Nav2 지도. 출발 자리(start)가 원점 |
+| 파일               | 하는 일                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `make_map.py`      | 장면 USD 벽 · 기둥 → `map/<장면>/map.pgm` · `map.yaml` (Nav2 벽 지도)                                  |
+| `mission.rviz`     | RViz 화면: 지도 · costmap · Nav2 경로 · footprint · 미션 마커 · 점구름 · 검출 영상                     |
+| `run_mission.py`   | `/cmd/mission start` → BARCODE·READ 단계에 바코드·신호 넣기 → DONE/ERROR까지 단계 출력                 |
+| `rviz.sh`          | `mission.rviz`를 시뮬 시계로 띄움                                                                      |
+| `plan_to_map.py`   | `plan.yaml` 실측 벽(`arena_walls`) → 실기용 Nav2 지도. 출발 자리(start)가 원점                         |
 | `map_to_nvblox.py` | 2D 지도(`map.pgm` + `map.yaml`) → 실기 nvblox 지도 파일(`nvblox.nvblx`) — `map:=saved`로 바로 위치추정 |
-| `map/<장면>/` | 장면별 벽 지도: `scene_sim` · `scene_approach` · `scene_approach_matte` (matte는 approach 사본) |
+| `map/<장면>/`      | 장면별 벽 지도: `maze_map_1711` · `scene_approach` · `scene_approach_matte` (matte는 approach 사본)    |
 
 ## 실행
 
@@ -33,24 +33,24 @@ python3 isaac/mission/run_mission.py   # 터미널 2: ROS 노드가 다 뜬 뒤
 - 카메라는 Isaac 토픽을 쓴다(`use_cameras:=false`). 뒤 카메라 `pole_back_cam`도 Isaac 토픽으로 nvblox에 들어간다. 끄려면 `BEE_BACK_CAM=false isaac/standalone/isaac_sim.sh`.
 - Nav2 costmap은 실기와 같이 `nav2_params.yaml` 값을 받는다(`nav2_container_params:=true`, #240). Nav2 기본값으로 보려면 `BEE_NAV2_PARAMS=false`.
 
-## 신호 조건 (scene_sim 퍽)
+## 신호 조건 (maze_map_1711 퍽)
 
-`scene_sim.usda` 퍽은 빨강 7개(box 4 · cyl 3), 초록 5개(box 2 · cyl 3)다. `mission_solver`의 `allocate`가 받는 신호는 다음과 같다.
+`maze_map_1711.usda` 퍽은 빨강 7개(box 4 · cyl 3), 초록 5개(box 2 · cyl 3)다. `mission_solver`의 `allocate`가 받는 신호는 다음과 같다.
 
 - R은 빨간 퍽 수 이하, G는 초록 퍽 수 이하.
 - 남는 퍽(Y)이 한 모양(전부 box 또는 전부 cyl).
 
 되는 조합: R3 Y6 G3 · R3 Y5 G4 · R3 Y4 G5 (Y=box), R4 Y6 G2 · R4 Y5 G3 · R4 Y4 G4 · R4 Y3 G5 · R5 Y5 G2 · R5 Y4 G3 · R5 Y3 G4 · R5 Y2 G5 · R6 Y4 G2 · R6 Y3 G3 · R6 Y2 G4 · R6 Y1 G5 (Y=cyl). 공개 연습 Q1(R4 Y2 G6)은 초록이 모자라 `no_allocation`.
 
-## Nav2 지도 (scene_sim 벽 · 기둥)
+## Nav2 지도 (maze_map_1711 벽 · 기둥)
 
 ```bash
-~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py   # → isaac/mission/map/scene_sim/map.pgm · map.yaml
+~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py   # → isaac/mission/map/maze_map_1711/map.pgm · map.yaml
 ```
 
-다른 장면은 `make_map.py`의 `SCENE`·`--out`을 바꿔 `map/<장면 이름>/`에 만든다. 지금 있는 지도는 `scene_sim` · `scene_approach` · `scene_approach_matte`이고, `lab`은 지도가 없어 `/arena/walls`를 쓴다. `isaac_system.launch.py`는 `isaac_sim.sh`가 연 장면(`ISAAC_SCENE`) 이름으로 `map/<장면>/map.yaml`을 찾고, 없으면 실기처럼 `/arena/walls`를 쓴다.
+다른 장면은 `make_map.py`의 `SCENE`·`--out`을 바꿔 `map/<장면 이름>/`에 만든다. 지금 있는 지도는 `maze_map_1711` · `scene_approach` · `scene_approach_matte`이고, `lab`은 지도가 없어 `/arena/walls`를 쓴다. `isaac_system.launch.py`는 `isaac_sim.sh`가 연 장면(`ISAAC_SCENE`) 이름으로 `map/<장면>/map.yaml`을 찾고, 없으면 실기처럼 `/arena/walls`를 쓴다.
 
-`scene_sim.usda`의 경기장 벽 · 기둥(`/World/maze`)을 높이 0.02~0.47 m 띠로 잘라 바닥에 투영한 map_server 형식 지도다(0.05 m/칸). 원점은 USD의 beebot 자세(로봇을 켠 자리)라 cuVSLAM·nvblox의 map 프레임과 같다. 시작 박스 · 장소 받침대(상자)와 퍽은 넣지 않는다. 미션이 다가가 붙는 대상이라 정적 지도에 있으면 목표 자리가 막힌다. 장면을 고치면 다시 만든다.
+`maze_map_1711.usda`의 경기장 벽 · 기둥(`/World/maze`)을 높이 0.02~0.47 m 띠로 잘라 바닥에 투영한 map_server 형식 지도다(0.05 m/칸). 원점은 USD의 beebot 자세(로봇을 켠 자리)라 cuVSLAM·nvblox의 map 프레임과 같다. 시작 박스 · 장소 받침대(상자)와 퍽은 넣지 않는다. 미션이 다가가 붙는 대상이라 정적 지도에 있으면 목표 자리가 막힌다. 장면을 고치면 다시 만든다.
 
 `isaac_system.launch.py`가 이 지도를 Nav2 `/map`에 넣는다.
 
@@ -63,7 +63,7 @@ python3 isaac/mission/run_mission.py   # 터미널 2: ROS 노드가 다 뜬 뒤
 장면 벽은 `maze.usda`에서 묶음째만 실측 쪽으로 옮겨져(묶음 안 모양은 그대로) 실측과 최대 약 11 cm 어긋난다. 실기 저장 지도는 `plan.yaml` 실측 벽으로 직접 그린다. 저장 지도의 map 프레임은 로봇을 켠 자리라, 출발 자리가 바뀌면 지도도 다시 그린다.
 
 ```bash
-python3 isaac/mission/plan_to_map.py ros2_ws/map/scene_sim                              # plan.yaml start_pose_arena 기준
+python3 isaac/mission/plan_to_map.py ros2_ws/map/maze_map_1711                              # plan.yaml start_pose_arena 기준
 python3 isaac/mission/plan_to_map.py ros2_ws/map/start_b --start 3.670,0.950,3.14159    # 다른 자리에서 켤 때
 python3 isaac/mission/map_to_nvblox.py ros2_ws/map/start_b ros2_ws/map/start_b          # 그다음 nvblox 지도
 ```

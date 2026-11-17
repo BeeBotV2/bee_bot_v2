@@ -304,7 +304,7 @@ def main():
             if k in ros_env:
                 os.environ[k] = ros_env[k]
         scene = a.scene or ros_env.get('ISAAC_SCENE') or proc_env('isaac_startup.py').get('ISAAC_SCENE') \
-            or os.path.join(ISAAC, 'usda', 'scene_sim.usda')
+            or os.path.join(ISAAC, 'usda', 'maze_map_1711.usda')
         scene_name = os.path.splitext(os.path.basename(scene))[0]
         if not a.box.isdigit():
             sys.exit('the Isaac scenes only have start boxes - give a number (L1..L3 need --real)')

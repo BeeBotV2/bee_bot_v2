@@ -1,4 +1,4 @@
-# isaac/mission/make_map.py — ../usda/scene_sim.usda 벽 · 기둥 · map 원점 = 로봇을 켠 자리 · z 0.02~0.47 m
+# isaac/mission/make_map.py — ../usda/maze_map_1711.usda 벽 · 기둥 · map 원점 = 로봇을 켠 자리 · z 0.02~0.47 m
 image: map.pgm
 mode: trinary
 resolution: 0.05

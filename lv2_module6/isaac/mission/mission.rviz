@@ -228,8 +228,7 @@ Visualization Manager:
       Show Arrows: true
       Show Axes: true
       Show Names: false
-      Tree:
-        {}
+      Tree: {}
       Update Interval: 0
       Value: false
     - Alpha: 0.20000000298023224
@@ -262,7 +261,7 @@ Visualization Manager:
       Color Scheme: map
       Draw Behind: false
       Enabled: false
-      Name: Arena Walls (/arena/static = scene_sim)
+      Name: Arena Walls (/arena/static = maze_map_1711)
       Topic:
         Depth: 1
         Durability Policy: Transient Local
