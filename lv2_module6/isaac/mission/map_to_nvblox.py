@@ -1,6 +1,6 @@
 """2D 지도(map.pgm + map.yaml) → 실기 nvblox 지도 파일(nvblox.nvblx) — map:=saved로 바로 위치추정에 쓰려고.
 
-  python3 isaac/mission/map_to_nvblox.py isaac/mission/map/scene_approach_matte ros2_ws/map/scene_approach_matte
+  python3 isaac/mission/map_to_nvblox.py ros2_ws/map/scene_approach_matte ros2_ws/map/scene_approach_matte
 
 nvblox.nvblx = nvblox save_map이 쓰는 SQLite (레이어마다 <층>_layer_metadata · <층>_layer_data(블록 index_x·y·z, data BLOB)).
   블록 0.4 m = 8×8×8 복셀(0.05 m) · 복셀 순서 [x][y][z] — 실기 저장 파일(map/kk)을 읽어 맞춘 형식

@@ -16,7 +16,7 @@ whether the perception really took over. /tracked_objects boxes near the true bo
 
 Box centre: /World/start_boxes/start_<n> of the running scene (ISAAC_SCENE of the Isaac process, or --scene), in the map
 frame (= base_footprint where the robot was at Play). Read with pxr in the Isaac venv. Sides closer than --wall-clearance
-to a wall of isaac/mission/map/<scene>/map.pgm are skipped, like mission_manager.
+to a wall of ros2_ws/map/<scene>/map.pgm are skipped, like mission_manager.
 ROS env (domain, Fast DDS profile, discovery range) is copied from the running isaac_system launch.
 
 Ground truth: the pucks sitting on the box (Isaac writes their pose in base_link to /tmp/beebot_sim_pucks.json while
@@ -225,7 +225,7 @@ def wall_distance(scene_name):
     import numpy as np
     import yaml
     from PIL import Image
-    path = os.path.join(ISAAC, 'mission', 'map', scene_name, 'map.yaml')
+    path = os.path.join(ISAAC, '..', 'ros2_ws', 'map', scene_name, 'map.yaml')
     if not os.path.exists(path):
         print(f'no wall map {path} — sides are not checked against walls (make it: isaac/mission/make_map.py)')
         return lambda x, y: math.inf

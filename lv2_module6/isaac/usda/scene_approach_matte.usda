@@ -10,7 +10,7 @@
 
 # scene_approach with matte wall panels (test 11-13): the real panels are glossy, the scene copies that with
 # specular_roughness 0.02 (near mirror). This variant only raises the roughness so a cuVSLAM drift run can be compared
-# glossy vs matte. Same geometry -> mission/map/scene_approach_matte is a copy of scene_approach.
+# glossy vs matte. Same geometry -> ros2_ws/map/scene_approach_matte is a copy of scene_approach.
 over "World"
 {
     over "maze"

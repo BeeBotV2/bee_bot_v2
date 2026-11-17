@@ -11,7 +11,7 @@
     바꾸기: ros2 launch isaac_system.launch.py use_ml:=false map:=saved …
     perception_node는 torch · ultralytics · zxingcpp가 시스템 python3에 있어야 뜬다 (없으면 그 노드만 죽음)
   경기장 벽: /map = nvblox_map이 walls_in 격자 위에 nvblox를 겹친 것. 실기 walls_in = /arena/walls(mission_manager가
-    plan.yaml 벽 선분으로 그림). Isaac은 장면의 벽 · 기둥을 그대로 그린 isaac/mission/map/<장면>/map.yaml(make_map.py)을
+    plan.yaml 벽 선분으로 그림). Isaac은 장면의 벽 · 기둥을 그대로 그린 ros2_ws/map/<장면>/map.yaml(make_map.py)을
     arena_map_pub.py가 /arena/static으로 내고 nvblox_map을 walls_in:=/arena/static으로 다시 띄운다 (node_params.py).
     장면 = isaac_sim.sh의 ISAAC_SCENE(기본 scene_sim). 그 장면 지도가 없거나 arena_map:=''면 실기처럼 /arena/walls
   pole_front_cam 점구름: depth_image_proc
@@ -47,7 +47,7 @@ ARGS = {
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCENE = os.path.splitext(os.path.basename(os.environ.get('ISAAC_SCENE', 'scene_sim.usda')))[0]
-ARENA_MAP = os.path.join(HERE, '..', '..', 'mission', 'map', SCENE, 'map.yaml')
+ARENA_MAP = os.path.join(HERE, '..', '..', '..', 'ros2_ws', 'map', SCENE, 'map.yaml')
 WALLS = '/arena/static'
 
 NODE_PARAMS = {  # 노드 이름: 명령줄 끝에 덧붙일 -p 값 (--after: 그 노드들을 먼저 고친 뒤에)

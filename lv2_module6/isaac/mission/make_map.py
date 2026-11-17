@@ -1,6 +1,6 @@
 """scene_sim.usda의 경기장 벽 · 기둥(/World/maze)으로 Nav2 지도(map.pgm + map.yaml)를 만든다.
 
-  ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py            # → isaac/mission/map/scene_sim/
+  ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py            # → ros2_ws/map/scene_sim/
   ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py --res 0.02 --z 0.02 0.45
 
 pxr가 필요해서 Isaac venv python으로 돌린다 (Isaac은 안 띄움 · USD 파일은 읽기만).
@@ -27,7 +27,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--res', type=float, default=0.05, help='[m/칸] — Nav2 costmap 해상도(0.05)와 같게')
     ap.add_argument('--z', type=float, nargs=2, default=[0.02, 0.47], help='[m] 장애물로 볼 높이 띠')
-    ap.add_argument('--out', default=os.path.join(HERE, 'map', 'scene_sim'))
+    ap.add_argument('--out', default=os.path.join(HERE, '..', '..', 'ros2_ws', 'map', 'scene_sim'))
     a = ap.parse_args()
 
     st = Usd.Stage.Open(SCENE)
