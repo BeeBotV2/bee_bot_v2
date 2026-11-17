@@ -13,7 +13,7 @@
 #   (map 인자 없으면 bringup 기본 map:=none — 지도·SLAM·Nav2 없이 뜸. 주행·미션 안 됨)
 #   ./start.sh --build [launch 인자]        # 저장소에서 실행할 때 colcon build 후 실행
 #   LAUNCH_FILE=stand_test.launch.py ./start.sh  # 팔 테스트용 가벼운 실행 (= isaac/loops/manipulator-launcher.sh)
-#   ./start.sh                              # 실기 기본 = map:=saved map_name:=scene_sim perception:=true use_pole_back_cam:=false (11-15)
+#   ./start.sh                              # 실기 기본 = map:=saved map_name:=maze_map_1711 perception:=true use_pole_back_cam:=false (11-15)
 #   ./start.sh map:=slam                    # 새 매핑 (map_name·perception 기본은 안 붙음)
 #
 # 두 가지 위치에서 동작한다.
@@ -288,14 +288,14 @@ fi
 # 지도 인자 없이 켜면 bringup 기본 map:=none — Nav2·SLAM이 안 떠서 미션 첫 이동이 nav_unavailable로 멈춤 (실기 11-12) → 크게 알림
 case " $* " in *" map:="*) ;; *) echo "WARN: map 인자 없음 → 지도 없이(map:=none) 시작 — Nav2·SLAM 안 뜸 (미션·주행 불가). 저장 지도: ./start.sh map:=saved [map_name:=이름]" ;; esac
 # 지도 폴더 기본 = 이 워크스페이스의 map/ (테스트베드 /ws/map 과 같은 자리) — map:=slam(새 폴더 매핑) · saved(저장 지도)
-# 실기 기본 (11-15) — 전체 bringup만: 인자를 안 주면 저장 지도 scene_sim · 인지 켬 · 폴 뒤 캠 끔. 직접 주면 그 값
-#   map:=slam(새 매핑)이면 map_name · perception은 안 붙임 (scene_sim을 덮어쓰지 않게 · 매핑 중 인지는 bringup auto=끔)
+# 실기 기본 (11-15) — 전체 bringup만: 인자를 안 주면 저장 지도 maze_map_1711 · 인지 켬 · 폴 뒤 캠 끔. 직접 주면 그 값
+#   map:=slam(새 매핑)이면 map_name · perception은 안 붙임 (maze_map_1711을 덮어쓰지 않게 · 매핑 중 인지는 bringup auto=끔)
 if [ "${LAUNCH_FILE:-bringup.launch.py}" = "bringup.launch.py" ]; then
   case " $* " in *" map:="*) ;; *) set -- "$@" "map:=saved" ;; esac
   map_mode=saved
   for a in "$@"; do case "$a" in map:=*) map_mode="${a#map:=}" ;; esac; done
   if [ "$map_mode" = saved ]; then
-    case " $* " in *" map_name:="*) ;; *) set -- "$@" "map_name:=scene_sim" ;; esac
+    case " $* " in *" map_name:="*) ;; *) set -- "$@" "map_name:=maze_map_1711" ;; esac
     case " $* " in *" perception:="*) ;; *) set -- "$@" "perception:=true" ;; esac
   fi
   case " $* " in *" use_pole_back_cam:="*) ;; *) set -- "$@" "use_pole_back_cam:=false" ;; esac

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """plan.yaml 실측 벽(arena_walls)으로 Nav2 지도(map.pgm + map.yaml)를 그린다 — 출발 자리(start)를 원점으로.
 
-  python3 isaac/mission/plan_to_map.py ros2_ws/map/scene_sim                       # plan.yaml start_pose_arena 기준
+  python3 isaac/mission/plan_to_map.py ros2_ws/map/maze_map_1711                       # plan.yaml start_pose_arena 기준
   python3 isaac/mission/plan_to_map.py ros2_ws/map/start_b --start 3.670,0.950,3.14159   # 다른 자리에서 켤 때
   python3 isaac/mission/map_to_nvblox.py ros2_ws/map/start_b ros2_ws/map/start_b   # 그다음 실기 nvblox 지도
 
 왜: 저장 지도의 map 프레임 = 로봇을 켠 자리. 출발 자리가 바뀌면 지도도 그 자리 기준으로 다시 그려야 한다
-  (mission_manager는 bringup start_pose:=로 따라가지만 저장 지도는 못 따라감). 씬(scene_sim.usda)은 벽 묶음째만
+  (mission_manager는 bringup start_pose:=로 따라가지만 저장 지도는 못 따라감). 씬(maze_map_1711.usda)은 벽 묶음째만
   옮겨져 실측과 최대 ~11 cm 어긋나서, 벽은 plan.yaml 실측 값으로 직접 그린다 (시작 박스·장소 받침대는 make_map.py처럼 뺌).
 그다음 bringup: map:=saved map_name:=<폴더 이름> start_pose:=<같은 x,y,yaw>
 """
