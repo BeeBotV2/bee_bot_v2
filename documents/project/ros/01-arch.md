@@ -305,6 +305,7 @@ flowchart TB
 ### 베이스 속도 명령 한 주기 (20Hz)
 
 1. **controller_server** — 경로를 따라가는 속도 /cmd_vel_nav를 냅니다.
+   `ml::RlNavController`는 RL 또는 fallback DWB에 명령 생성을 맡기기 전에 pose에서 경로 polyline까지의 최단거리도 확인한다. 기본 0.15 m 초과가 0.5초 지속되면 FollowPath를 실패시켜 Nav2 복구 흐름을 시작한다. `/diagnostics`에서 현재 오차와 상태를 확인한다.
    <sub>화살표: controller_server → twist_mux</sub>
 2. **가속 제한 → 충돌 감시** — 갑작스러운 가속을 막고, 점구름 다각형 안에 장애물이 있으면 감속·정지.
    <sub>화살표: twist_mux → velocity_smoother · velocity_smoother → collision_monitor · realsense2_camera → collision_monitor</sub>

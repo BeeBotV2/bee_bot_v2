@@ -403,6 +403,8 @@ string message
 
 `controller_server`(FollowPath = **ml::RlNavController** — 정책 OFF면 inner DWB) → `/cmd_vel_nav` → twist_mux → `/cmd_vel_mux` → velocity_smoother → `/cmd_vel_smoothed` → collision_monitor → `/cmd_vel` → diff_drive_controller. 전부 `geometry_msgs/TwistStamped`, 체인 전체 통일 (Jazzy 이후 Nav2 `enable_stamped_cmd_vel: true`).
 
+`ml::RlNavController`는 RL/DWB 명령 생성 전에 현재 pose와 변환된 경로 polyline 간 최단거리(cross-track error)를 감시한다. 기본 허용치 0.15 m를 0.5초 넘으면 `NoValidControl`을 발생시켜 Nav2가 0속도 출력 후 기존 FollowPath 복구 흐름으로 넘긴다. 값은 `FollowPath.path_deviation_tolerance`(m), `FollowPath.path_deviation_timeout`(s)로 조절하며, 허용치를 0으로 두면 끈다. `/diagnostics`의 `controller_server: FollowPath`에 `path_deviation_m`, `path_deviation_tolerance_m`, `path_deviation_state`가 나온다.
+
 | 이름 | 타입 | 보내는 쪽 → 받는 쪽 | 주기 · QoS |
 | --- | --- | --- | --- |
 | `/controller_server/FollowPath/toggle` | std_srvs/SetBool (서비스) | 운영자 → ml::RlNavController | Nav2 주행 정책 켜기/끄기 — false = inner DWB |
