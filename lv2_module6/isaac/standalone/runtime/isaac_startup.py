@@ -2,6 +2,9 @@
 opencr_bridge.py (virtual OpenCR on /tmp/opencr) so the ROS side can connect right away.
 Viewport starts with colliders hidden.
 While playing, puck ground truth goes to /tmp/beebot_sim_pucks.json (loops/pick_loop.py use_sim=true logs it).
+Navigation truth (robot base + every box, world frame and map frame = robot file pose) goes to /tmp/beebot_sim_nav.json
+(isaac/mission/nav_bench.py). BEE_DYN_OBS=1 adds a visual-only moving cylinder (/World/dyn_obs, seen by the cameras, no
+collider) placed from /tmp/beebot_dyn_obs.json {"x","y"} in the map frame; nav_bench.py drives it and checks clearance.
 Same result on every machine, no personal layout file.
 Window: Kit raises and focuses its own window several times while loading (GLFW XRaiseWindow/XSetInputFocus, which
 GNOME's focus-new-windows setting does not stop), so typing in a terminal gets interrupted. BEE_START_MINIMIZED=1
@@ -26,7 +29,7 @@ import omni.kit.app
 import omni.physics.tensors
 import omni.timeline
 import omni.usd
-from pxr import Gf, PhysxSchema, Usd, UsdGeom
+from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCENE = os.environ.get("ISAAC_SCENE") or os.path.join(HERE, "..", "..", "usda", "maze_map_1711.usda")  # isaac_sim.sh <scene>
@@ -36,6 +39,11 @@ TRUTH_EVERY = 15  # frames (~4 Hz at 60 fps)
 BASE = "/World/beebot/Geometry/base_footprint/base_link"  # 1 cm above base_footprint, same x y (URDF base_joint)
 PUCK = re.compile(r"puck_(box|cyl)_(red|green)_\d+$")
 PUCK_H = 0.06
+NAV_FILE = "/tmp/beebot_sim_nav.json"
+NAV_EVERY = 2  # frames
+DYN_FILE = "/tmp/beebot_dyn_obs.json"
+DYN_PRIM = "/World/dyn_obs"
+DYN_R, DYN_H = 0.10, 0.45  # [m] person-leg / bin sized obstacle, taller than the robot so the pole camera sees it
 ARM = "/World/beebot/Geometry/base_footprint/base_link/arm_base_link/shoulder_link/upper_arm_link/forearm_link/wrist_link/gripper_link"
 CAMS = {"gripper_cam": ARM + "/gripper_cam_link/gripper_cam_color_optical_frame"}
 
@@ -79,6 +87,63 @@ def write_truth(stage, pucks):
     with open(TRUTH_FILE + ".tmp", "w") as f:
         json.dump({"t": time.time(), "pucks": out, "cams": cams}, f)
     os.replace(TRUTH_FILE + ".tmp", TRUTH_FILE)
+
+
+_nav = {}
+
+
+def write_nav(stage):
+    """Robot base_link and box poses from PhysX in the map frame (map = robot prim file pose, isaac/mission/make_map.py)."""
+    if "view" not in _nav:
+        boxes = [str(p.GetPath()) for root in ("/World/start_boxes", "/World") for p in Usd.PrimRange(stage.GetPrimAtPath(root))
+                 if p.HasAPI(UsdPhysics.RigidBodyAPI) and ("start_boxes" in str(p.GetPath()) or "shelf_L" in str(p.GetPath()))]
+        boxes = sorted(set(boxes))
+        _nav["sim"] = omni.physics.tensors.create_simulation_view("numpy", omni.usd.get_context().get_stage_id())
+        _nav["view"] = _nav["sim"].create_rigid_body_view([BASE] + boxes)
+        _nav["map"] = omni.usd.get_world_transform_matrix(stage.GetPrimAtPath("/World/beebot")).GetInverse()
+    v, inv = _nav["view"], _nav["map"]
+    out = {}
+    for path, t in zip(v.prim_paths, v.get_transforms()):  # px py pz qx qy qz qw
+        m = Gf.Matrix4d().SetTransform(Gf.Rotation(Gf.Quatd(float(t[6]), float(t[3]), float(t[4]), float(t[5]))),
+                                       Gf.Vec3d(float(t[0]), float(t[1]), float(t[2]))) * inv
+        x = m.TransformDir(Gf.Vec3d(1, 0, 0))
+        c = m.ExtractTranslation()
+        key = "robot" if path == BASE else next(n for n in path.split("/") if n.startswith(("start_", "shelf_L")) and n != "start_boxes")
+        out[key] = [c[0], c[1], math.atan2(x[1], x[0])]
+    with open(NAV_FILE + ".tmp", "w") as f:
+        json.dump({"t": time.time(), "sim_t": omni.timeline.get_timeline_interface().get_current_time(), "poses": out}, f)
+    os.replace(NAV_FILE + ".tmp", NAV_FILE)
+
+
+def dyn_obs(stage, state):
+    """Move the visual obstacle to the pose in DYN_FILE (map frame); hide it when the file is absent."""
+    prim = stage.GetPrimAtPath(DYN_PRIM)
+    if not prim:
+        cyl = UsdGeom.Cylinder.Define(stage, DYN_PRIM)
+        cyl.CreateRadiusAttr(DYN_R)
+        cyl.CreateHeightAttr(DYN_H)
+        cyl.CreateDisplayColorAttr([(0.8, 0.3, 0.1)])
+        state["op"] = cyl.AddTranslateOp()
+        state["map"] = omni.usd.get_world_transform_matrix(stage.GetPrimAtPath("/World/beebot"))
+        prim = cyl.GetPrim()
+    try:
+        mt = os.path.getmtime(DYN_FILE)
+    except OSError:
+        mt = None
+    if mt == state.get("mt"):
+        return
+    state["mt"] = mt
+    img = UsdGeom.Imageable(prim)
+    if mt is None:
+        img.MakeInvisible()
+        return
+    try:
+        d = json.load(open(DYN_FILE))
+    except (OSError, ValueError):
+        return
+    w = state["map"].Transform(Gf.Vec3d(float(d["x"]), float(d["y"]), 0.0))
+    state["op"].Set(Gf.Vec3d(w[0], w[1], DYN_H / 2))
+    img.MakeVisible()
 
 
 CASE_FILE = "/tmp/beebot_pick_case.json"  # scene_pick_bot: {"box": 1..6, "side": "-y"|"+y", "jitter": [[dx, dy, dyaw_deg], ...]}
@@ -212,6 +277,7 @@ async def _setup():
     if os.environ.get("ISAAC_AUTOPLAY") == "1":  # 시연: Play를 자동으로
         timeline.play()
     frame = 0
+    dyn = {} if os.environ.get("BEE_DYN_OBS") == "1" else None
     while True:  # reset.sh: Stop(장면 처음 자세로) → Play — ROS 재시작은 isaac_sim.sh
         await app.next_update_async()
         frame += 1
@@ -222,9 +288,20 @@ async def _setup():
                 _phys.clear()
                 if frame % (TRUTH_EVERY * 240) == 0:
                     print(f"[isaac_startup] puck truth not written: {e!r}", flush=True)
+        if frame % NAV_EVERY == 0 and timeline.is_playing():
+            try:
+                write_nav(stage)
+            except Exception as e:  # noqa: BLE001 - never stop the reset loop over the truth file
+                _nav.clear()
+                if frame % (NAV_EVERY * 2000) == 0:
+                    print(f"[isaac_startup] nav truth not written: {e!r}", flush=True)
+        if dyn is not None:
+            with Usd.EditContext(stage, stage.GetSessionLayer()):
+                dyn_obs(stage, dyn)
         if os.path.exists(RESET_FILE):
             timeline.stop()
             _phys.clear()
+            _nav.clear()
             for _ in range(30):
                 await app.next_update_async()
             if orig:
