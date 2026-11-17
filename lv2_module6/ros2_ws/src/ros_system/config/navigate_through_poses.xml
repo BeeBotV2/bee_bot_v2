@@ -1,25 +1,18 @@
-
 <!--
-  bt_navigator through-poses 행동 트리 — Nav2 기본 navigate_through_poses_w_replanning_and_recovery.xml(Lyrical) 복사본.
-  바꾼 곳 넷:
-  ① RemovePassedGoals radius 0.7 → 0.40 m. 기본 0.7은 출발점에서 0.7 m 안의 첫 웨이포인트를
-     '이미 지나갔다'고 지워 버린다. 반대로 0.15는 컨트롤러 추종 오차(0.2~0.3 m)로 지나친 점을
-     체크하지 못해 같은 웨이포인트로 되돌아가며 맴돈다 (테스트베드 실측) → 0.40으로 절충.
-  ② 복구 순서: [코스트맵 지우기 → 제자리 회전(1.57 rad, 5초) → 안 되면 0.10 m 후진] → 대기.
-     회전이 벽에 막혀 실패하면 RoundRobin이 다음 복구에서 바로 후진한다.
-     회전이 성공해도 경로추종이 다시 105로 막히면 다음 복구가 후진이다 (회전만으로 못 빠져나온 경우).
-     후진 뒤에는 트리가 바깥 묶음을 처음부터 다시 돌아 전역 지도 기준으로 경로를 새로 계획한다.
-     CheckStopStatus 게이트는 뺐다 — 105 직후에는 아직 굴러서(속도 > 0.02) 게이트가 후진을 건너뛰었다 (테스트베드 실측).
-  ③ BackUp 후진 0.10 m / 0.05 m/s. pole_front_cam이 뒤를 못 봐서 0.30 m 후진은 벽에 박힌다.
-  ④ 복구 Spin/BackUp은 disable_collision_checks=true — 로컬 코스트맵의 유령 점이 복구를 막아
-     전역 지도상 빈 공간에서도 못 움직이던 데드락을 끊는다 (2026-11-12 테스트베드: backup failed: Collision Ahead).
-  ⑤ 최상위 재시도 3회 — 복구(회전/후진/대기)를 각 1회씩. 3회 안에 현재 웨이포인트에 못 가면 그 목표는 ABORTED.
-     이때 ros_system의 rewind 노드가 실제 주행 궤적을 0.4 m 후진해 이전 자세로 되돌린다. 그 뒤 같은
-     웨이포인트로 다시 시도하는 것은 CLI/오퍼레이터 몫이다 (BT는 현재 웨이포인트만 재시도하고 이전 점으로 돌아가지 않는다).
-  ros_system.launch.py가 bt_navigator의 default_nav_through_poses_bt_xml로 넘긴다.
+  bt_navigator 행동 트리 — NavigateThroughPoses (2026-11-18 재설계). navigate_to_pose.xml과 같은 구조 + 지난 경유점 지우기(RemovePassedGoals 0.40 m).
+  ① 재계획: 2 Hz로 남은 경로를 전역 costmap에 대 보고(ValidatePath), 막혔거나 목표가 바뀌었을 때만 새로 계획한다.
+     (경로를 매번 새로 내면 Lattice 경로가 조금씩 흔들려 추종이 출렁임 — 막힌 경우엔 0.5 s 안에 돌아갈 길을 낸다)
+  ② 복구에서 제자리 회전(Spin)을 뺐다 — 몸이 뒤로 0.245 m 길어 벽 옆에서 돌면 꼬리가 벽을 친다 (11-18 nav_bench:
+     장애물 앞에서 멈춘 뒤 Spin이 1 rad 돈 뒤에야 충돌을 알아채 벽에 닿음). 복구 = [1.5 s 기다림(움직이는 장애물이 비키길 —
+     costmap은 안 비움: 비우면 아직 있는 장애물을 잊고 다시 경로를 그 위로 냄)] → [비우고 0.10 m 후진, 충돌 검사 켬] → [2 s 기다림]. 그래도 안 되면 ABORTED → skill_navigate·mission이 다른 면으로.
+  ⑤ 계획 실패 복구는 205(출발 칸 막힘)·206(목표 칸 막힘)도 포함 — 기본 WouldAPlannerRecoveryHelp는 200·207·208만이라, 카메라 유령 점으로
+     출발 칸이 막히면 costmap을 안 비우고 바로 실패했고 다음 목표도 전부 205로 끝났음 (nav_bench 11-18).
+  ③ goal checker = general_goal_checker (통과 지점이라 넓게).
+  ④ BT ID를 Nav2 기본 파일과 다르게 — 같은 ID면 bt_navigator가 "conflicting BT XML"로 하나를 건너뜀.
+  ros_system.launch.py가 bt_navigator의 default_nav_through_poses_bt_xml 로 넘긴다.
 -->
-<root BTCPP_format="4" main_tree_to_execute="NavigateThroughPosesWReplanningAndRecovery">
-  <BehaviorTree ID="NavigateThroughPosesWReplanningAndRecovery">
+<root BTCPP_format="4" main_tree_to_execute="BeeNavigateThroughPoses">
+  <BehaviorTree ID="BeeNavigateThroughPoses">
     <RecoveryNode number_of_retries="3" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
         <ProgressCheckerSelector selected_progress_checker="{selected_progress_checker}" default_progress_checker="progress_checker" topic_name="progress_checker_selector"/>
@@ -27,14 +20,14 @@
         <PathHandlerSelector selected_path_handler="{selected_path_handler}" default_path_handler="PathHandler" topic_name="path_handler_selector"/>
         <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
         <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
-        <RateController hz="0.333">
-          <RecoveryNode number_of_retries="1" name="ComputePathThroughPoses">
-            <Fallback name="FallbackComputePathToPose">
+        <RateController hz="2.0">
+          <RecoveryNode number_of_retries="1" name="ComputePath">
+            <Fallback name="FallbackComputePath">
               <ReactiveSequence name="CheckIfNewPathNeeded">
                 <Inverter>
                   <GlobalUpdatedGoal/>
                 </Inverter>
-                <IsGoalNearby path="{path}" proximity_threshold="4.0" max_robot_pose_search_dist="1.5"/>
+                <IsGoalNearby path="{path}" proximity_threshold="10.0" max_robot_pose_search_dist="1.5"/>
                 <TruncatePathLocal input_path="{path}" output_path="{remaining_path}" distance_forward="-1" distance_backward="0.0" />
                 <ValidatePath path="{remaining_path}"/>
               </ReactiveSequence>
@@ -44,7 +37,7 @@
               </ReactiveSequence>
             </Fallback>
             <Sequence>
-              <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+              <AreErrorCodesPresent error_code="{compute_path_error_code}" error_codes_to_check="200;205;206;207;208"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
           </RecoveryNode>
@@ -60,20 +53,16 @@
       <Sequence>
         <Fallback>
           <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
-          <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+          <AreErrorCodesPresent error_code="{compute_path_error_code}" error_codes_to_check="200;205;206;207;208"/>
         </Fallback>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
           <RoundRobin name="RecoveryActions">
-            <Sequence name="ClearAndSpin">
-              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
-              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
-              <Spin spin_dist="1.57" time_allowance="5.0" disable_collision_checks="true" error_code_id="{spin_error_code}" error_msg="{spin_error_msg}"/>
-            </Sequence>
+            <Wait wait_duration="1.5" error_code_id="{wait_error_code}" error_msg="{wait_error_msg}"/>
             <Sequence name="ClearAndBackUp">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
-              <BackUp backup_dist="0.10" backup_speed="0.05" disable_collision_checks="true" error_code_id="{backup_error_code}" error_msg="{backup_error_msg}"/>
+              <BackUp backup_dist="0.10" backup_speed="0.05" disable_collision_checks="false" error_code_id="{backup_error_code}" error_msg="{backup_error_msg}"/>
             </Sequence>
             <Wait wait_duration="2.0" error_code_id="{wait_error_code}" error_msg="{wait_error_msg}"/>
           </RoundRobin>
