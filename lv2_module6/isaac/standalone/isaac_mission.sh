@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# maze_map_1711.usda에서 실기(Jetson start.sh)와 같은 bringup 인자로 미션 한 판 — 신호등 · 바코드 · 퍽을 전부 ROS 인지로 읽는다
+# scene_sim.usda에서 실기(Jetson start.sh)와 같은 bringup 인자로 미션 한 판 — 신호등 · 바코드 · 퍽을 전부 ROS 인지로 읽는다
 # (isaac/mission/run_mission.py처럼 신호·바코드를 읽은 셈 치지 않음). 폴 뒤 카메라는 끔.
 #
 #   isaac/standalone/isaac_mission.sh map     # 처음 한 번: 장면 매핑 → ros2_ws/map/maze_map_1711/ (Isaac 창을 닫거나 Ctrl+C로 끄면 저장)

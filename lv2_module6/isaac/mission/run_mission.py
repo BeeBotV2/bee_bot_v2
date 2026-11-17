@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Isaac 전체 미션 한 판 — 신호등 · 시작 바코드는 읽었다고 치고 mission_manager에 start를 보내 끝까지 지켜본다.
 
-  python3 isaac/mission/run_mission.py                          # R5 Y3 G4 · P2-01 (maze_map_1711 퍽으로 되는 조합)
+  python3 isaac/mission/run_mission.py                          # R5 Y3 G4 · P2-01 (scene_sim 퍽으로 되는 조합)
   python3 isaac/mission/run_mission.py --seq RGRRGRGGYGYG --code P2-02
   python3 isaac/mission/run_mission.py --clear-basket           # 적재함 장부가 남아 시작이 거부될 때 먼저 비움
   python3 isaac/mission/run_mission.py --list                   # 장면 퍽으로 풀리는 R·Y·G 횟수 조합 목록
@@ -13,7 +13,7 @@
 흐름 (mission_manager): GO_OBSERVE → BARCODE → READ → SURVEY → BUILD → VERIFY → RETURN → DONE
   BARCODE 단계 동안 /mission/qr, READ 단계 동안 /mission/signal_status(ok=true)를 1초마다 낸다 — 단계가 시작된 뒤에 받은 값만 쓰기 때문.
   나머지(이동 · 인지 · 집기 · 놓기)는 실기와 같은 노드가 그대로 한다.
-신호 조건 (mission_solver allocate): R ≤ 빨간 퍽 수 · G ≤ 초록 퍽 수 · 남는 퍽(Y)이 한 모양 — maze_map_1711은 빨강 7(box 4 · cyl 3) · 초록 5(box 2 · cyl 3)
+신호 조건 (mission_solver allocate): R ≤ 빨간 퍽 수 · G ≤ 초록 퍽 수 · 남는 퍽(Y)이 한 모양 — scene_sim은 빨강 7(box 4 · cyl 3) · 초록 5(box 2 · cyl 3)
   예: R5 Y3 G4 됨 · 공개 연습 Q1(R4 Y2 G6)은 초록이 모자라 no_allocation
 Ctrl+C = /cmd/mission abort. 끝나면 DONE 0 · ERROR 1로 나간다. 회차 기록: ~/.ros/mission/<시각>/
 """
@@ -35,7 +35,7 @@ from plan.msg import MissionState
 NAMES = {'R': 'red', 'Y': 'yellow', 'G': 'green'}
 IDLE = ('IDLE', 'DONE', 'ERROR')   # start를 받는 단계 (DONE · ERROR 뒤에도 phase는 그대로 남음)
 ORDER = {'asc': 'P2-01', 'desc': 'P2-02'}   # 발제: P2-01 · P2-03 오름차순 · P2-02 · P2-04 내림차순
-SCENE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'usda', 'maze_map_1711.usda')
+SCENE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'usda', 'scene_sim.usda')
 
 
 def scene_pucks(path):
@@ -61,7 +61,7 @@ def main():
     ap.add_argument('--counts', help='신호 횟수 예: R4Y4G4 — 순서는 --seed로 섞음 (--seq 대신)')
     ap.add_argument('--seed', type=int, help='--counts가 없으면 장면 퍽으로 풀리는 조합 중 랜덤 · 있으면 순서만 섞음')
     ap.add_argument('--from-survey', action='store_true', help='관측 단계 없이 start:FROM_SURVEY:<바코드>:<횟수> 한 번만 보냄')
-    ap.add_argument('--scene', default=SCENE, help='퍽 개수를 읽을 장면 (기본 usda/maze_map_1711.usda)')
+    ap.add_argument('--scene', default=SCENE, help='퍽 개수를 읽을 장면 (기본 usda/scene_sim.usda)')
     ap.add_argument('--list', action='store_true', help='장면 퍽으로 풀리는 횟수 조합만 찍고 끝')
     ap.add_argument('--clear-basket', action='store_true', help='시작 전 /coordinator/basket_clear')
     a = ap.parse_args()

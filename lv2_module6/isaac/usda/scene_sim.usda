@@ -21,7 +21,7 @@
             string boundCamera = "/OmniverseKit_Persp"
         }
         dictionary omni_layer = {
-            string authoring_layer = "./maze_map_1711.usda"
+            string authoring_layer = "./scene_sim.usda"
             dictionary locked = {
             }
             dictionary muteness = {

@@ -9,7 +9,7 @@ Isaac plays the OpenCR: it speaks the same ASCII serial protocol as firmware/bee
                   E,0,0,0,0,0,0,0,0 every 0.5 s (no motor errors in sim)
 
 Usage:
-  1. Open maze_map_1711.usda (or beebot.usda) with the beebot Physics variant "physx", press Play.
+  1. Open scene_sim.usda (or beebot.usda) with the beebot Physics variant "physx", press Play.
   2. Run this file once in the Script Editor. It prints the port link (default /tmp/opencr).
   3. ros2 launch ros_system ros_system.launch.py port:=/tmp/opencr
      (or bringup with the same port:= argument)

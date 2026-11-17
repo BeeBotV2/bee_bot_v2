@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Isaac Sim + ROS 쪽을 한 번에 띄운다. Isaac을 끄면 ROS 쪽도 꺼진다.
 #
-#   isaac/standalone/isaac_sim.sh                 # 기본 장면 usda/maze_map_1711.usda
+#   isaac/standalone/isaac_sim.sh                 # 기본 장면 usda/scene_sim.usda
 #   isaac/standalone/isaac_sim.sh lab             # usda/scene_<이름>.usda (sim · lab …) — 전체 이름이나 파일 경로도 됨
 #   ISAACSIM_VENV=<venv 경로> isaac/standalone/isaac_sim.sh   # venv 위치가 다를 때 (기본 ~/pa-course/.venv-isaacsim)
 #   ISAAC_ROS_LAUNCH=isaac_manipulator_demo.launch.py ISAAC_AUTOPLAY=1 isaac/standalone/isaac_sim.sh  # SLAM·Nav2 없는 팔 시연
@@ -12,7 +12,7 @@
 #   BEE_SIM_NOISE=0 isaac/standalone/isaac_sim.sh   # 센서 노이즈 끔 (기본 1 = 컬러 모션블러 · 깊이 노이즈 · IMU 노이즈, 실물보다 약하게 · 2 = 두 배)
 #   필요: ros2_ws 빌드(install/), sudo apt install ros-lyrical-depth-image-proc
 #
-# 1. Isaac (isaac_startup.py): maze_map_1711.usda 열기(Physics variant physx, 파일엔 저장 안 됨)
+# 1. Isaac (isaac_startup.py): scene_sim.usda 열기(Physics variant physx, 파일엔 저장 안 됨)
 #    · opencr_bridge.py 실행 (pty만 열고 /tmp/opencr 링크는 Play 때). Script Editor는 띄우지 않는다
 # 2. Play를 누르면 /tmp/opencr가 생기고 그때 ROS (isaac_system.launch.py)를 띄운다 — Play 전에 띄우면
 #    BeebotSystemHardware가 S를 3초 안에 못 받아 활성화 실패 → 컨트롤러 전부 안 뜸 (2026-10-29)

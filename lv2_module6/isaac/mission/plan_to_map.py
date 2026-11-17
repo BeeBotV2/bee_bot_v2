@@ -6,7 +6,7 @@
   python3 isaac/mission/map_to_nvblox.py ros2_ws/map/start_b ros2_ws/map/start_b   # 그다음 실기 nvblox 지도
 
 왜: 저장 지도의 map 프레임 = 로봇을 켠 자리. 출발 자리가 바뀌면 지도도 그 자리 기준으로 다시 그려야 한다
-  (mission_manager는 bringup start_pose:=로 따라가지만 저장 지도는 못 따라감). 씬(maze_map_1711.usda)은 벽 묶음째만
+  (mission_manager는 bringup start_pose:=로 따라가지만 저장 지도는 못 따라감). 씬(scene_sim.usda)은 벽 묶음째만
   옮겨져 실측과 최대 ~11 cm 어긋나서, 벽은 plan.yaml 실측 값으로 직접 그린다 (시작 박스·장소 받침대는 make_map.py처럼 뺌).
 그다음 bringup: map:=saved map_name:=<폴더 이름> start_pose:=<같은 x,y,yaw>
 """

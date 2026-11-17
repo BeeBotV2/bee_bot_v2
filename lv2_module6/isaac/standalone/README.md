@@ -19,7 +19,7 @@ develop을 머지한 뒤에는 꼭 다시 빌드한다. 새 설정 파일이 `in
 2. 실행한다.
 
    ```bash
-   isaac/standalone/isaac_sim.sh          # 기본 장면 usda/maze_map_1711.usda
+   isaac/standalone/isaac_sim.sh          # 기본 장면 usda/scene_sim.usda
    isaac/standalone/isaac_sim.sh approach # usda/scene_approach.usda — 고를 수 있는 것: sim · lab · approach · approach_matte (파일 이름 · 경로도 됨)
    ```
 
