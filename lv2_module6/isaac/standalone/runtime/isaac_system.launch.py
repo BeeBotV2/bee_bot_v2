@@ -43,6 +43,7 @@ ARGS = {
     'use_perception': 'true',    # YOLO · signal_decoder · hand_relative (매핑 중에도)
     'operation': 'AUTO',         # coordinator가 skill을 실행하는 모드
     'taught_routes': os.environ.get('TAUGHT_ROUTES', 'false'),
+    'use_ekf': 'false',          # EKF는 아래에서 /clock이 온 뒤에 따로 띄움 (bringup 것은 끔)
     'start_pose': os.environ.get('START_POSE', ''),  # '[x, y, yaw]' arena — SPAWN과 같게 (구간 하나만 시험, 11-16)  # 움직임 정답표 재생 (~/.ros/routes) — TAUGHT_ROUTES=true ./isaac_sim.sh (11-15)
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -86,6 +87,11 @@ def generate_launch_description():
                        output='screen', condition=arena),
         ExecuteProcess(cmd=['python3', os.path.join(HERE, 'node_params.py'), 'nvblox_map', f'walls_in:={WALLS}'],
                        output='screen', condition=arena),
+        # EKF: /clock보다 먼저 뜨면 시작 직후 abort(-6) → map←base TF가 끊겨 costmap이 'map' frame을 못 찾음
+        #   (11-17 실행 4번 중 2번). 같은 노드(bringup ekf_imu 기본 true = ekf.yaml 그대로)를 /clock 한 번 받은 뒤에 띄움
+        Node(package='robot_localization', executable='ekf_node', name='ekf_filter_node', output='screen',
+             prefix=["bash -c 'until timeout 5 ros2 topic echo --once /clock >/dev/null 2>&1; do sleep 0.5; done; exec \"$@\"' --"],
+             parameters=[PathJoinSubstitution([FindPackageShare('ros_system'), 'config', 'ekf.yaml'])]),
         # Isaac 영상은 best_effort(SENSOR_DATA) — reliable로 구독하면 연결되지 않는다. 노드는 lazy 구독(points 구독자가 있어야 입력을 받음)
         Node(package='depth_image_proc', executable='point_cloud_xyz_node', name='pole_front_cam_points', output='screen',
              remappings=[('image_rect', DEPTH), ('points', NS + '/depth/color/points')],

@@ -7,7 +7,7 @@
 #   BEE_BLINK_SEQ=RGYRGRYGRGYR BEE_BARCODE=P2-02 isaac/standalone/isaac_mission.sh   # 신호(기본 blink.py SEED) · 바코드(기본 장면 값 P2-01)
 #   BEE_BLINK_SEED=7 isaac/standalone/isaac_mission.sh                               # 랜덤 신호 — 장면 퍽으로 풀리는 조합만 (blink.py)
 #   다른 Isaac 환경변수(ISAAC_HEADLESS · BEE_SIM_NOISE · OPENCR_TWIST_SCALE …)는 isaac_sim.sh 그대로
-#   BEE_RVIZ=0 isaac/standalone/isaac_mission.sh   # odom_nvblox RViz 안 띄움 (기본: 컨트롤러가 뜬 뒤 자동으로 띄움 · 녹화 끔은 RVIZ_RECORD=0)
+#   BEE_RVIZ=1 isaac/standalone/isaac_mission.sh   # odom_nvblox RViz도 띄움 (기본: 안 띄움 · 띄우면 컨트롤러가 뜬 뒤 자동 · 녹화 끔은 RVIZ_RECORD=0)
 #
 # 같이 띄우는 것 (map · mission 둘 다): runtime/cm_kick.py — controller_manager가 /robot_description을 못 받고 멈추면
 #   (11-16 4회 연속) 같은 URDF를 다시 보내 살림 → 그 뒤 isaac/loops/vis/odom_nvblox.sh. Isaac을 끄면 RViz도 끔
@@ -44,7 +44,7 @@ echo "[isaac_mission] ${1:-mission} · ROS 인자: $ISAAC_ROS_ARGS"
 (export FASTDDS_DEFAULT_PROFILES_FILE="${FASTDDS_DEFAULT_PROFILES_FILE:-$HERE/../../ros2_ws/fastdds_local_only.xml}" ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
  source /opt/ros/lyrical/setup.bash
  /usr/bin/python3 "$HERE/runtime/cm_kick.py"
- [ "${BEE_RVIZ:-1}" = 0 ] || exec setsid "$HERE/../loops/vis/odom_nvblox.sh") &
+ [ "${BEE_RVIZ:-0}" = 0 ] || exec setsid "$HERE/../loops/vis/odom_nvblox.sh") &
 EXTRA=$!
 cleanup() {  # exec setsid라 RViz 단계면 $EXTRA = start.sh(세션 리더) — rviz2만 끄면 start.sh가 녹화(record.sh)까지 끄고 끝남
   trap - EXIT INT TERM HUP

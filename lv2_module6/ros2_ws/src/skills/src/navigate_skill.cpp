@@ -83,6 +83,9 @@ public:
     look_m_ = declare_parameter<double>("nav_look_m", 0.6);
     near_m_ = declare_parameter<double>("nav_near_m", 0.15);
     near_yaw_ = declare_parameter<double>("nav_near_yaw", 0.8);  // [rad]
+    // 출발 전 제자리 회전: 첫 경유점(없으면 플래너 경로 0.3 m 앞)이 이보다 틀어져 있으면 먼저 돎. 0 = 안 함
+    //   11-17 시뮬: 상자 4·5에서 물러난 뒤 DWB가 제자리에서 안 돌고 호를 그리며 꺾다 벽에 부딪힘
+    pre_spin_rad_ = declare_parameter<double>("nav_pre_spin_deg", 45.0) * M_PI / 180.0;
     via_through_ = declare_parameter<bool>("via_through", true);  // 경유점 지도 길을 NavigateThroughPoses 한 번으로 (머리말)
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     doors_ = declare_parameter<std::vector<double>>("doors", std::vector<double>{});  // 문마다 7개 — skills.yaml 설명
@@ -226,8 +229,31 @@ private:
         }
       }
       legs->push_back(goal);  // 경로 실패면 문 없이 그대로 (Nav2가 다시 계획하며 실패를 알림)
-      if (via && via_through_ && through_->action_server_is_ready()) drive_through(legs, flags, seq, done);
-      else drive(legs, 0, flags, seq, done);
+      const auto go = [this, legs, via, flags, seq, done]() {
+        if (seq != nav_seq_) return;
+        if (via && via_through_ && through_->action_server_is_ready()) drive_through(legs, flags, seq, done);
+        else drive(legs, 0, flags, seq, done);
+      };
+      // 출발 전 제자리 회전 — 충돌 검사 켬. 막히면(상자 · 벽이 몸 회전 반경 안) 돌지 않고 예전처럼 Nav2로
+      Pose2d me;
+      double aim = NAN;
+      if (pre_spin_rad_ > 0.0 && spin_->action_server_is_ready() && odom_pose(me, "map")) {
+        if (legs->size() > 1) {
+          aim = std::atan2(legs->front().pose.position.y - me.y, legs->front().pose.position.x - me.x);
+        } else if (r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result) {
+          for (const auto & q : r.result->path.poses) {
+            const double dx = q.pose.position.x - me.x, dy = q.pose.position.y - me.y;
+            if (std::hypot(dx, dy) > 0.3) { aim = std::atan2(dy, dx); break; }
+          }
+        }
+      }
+      const double err = std::isfinite(aim) ? std::remainder(aim - me.yaw, 2 * M_PI) : 0.0;
+      if (std::abs(err) <= pre_spin_rad_) { go(); return; }
+      RCLCPP_INFO(get_logger(), "출발 전 제자리 회전 %.0f°", err * 180.0 / M_PI);
+      send_spin(err, seq, [this, go](bool ok, const std::string &) {
+        if (!ok) RCLCPP_WARN(get_logger(), "출발 전 회전 실패 (막힘) — 그대로 Nav2");
+        go();
+      }, true);
     };
     opt.goal_response_callback = [this, goal, flags, seq, done](const rclcpp_action::ClientGoalHandle<ComputePath>::SharedPtr & h) {
       if (!h && seq == nav_seq_) drive(std::make_shared<std::vector<Pose>>(1, goal), 0, flags, seq, done);
@@ -236,11 +262,11 @@ private:
   }
 
   // Spin (odom 기준 상대 각도) — 결과를 cb(ok, why)로
-  void send_spin(double yaw, uint64_t seq, std::function<void(bool, const std::string &)> cb) {
+  void send_spin(double yaw, uint64_t seq, std::function<void(bool, const std::string &)> cb, bool check = false) {
     Spin::Goal g;
     g.target_yaw = static_cast<float>(yaw);
     g.time_allowance.sec = static_cast<int32_t>(std::abs(yaw) / 0.3 + 10.0);
-    g.disable_collision_checks = true;  // 사람이 몬 길 — 벽 옆 회전도 그대로 (collision_monitor는 계속 켜짐)
+    g.disable_collision_checks = !check;  // 기본 끔: 사람이 몬 길 — 벽 옆 회전도 그대로 (collision_monitor는 계속 켜짐)
     rclcpp_action::Client<Spin>::SendGoalOptions opt;
     opt.goal_response_callback = [this, seq, cb](const rclcpp_action::ClientGoalHandle<Spin>::SharedPtr & h) {
       if (seq != nav_seq_) { if (h) spin_->async_cancel_goal(h); return; }
@@ -866,7 +892,7 @@ private:
   std::string route_mode_ = "follow";
   bool anchor_ = true;
   bool taught_ = false;
-  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052, settle_s_ = 0.8;
+  double dev_m_ = 0.30, dev_rad_ = 0.26, route_speed_ = 0.15, fix_rad_ = 0.052, settle_s_ = 0.8, pre_spin_rad_ = 0.785;
   bool fallback_nav2_ = false;
   int unstuck_tries_ = 2;
   double unstuck_back_m_ = 0.15;
