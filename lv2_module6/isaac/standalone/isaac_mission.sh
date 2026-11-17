@@ -7,10 +7,9 @@
 #   BEE_BLINK_SEQ=RGYRGRYGRGYR BEE_BARCODE=P2-02 isaac/standalone/isaac_mission.sh   # 신호(기본 blink.py SEED) · 바코드(기본 장면 값 P2-01)
 #   BEE_BLINK_SEED=7 isaac/standalone/isaac_mission.sh                               # 랜덤 신호 — 장면 퍽으로 풀리는 조합만 (blink.py)
 #   다른 Isaac 환경변수(ISAAC_HEADLESS · BEE_SIM_NOISE · OPENCR_TWIST_SCALE …)는 isaac_sim.sh 그대로
-#   BEE_RVIZ=0 isaac/standalone/isaac_mission.sh   # odom_nvblox RViz 안 띄움 (기본: 컨트롤러가 뜬 뒤 자동으로 띄움 · 녹화 끔은 RVIZ_RECORD=0)
 #
 # 같이 띄우는 것 (map · mission 둘 다): runtime/cm_kick.py — controller_manager가 /robot_description을 못 받고 멈추면
-#   (11-16 4회 연속) 같은 URDF를 다시 보내 살림 → 그 뒤 isaac/loops/vis/odom_nvblox.sh. Isaac을 끄면 RViz도 끔
+#   (11-16 4회 연속) 같은 URDF를 다시 보내 살림. RViz는 따로: isaac/loops/vis/odom_nvblox.sh
 #
 # 미션 시작은 실기처럼 운영 도구로 (다른 터미널 — Isaac과 같은 FASTDDS_DEFAULT_PROFILES_FILE이어야 보임 · 없으면 local_only):
 #   tools/cli/start.sh mission start    # 상태: tools/cli/start.sh mission status · 그만: mission abort
@@ -22,7 +21,7 @@
 # ros2_ws/map은 .gitignore — 여기 만든 시뮬 지도는 Jetson의 실기 지도(같은 이름 scene_sim)와 섞이지 않는다.
 HERE=$(dirname "$(realpath "$0")")
 MAP_DIR=$(realpath -m "$HERE/../../ros2_ws/map")
-NAME=scene_sim
+NAME=maze_map_1711
 COMMON="map_dir:=$MAP_DIR map_name:=$NAME use_pole_back_cam:=false operation:=AUTO use_perception:=auto arena_map:=none"
 export BEE_BACK_CAM=false  # camera_adapter도 앞 · 손 카메라만
 
@@ -40,16 +39,14 @@ case "${1:-mission}" in
 esac
 export ISAAC_AUTOPLAY="${ISAAC_AUTOPLAY:-1}"
 echo "[isaac_mission] ${1:-mission} · ROS 인자: $ISAAC_ROS_ARGS"
-# cm_kick · RViz는 Isaac 쪽과 같은 Fast DDS 프로파일로 (isaac_sim.sh와 같은 값). 자기 세션(setsid)이라 Ctrl+C는 아래 cleanup이 처리
+# cm_kick은 Isaac 쪽과 같은 Fast DDS 프로파일로 (isaac_sim.sh와 같은 값). 끄는 건 아래 cleanup
 (export FASTDDS_DEFAULT_PROFILES_FILE="${FASTDDS_DEFAULT_PROFILES_FILE:-$HERE/../../ros2_ws/fastdds_local_only.xml}" ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
  source /opt/ros/lyrical/setup.bash
- /usr/bin/python3 "$HERE/runtime/cm_kick.py"
- [ "${BEE_RVIZ:-1}" = 0 ] || exec setsid "$HERE/../loops/vis/odom_nvblox.sh") &
+ /usr/bin/python3 "$HERE/runtime/cm_kick.py") &
 EXTRA=$!
-cleanup() {  # exec setsid라 RViz 단계면 $EXTRA = start.sh(세션 리더) — rviz2만 끄면 start.sh가 녹화(record.sh)까지 끄고 끝남
+cleanup() {
   trap - EXIT INT TERM HUP
-  if [ "$(ps -o sid= -p $EXTRA 2>/dev/null | tr -d ' ')" = "$EXTRA" ]; then pkill -TERM -x rviz2 -s $EXTRA
-  else kill $EXTRA 2>/dev/null; pkill -f "$HERE/runtime/cm_kick.py"; fi
+  kill $EXTRA 2>/dev/null; pkill -f "$HERE/runtime/cm_kick.py"
 }
 trap cleanup EXIT INT TERM HUP
 "$HERE/isaac_sim.sh" sim

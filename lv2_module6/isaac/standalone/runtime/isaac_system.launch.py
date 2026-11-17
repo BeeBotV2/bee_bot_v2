@@ -22,7 +22,7 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -43,12 +43,18 @@ ARGS = {
     'use_perception': 'true',    # YOLO · signal_decoder · hand_relative (매핑 중에도)
     'operation': 'AUTO',         # coordinator가 skill을 실행하는 모드
     'taught_routes': os.environ.get('TAUGHT_ROUTES', 'false'),
+    'use_ekf': 'false',          # EKF는 아래에서 늦게 띄움 (EKF_DELAY_S 설명)
     'start_pose': os.environ.get('START_POSE', ''),  # '[x, y, yaw]' arena — SPAWN과 같게 (구간 하나만 시험, 11-16)  # 움직임 정답표 재생 (~/.ros/routes) — TAUGHT_ROUTES=true ./isaac_sim.sh (11-15)
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCENE = os.path.splitext(os.path.basename(os.environ.get('ISAAC_SCENE', 'scene_sim.usda')))[0]
 ARENA_MAP = os.path.join(HERE, '..', '..', 'mission', 'map', SCENE, 'map.yaml')
 WALLS = '/arena/static'
+
+# EKF를 launch보다 이만큼 늦게 띄움 [s, 벽시계] (11-17): launch는 Play 직후라 /clock이 0 근처 — EKF가 history_length(0.6 s)만큼
+#   과거를 빼다 'cannot store a negative time point in rclcpp::Time'로 죽음 → odom→base_footprint TF가 없어 RViz 로봇·nvblox·costmap이 멈춤
+# ponytail: 벽시계 지연 — 실시간 비율이 아주 낮아 5 s 뒤에도 /clock이 0.6 s 미만이면 다시 남. 그때는 /clock을 기다리는 방식으로
+EKF_DELAY_S = 5.0
 
 NODE_PARAMS = {  # 노드 이름: 명령줄 끝에 덧붙일 -p 값 (--after: 그 노드들을 먼저 고친 뒤에)
     'state_manager': [],  # -p를 params 파일 뒤로만 (스캔 자세 덮어쓰기는 없앰 — 11-09 스캔 자세 삭제)
@@ -72,6 +78,10 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare('bringup'), 'launch', 'bringup.launch.py'])),
             launch_arguments={k: LaunchConfiguration(k) for k in ARGS}.items()),
+        # 실기 ros_system.launch.py의 EKF(ekf_imu:=true 기본)와 같은 노드 · 같은 ekf.yaml — 늦게 띄우는 것만 다름
+        TimerAction(period=EKF_DELAY_S, actions=[Node(
+            package='robot_localization', executable='ekf_node', name='ekf_filter_node', output='screen',
+            parameters=[PathJoinSubstitution([FindPackageShare('ros_system'), 'config', 'ekf.yaml']), {'use_sim_time': True}])]),
         # Isaac 카메라 → 실기 RealSense 토픽 모양 (depth 32FC1→16UC1, camera_info) — 설명: camera_adapter.py
         ExecuteProcess(cmd=['python3', os.path.join(HERE, 'camera_adapter.py'), '--ros-args', '-p', 'use_sim_time:=true',
                             *([] if ARGS['use_pole_back_cam'] == 'true' else ['-p', "cameras:=['pole_front_cam','gripper_cam']"])],
