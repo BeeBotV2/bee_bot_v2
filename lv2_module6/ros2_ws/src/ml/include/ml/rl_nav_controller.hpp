@@ -6,6 +6,8 @@
 #pragma once
 
 #include <array>
+#include <chrono>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -125,6 +127,12 @@ private:
   double max_lin_ = 0.26, max_ang_ = 1.82, v_min_ratio_ = -0.2;
   double speed_ratio_ = 1.0;
   bool heading_cap_ = true;     // 경로 방향 속도 상한 (heading_speed_cap)
+  double path_deviation_tolerance_ = 0.15;  // [m] 경로 횡오차 허용치, 0이면 감시 비활성화
+  double path_deviation_timeout_ = 0.5;     // [s] 허용치 초과가 지속되어야 추종 실패 처리
+  bool path_deviation_active_ = false;
+  std::chrono::steady_clock::time_point path_deviation_started_at_{};
+  double last_path_deviation_m_ = std::numeric_limits<double>::quiet_NaN();
+  bool path_deviation_exceeded_ = false;
   double extra_lin_vel_ = 0.0;  // [m/s] 정책 출력에 더하는 추가 선속도 (0~0.10, max_lin 상한 유지)
   double extra_ang_vel_ = 0.0;  // [rad/s] 정책 출력에 더하는 추가 각속도 (0~0.50, max_ang 상한 유지)
   int points_stride_ = 4;

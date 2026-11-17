@@ -133,6 +133,8 @@ controller_server:
       z_min: 0.03              # [m] base 기준 — nvblox slice 0.03~0.30 m
       z_max: 0.30
       cloud_timeout: 1.5       # [s] 점구름이 이보다 오래되면 바이패스 — 11-15: 0.5 → 1.5 (nvblox publish_layer_rate_hz 2.0 = 0.5 s 간격이라 조금만 늦어도 DWB로 넘어가 'No valid trajectories')
+      path_deviation_tolerance: 0.15  # [m] 현재 pose에서 추종 경로 polyline까지의 최단거리 허용치 (0 = 비활성)
+      path_deviation_timeout: 0.5     # [s] 허용치 초과 지속시간. 넘으면 FollowPath 실패 → 기존 BT 복구 경로
       lookahead: 5             # 관측 웨이포인트 개수 (학습과 같게)
       wp_step: 0.30            # [m] 웨이포인트 간격
       wp_scale: 2.0            # 관측 정규화
