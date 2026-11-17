@@ -116,6 +116,14 @@ sensor_msgs::msg::Image mat_to_image(const cv::Mat & bgr, const std_msgs::msg::H
 // ---------- 바코드 (zxing-cpp C++) — 1D(줄무늬)만 · 빌드에 라이브러리가 없으면 없음
 struct PerceptionNode::Barcode {
   struct Hit { std::string text; std::array<cv::Point2d, 4> pts; };
+  std::vector<Hit> candidates(const cv::Mat & bgr) {
+    std::vector<Hit> out;
+    for (const auto & r : barcode_candidates(bgr)) {
+      out.push_back({"", {cv::Point2d(r.x, r.y), cv::Point2d(r.x + r.width, r.y),
+                           cv::Point2d(r.x + r.width, r.y + r.height), cv::Point2d(r.x, r.y + r.height)}});
+    }
+    return out;
+  }
   std::vector<Hit> read(const cv::Mat & bgr) {
     std::vector<Hit> out;
 #ifdef PERCEPTION_HAVE_ZXING
@@ -1421,8 +1429,10 @@ void PerceptionNode::read_barcodes() {
   const bool grip = std::any_of(frames.begin(), frames.end(), [](const auto & f) { return f.first == "gripper_cam"; });
   const bool pole_too = barcode_always_ || !grip || wall_s() < barcode_from_ + barcode_pole_s_;  // 손 카메라가 없으면 pole이 계속
   for (const auto & [cam, s] : frames) {
-    if (cam == "pole_front_cam" && !pole_too) continue;  // 관측 중 pole은 신호등 — 바코드(한 장 최대 180 ms)가 같은 스레드의 YOLO를 막지 않게
-    const auto hits = barcode_->read(s.bgr);
+    // pole 카메라는 계속 신호등 관측에 사용한다. barcode_pole_s 뒤에는 ZXing 디코딩을
+    // 돌리지 않고 저비용 라벨 후보만 추적해, 목표 정렬 준비와 신호 확정을 병렬로 진행한다.
+    const auto hits = (cam == "pole_front_cam" && !pole_too)
+      ? barcode_->candidates(s.bgr) : barcode_->read(s.bgr);
     if (hits.empty()) continue;
     const auto tf = lookup_tf(s.frame_id, s.stamp, true);
     std::vector<Det> dets;
@@ -1437,6 +1447,7 @@ void PerceptionNode::read_barcodes() {
                             {u, v}, tf->first, tf->second, "barcode");
         if (d) { d->content = hit.text; dets.push_back(*d); }
       }
+      if (hit.text.empty()) continue;  // 위치 후보만 검출 — 디코딩 전에는 미션/QR을 갱신하지 않음
       const double now_w = wall_s();
       if (hit.text != qr_text_ || now_w - qr_seen_ > QR_GAP_S) {
         qr_text_ = hit.text;

@@ -325,7 +325,10 @@ bool Coordinator::validate(const SubGoalArray & plan, std::string & why) const {
   if (plan.goals.empty()) { why = "empty"; return false; }
   for (const auto & g : plan.goals) {
     if (!allowed.count(g.skill)) { why = "skill " + g.skill; return false; }
-    if (g.skill == "pose" && !pose_names_.count(g.target)) { why = "pose " + g.target; return false; }
+    if (g.skill == "pose" && !pose_names_.count(g.target) && g.target.rfind("gaze@", 0) != 0) {
+      why = "pose " + g.target;
+      return false;
+    }
     if (!not_object.count(g.skill) && is_id(g.target) && !find(std::stoul(g.target))) {
       why = "target " + g.target + " not tracked";
       return false;

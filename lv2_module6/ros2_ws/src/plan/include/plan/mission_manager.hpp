@@ -18,7 +18,7 @@
 //            + steps.jsonl (계획 단계마다 한 줄: 시각·걸린 시간·skill·결과·이유·다시 시도 번호·퍽/박스/장소)
 //            + phases.jsonl (단계마다 한 줄 + 끝에 MISSION 한 줄) — 모아 보기: tools/plan/step_stats.py
 //   단계 (순서와 실패 시 갈 곳은 mission_solver next_phase):
-//     GO_OBSERVE 바코드 보는 자세로 (팔은 stow 그대로 — scan 자세는 없앰, 11-09) → BARCODE 관측: 손 카메라(gaze) 바코드 +
+//     GO_OBSERVE 바코드 보는 자리로 (팔은 stow 그대로) → BARCODE: pole 카메라 후보 검출 후 방위 정렬 gaze +
 //              pole_front_cam 신호를 같은 자리에서 동시에 (11-12 — 신호 오류는 팔·바퀴가 멈췄을 때만 셈 · abort면 팔 접음) → 관측 자세(−X)로
 //     → READ 12회 점멸 — signal_status가 ok(두 사이클 같은 답)면 확정 · unconfirmed면 기다림 ·
 //              count·unknown·range가 signal_error_cycles번 이어지면 ERROR (발제: 추정 금지 → 안전 정지) · signal_timeout_s 넘어도 ERROR
@@ -200,7 +200,7 @@ private:
   rclcpp::Time grip_front_at_{0, 0, RCL_ROS_TIME};  // grip_front_m_을 마지막으로 잰 시각
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr grip_depth_sub_;
   // 팔 과부하 대비 (11-14 실기: 신호를 기다리며 gaze로 2분 넘게 뻗고 있다가 joint2 과부하 → 팔이 처져 손 카메라가 바닥만 봄)
-  bool barcode_gaze_after_signal_ = true;   // 신호를 팔 접은 채 먼저 확정한 뒤 gaze로 뻗음
+  bool barcode_gaze_after_signal_ = false;  // false면 위치 후보가 확인되는 즉시, 신호 관측과 병렬로 gaze
   rclcpp::Time gaze_free_{0, 0, RCL_ROS_TIME};  // 신호 대기가 끝나 gaze를 보내도 되는 때
   bool gaze_wait_noted_ = false;
   double arm_sag_rad_ = 0.25;               // gaze 유지 중 관절이 도착 값에서 이만큼 넘게 벗어나면 정지 (0 = 끔)
