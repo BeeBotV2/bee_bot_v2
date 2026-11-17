@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 미션 한 회차 녹화 (현장 진단) — ros2 bag record · MCAP · zstd_fast · 크기로 나눔 (기본 1 GB)
 #   ./record_run.sh [미션 회차 폴더]   폴더(예 ~/.ros/mission/20261114_101500)를 주면 그 안 bag/에, 안 주면 ~/.ros/bee_bags/<시각>/
-#   ./record_run.sh --regex            녹화하는 토픽 정규식만 찍음 (TUI 미션 메뉴 'x'가 이걸 읽어 같은 목록으로 녹화)
+#   ./record_run.sh --regex            녹화하는 토픽 정규식만 출력
 #   끝내기: Ctrl+C (SIGINT — metadata.yaml을 씀). 나누는 크기: BAG_SPLIT_BYTES=500000000 ./record_run.sh
 # 토픽: 미션·skill·적재함·인지 결과·진단·TF·odom·속도 명령·관절·충돌 감시·Nav2 경로/진행·/rosout
 #   영상은 뺌 — 압축(compressed) 토픽이 없고 원본은 초당 수십 MB (/perception/<cam>/debug_image는 구독자가 있을 때만 그려서 부하도 늘림)

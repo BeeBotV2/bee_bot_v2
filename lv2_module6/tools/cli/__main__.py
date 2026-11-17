@@ -4,8 +4,8 @@
   python -m cli status                      # real (cli/start.sh가 ROS 환경을 source한 뒤)
   python -m cli --source fake status        # 프로세스 안 가짜 ROS
   python -m cli --source docker status      # 도커 test-faker의 debug/ 파일 브리지
-  python -m cli --source docker menu        # + 호스트 SIL 뷰어(GUI) 자동 시작
-  python -m cli --source docker --debug-dir ../debug menu
+  python -m cli --source docker monitor     # testbed monitor; viewer is opt-in
+  python -m cli --source docker --debug-dir ../debug status
   python -m cli --source docker --no-sim status   # 뷰어 없이
   python -m cli --source docker --no-faker status # 컨테이너 test-faker 자동 시작 끔
 
@@ -104,9 +104,9 @@ else:
 
 import operator_tool as ot  # noqa: E402
 
-# 도커 모드 + 메뉴면 호스트 SIL 뷰어를 같이 띄운다 (--no-sim으로 끔, --sim으로 강제)
+# The Docker SIL viewer is opt-in; monitoring must not open a GUI by default.
 if SIM is None:
-    SIM = SOURCE == 'docker' and (not ARGS or ARGS[0] == 'menu') and sys.stdin.isatty()
+    SIM = False
 
 # 재연결 exec가 operator_tool.py가 아니라 이 진입점을 다시 지나게 (대역 설치 유지)
 ot.__file__ = str(Path(__file__).resolve())
@@ -135,7 +135,7 @@ def _save(state) -> None:
 
 
 def _seed(app: 'ot.OperatorTool'):
-    """가짜 bringup 상태 — status/menu가 볼 화면용."""
+    """가짜 bringup 상태 — monitor/status 및 fake-world 시험용."""
     st = app.state
     if SOURCE == 'fake':   # 저장 지도 폴더 = ros/fake/map/<이름> (BEEBOT_MAP_DIR — 위 install 직후에 정함)
         from ros.fake.FakeRos import fake_map_names

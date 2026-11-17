@@ -21,8 +21,9 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Empty, Int32MultiArray, String
 
 from . import bagrec
-from .dialog import TeleopDialog
 from .nav import RobotNav
+from .keys import KeyReader
+from .monitor import controller_line, mission_status_lines
 from .consts import (ARM_JOINTS, DIAG_LEVELS, GRIPPER_CLOSE, GRIPPER_JOINT,
                     GRIPPER_OPEN, WHEEL_JOINTS)
 from .terminal import BOLD, DIM, GREEN, RED, YELLOW, Terminal
@@ -422,7 +423,7 @@ class Bus:
         return files[:n]
 
     def calibration_report(self, args) -> int:
-        script = Path(__file__).resolve().parent / 'pages' / 'calibration' / 'wheel' / 'report.py'
+        script = Path(__file__).resolve().parent / 'calibration_report.py'
         if not script.is_file():
             print(f'FAIL: 리포트 스크립트 없음: {script}', file=sys.stderr)
             return 2
@@ -453,7 +454,7 @@ class Bus:
         if args.part != 'wheel':
             print(f'거부: calibrate {args.part} — 아직 없음 (wheel만)', file=sys.stderr)
             return 2
-        from .pages.calibration.core import ensure_stow, load_plan, run
+        from .calibration_core import ensure_stow, load_plan, run
         try:
             plan = load_plan(args.plan)
         except ValueError as exc:
@@ -469,15 +470,38 @@ class Bus:
     # ------------------------------------------------------------------ teleop
 
     def cmd_teleop(self, args, on_mark=None) -> int:
-        """키보드 수동 주행 — 창·키 처리는 TeleopDialog. 끝나면(어떻게 끝나든) 바퀴를 세운다.
-        on_mark: 있으면 g/Enter에 로봇을 세우고 on_mark() 호출 — 반환 문자열을 창에 표시 (A/B 경로 goal 찍기)."""
+        """Plain terminal keyboard drive. Always sends zero velocity on exit."""
         if not self.ensure_manual_or_switch(args.force):
             return 1
         if not sys.stdin.isatty():
             print('거부: teleop은 터미널에서 실행해야 합니다', file=sys.stderr)
             return 2
+        moves = {'w': (1, 0), 'x': (-1, 0), 'a': (0, 1), 'd': (0, -1), 's': (0, 0),
+                 'q': (1, 1), 'e': (1, -1), 'z': (-1, -1), 'c': (-1, 1),
+                 'up': (1, 0), 'down': (-1, 0), 'left': (0, 1), 'right': (0, -1), ' ': (0, 0)}
+        move = (0, 0)
+        speed, angular = min(args.linear, 0.26), min(args.angular, 1.82)
+        last_send = 0.0
+        print('teleop: w/x/a/d or arrows, q/e/z/c arc, s/space stop, Ctrl-C or Esc exit')
         try:
-            TeleopDialog(self, args.linear, args.angular, on_mark).run()
+            with KeyReader(self.term, flush=True) as keys:
+                while rclpy.ok():
+                    key = keys.read(0.05)
+                    if key in ('esc', 'eof', '\x03'):
+                        break
+                    if key in ('=', '+'):
+                        speed = min(0.26, speed + 0.05)
+                    elif key in ('-', '_'):
+                        speed = max(0.05, speed - 0.05)
+                    elif key in moves:
+                        move = moves[key]
+                    now = time.monotonic()
+                    if now - last_send >= 0.05:
+                        linear = move[0] * speed
+                        angular_cmd = move[1] * (linear / 0.5 if move[0] else angular)
+                        self._send_velocity(linear, angular_cmd)
+                        last_send = now
+                    self._poll(0.005)
         finally:
             for _ in range(3):
                 self._send_velocity(0.0, 0.0)
@@ -693,12 +717,7 @@ class Bus:
                 print('/mission/state 없음 — mission_manager(plan) 확인', file=sys.stderr)
                 return 1
             self._poll(1.0)   # 나머지 디버그 토픽(task·적재함·SLAM…)도 받게
-            from .pages.mission import mission_lines
-            color, self.term.color = self.term.color, False
-            try:
-                print('\n'.join(mission_lines(self.state, self.term)))
-            finally:
-                self.term.color = color
+            print('\n'.join(mission_status_lines(self.state)))
             return 0
         self._publish(self.pub_mission, String(data=cmd))
         print(f'미션 {cmd} 전송')
@@ -740,7 +759,7 @@ class Bus:
         self.prompt.step('2/2 컨트롤러 확인')
         states = self.controller_states()
         if states is None:
-            print('FAIL: controller_manager 응답 없음 — bringup이 떠 있나? (./run-cli start)', file=sys.stderr)
+            print('FAIL: controller_manager 응답 없음 — ros2_ws/start.sh로 bringup을 실행했는지 확인', file=sys.stderr)
             return 1
         off = [n for n in self.CONTROLLERS if states.get(n) == 'inactive']
         if off:
@@ -1240,10 +1259,14 @@ class Bus:
         return True
 
     def node_feature_lines(self, name: str, summary: bool = False) -> list[str]:
-        """노드별 추가 상태 — op/pages/nodes/<node>.py의 NodeFeature."""
-        from .pages.nodes import feature_for
-        feature = feature_for(name)
-        return feature.status_lines(self, name, summary=summary) if feature else []
+        """Runtime details for the monitor-relevant nodes."""
+        short = name.rstrip('/').split('/')[-1]
+        if short == 'controller_server':
+            return [controller_line(self.state)]
+        if short == 'state_manager':
+            return [f'operation={self.state.operation or "-"} map={self.state.map_mode or "-"}'
+                    f' emergency={"ON" if self.state.emergency else "OFF"}']
+        return []
 
     def node_services(self, name: str) -> list[tuple[str, str, bool]]:
         """노드가 제공하는 서비스 (이름, 타입, 호출 가능) — 실기 rclpy · 도커는 service_action_bag_input 목록."""
