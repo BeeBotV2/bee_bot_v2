@@ -128,6 +128,12 @@ public:
     if (declare_parameter<bool>("map_gate", true)) gate_.emplace(jm, jd, rm, rd, ss);
     // [rad/s] odom 회전 속도가 이보다 크면 map→odom을 그대로 둠 (회전 중 보정 멈춤, 11-16) · 0 = 안 멈춤
     hold_wz_ = declare_parameter<double>("gate_hold_wz", 0.2);
+    // map 기준 (11-18): cuvslam(기본) = map→odom을 cuVSLAM 자세로 맞춤 · odom = EKF odom을 그대로 map에 두고 도면 보정(/localization/map_correction)만 얹음
+    //   Isaac nav_bench: EKF odom 오차 ~2 cm인데 cuVSLAM map→odom이 27~38 cm(보정 켜면 10~28 cm) 끌고 감 → 시뮬은 odom 기준이 정확.
+    //   실기에서는 바퀴 미끄러짐을 cuVSLAM이 잡는지 확인 전이라 기본은 그대로. 환경 변수 BEE_MAP_ANCHOR=odom이 덮음
+    odom_anchor_ = declare_parameter<std::string>("map_anchor", "cuvslam") == "odom";
+    if (const char * a = std::getenv("BEE_MAP_ANCHOR")) odom_anchor_ = std::string(a) == "odom";
+    if (odom_anchor_) RCLCPP_WARN(get_logger(), "map 기준 = EKF odom (+도면 보정) — cuVSLAM 자세는 map→odom에 안 씀");
     if (env_on("BEE_MAP_FREEZE")) {
       const double inf = std::numeric_limits<double>::infinity();
       gate_.emplace(inf, inf, 0.0, 0.0, 0.0);
@@ -421,7 +427,7 @@ private:
       return;
     }
     const Pose2 odom = ros_system::planar(mat(o.transform));
-    const Pose2 base_raw = ros_system::base_pose(base_from_cam_, mat(p));
+    const Pose2 base_raw = odom_anchor_ ? odom : ros_system::base_pose(base_from_cam_, mat(p));
     last_base_ = base_raw;
     Pose2 base = ros_system::compose(map_offset_, base_raw);
     Pose2 mo = ros_system::map_to_odom(base, odom);
@@ -586,6 +592,7 @@ private:
   std::optional<ros_system::MapGate> gate_;
   Eigen::Matrix4d base_from_cam_ = Eigen::Matrix4d::Identity();
   Pose2 map_offset_;
+  bool odom_anchor_ = false;
   std::optional<Pose2> last_base_, pending_initialpose_;
   std::optional<std::pair<int64_t, Pose2>> prev_;  // 직전 오도메트리 자세 — 추적을 잃으면 비움
   std::unique_ptr<cuvslam::Odometry> odom_trk_;
