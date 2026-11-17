@@ -12,6 +12,7 @@
 // 행동 [-1,1]² → v = a0 × max_lin (후진은 v_min_ratio까지) · w = a1 × max_ang
 #include "ml/rl_nav_controller.hpp"
 #include "ml/nav_obs.hpp"  // heading_speed_cap
+#include "ml/path_deviation.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -23,6 +24,7 @@
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "nav2_ros_common/node_utils.hpp"
+#include "nav2_core/controller_exceptions.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
@@ -80,6 +82,8 @@ void RlNavController::configure(
   v_min_ratio_ = param<double>(node, name + ".v_min_ratio", v_min_ratio_);
   extra_lin_vel_ = param<double>(node, name + ".extra_lin_vel", extra_lin_vel_);
   heading_cap_ = param<bool>(node, name + ".heading_speed_cap", heading_cap_);  // 경로와 어긋나면 전진 줄임 (ml::heading_speed_cap)
+  path_deviation_tolerance_ = std::max(0.0, param<double>(node, name + ".path_deviation_tolerance", 0.15));
+  path_deviation_timeout_ = std::max(0.0, param<double>(node, name + ".path_deviation_timeout", 0.5));
   extra_ang_vel_ = param<double>(node, name + ".extra_ang_vel", extra_ang_vel_);
   points_stride_ = param<int>(node, name + ".points_stride", points_stride_);
   z_min_ = param<double>(node, name + ".z_min", z_min_);
@@ -390,8 +394,19 @@ void RlNavController::publish_diagnostics() {
   else if (recent && requested && enable && !sensor_ok) st.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
   else if (recent && reason == 4) st.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
 
+  double path_deviation = std::numeric_limits<double>::quiet_NaN();
+  bool path_deviation_exceeded = false;
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    path_deviation = last_path_deviation_m_;
+    path_deviation_exceeded = path_deviation_exceeded_;
+  }
+  if (path_deviation_exceeded) st.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
+
   const std::string en = requested ? "enable=on" : "enable=off";
-  if (requested && !loaded) {
+  if (path_deviation_exceeded) {
+    st.message = "global path deviation over tolerance · " + en;
+  } else if (requested && !loaded) {
     st.message = std::string("policy missing — ") + inner + " 바이패스 · " + en;
   } else if (!recent) {
     st.message = loaded ? ("idle · " + en + " · " + policy_.device() +
@@ -431,6 +446,13 @@ void RlNavController::publish_diagnostics() {
   snprintf(buf, sizeof(buf), "%.2f", scan_min);
   kv("scan_min", buf);
   kv("reason", why);
+  snprintf(buf, sizeof(buf), "%.3f", path_deviation);
+  kv("path_deviation_m", std::isfinite(path_deviation) ? buf : "n/a");
+  snprintf(buf, sizeof(buf), "%.3f", path_deviation_tolerance_);
+  kv("path_deviation_tolerance_m", buf);
+  kv("path_deviation_state", path_deviation_tolerance_ <= 0.0 ? "disabled" :
+    (!std::isfinite(path_deviation) ? "unavailable" :
+    (path_deviation_exceeded ? "over_tolerance" : "within_tolerance")));
   snprintf(buf, sizeof(buf), "v=%.2f w=%.2f", v, w);
   kv("cmd", buf);
   if (!policy_.device_note().empty()) kv("device_note", policy_.device_note());
@@ -503,6 +525,36 @@ geometry_msgs::msg::TwistStamped RlNavController::computeVelocityCommands(
   const geometry_msgs::msg::PoseStamped & pose, const geometry_msgs::msg::Twist & velocity,
   nav2_core::GoalChecker * goal_checker, const nav_msgs::msg::Path & transformed_global_plan,
   const geometry_msgs::msg::PoseStamped & global_goal) {
+  const auto node = node_.lock();
+  if (!node) throw nav2_core::ControllerException("RlNavController node is unavailable");
+  const double deviation = cross_track_error(
+    pose.pose.position.x, pose.pose.position.y, transformed_global_plan);
+  const auto now = std::chrono::steady_clock::now();
+  bool deviation_failed = false;
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (path_deviation_tolerance_ > 0.0 && std::isfinite(deviation) && deviation > path_deviation_tolerance_) {
+      if (!path_deviation_active_) {
+        path_deviation_active_ = true;
+        path_deviation_started_at_ = now;
+      }
+      deviation_failed = std::chrono::duration<double>(now - path_deviation_started_at_).count() >=
+        path_deviation_timeout_;
+    } else {
+      path_deviation_active_ = false;
+    }
+    last_path_deviation_m_ = deviation;
+    path_deviation_exceeded_ = path_deviation_tolerance_ > 0.0 &&
+      std::isfinite(deviation) && deviation > path_deviation_tolerance_;
+  }
+  if (deviation_failed) {
+    RCLCPP_WARN_THROTTLE(
+      logger_, *node->get_clock(), 2000,
+      "[%s] global path deviation %.3f m exceeds %.3f m for %.2f s — failing FollowPath",
+      name_.c_str(), deviation, path_deviation_tolerance_, path_deviation_timeout_);
+    throw nav2_core::NoValidControl("Global path deviation exceeded tolerance");
+  }
+
   sensor_msgs::msg::LaserScan::SharedPtr scan;
   std::vector<float> ranges;
   bool on = false, cloud_ok = false, enabled = false, requested = false;
@@ -644,6 +696,12 @@ void RlNavController::deactivate() {
   inner_->deactivate();
 }
 void RlNavController::newPathReceived(const nav_msgs::msg::Path & raw) {
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    path_deviation_active_ = false;
+    last_path_deviation_m_ = std::numeric_limits<double>::quiet_NaN();
+    path_deviation_exceeded_ = false;
+  }
   std::lock_guard<std::mutex> il(inner_mtx_);
   last_path_ = raw;  // inner 를 바꿀 때 새 inner 에 다시 넘긴다
   inner_->newPathReceived(raw);
@@ -658,6 +716,12 @@ void RlNavController::reset() {
     inner_->reset();
   }
   prev_a_[0] = prev_a_[1] = 0.0f;
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    path_deviation_active_ = false;
+    last_path_deviation_m_ = std::numeric_limits<double>::quiet_NaN();
+    path_deviation_exceeded_ = false;
+  }
 }
 void RlNavController::setSpeedLimit(const double & speed_limit, const bool & percentage) {
   {
