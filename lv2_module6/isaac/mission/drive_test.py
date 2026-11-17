@@ -84,12 +84,25 @@ def main():
     n.create_subscription(MissionState, '/mission/state', on_state, latched)
 
     def tick():
+        # 시작은 상태가 IDLE을 벗어날 때까지 2 s마다 다시 보냄 — 새 발행자는 구독자와 짝이 맞기 전 한 번 보낸 것이 버려짐
+        #   (실기 11-18: start 뒤 mission_manager가 IDLE 그대로). 이미 진행 중이면 mission_manager가 무시 (on_command active_)
+        if st['running']:
+            return
         if st['started']:
+            if time.monotonic() - st['sent'] >= 2.0 and st['tries'] < 10:
+                cmd.publish(String(data=start))
+                st['sent'] = time.monotonic()
+                st['tries'] += 1
+                log.warning(f'아직 {st["phase"]} — 시작 다시 보냄 ({st["tries"]}/10)')
+            elif st['tries'] >= 10 and time.monotonic() - st['sent'] >= 2.0:
+                st['exit'] = 'ERROR'
+                log.error('시작이 안 받아짐 — mission_manager · ROS_DOMAIN_ID · Fast DDS 프로파일 확인')
             return
         if st['phase'] in IDLE and cmd.get_subscription_count() > 0:
             cmd.publish(String(data=start))
             st['started'] = True
-            st['t0'] = time.monotonic()
+            st['t0'] = st['sent'] = time.monotonic()
+            st['tries'] = 0
             log.info(start)
         elif st['phase'] not in (None, *IDLE):
             st['exit'] = 'ERROR'
