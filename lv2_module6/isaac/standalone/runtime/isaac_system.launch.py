@@ -13,7 +13,7 @@
   경기장 벽: /map = nvblox_map이 walls_in 격자 위에 nvblox를 겹친 것. 실기 walls_in = /arena/walls(mission_manager가
     plan.yaml 벽 선분으로 그림). Isaac은 장면의 벽 · 기둥을 그대로 그린 isaac/mission/map/<장면>/map.yaml(make_map.py)을
     arena_map_pub.py가 /arena/static으로 내고 nvblox_map을 walls_in:=/arena/static으로 다시 띄운다 (node_params.py).
-    장면 = isaac_sim.sh의 ISAAC_SCENE(기본 scene_sim). 그 장면 지도가 없거나 arena_map:=''면 실기처럼 /arena/walls
+    장면 = isaac_sim.sh의 ISAAC_SCENE(기본 maze_map_1711). 그 장면 지도가 없거나 arena_map:=''면 실기처럼 /arena/walls
   pole_front_cam 점구름: depth_image_proc
     Isaac 6.1 + Lyrical에서 ROS2 Camera Helper `depth_pcl`은 Play 직후 segfault (Jazzy 백엔드로 도는
     PointCloud2 직렬화) → Isaac은 영상(컬러·정렬 depth)까지만 내고 점구름은 여기서 만든다.
@@ -47,7 +47,7 @@ ARGS = {
     'start_pose': os.environ.get('START_POSE', ''),  # '[x, y, yaw]' arena — SPAWN과 같게 (구간 하나만 시험, 11-16)  # 움직임 정답표 재생 (~/.ros/routes) — TAUGHT_ROUTES=true ./isaac_sim.sh (11-15)
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCENE = os.path.splitext(os.path.basename(os.environ.get('ISAAC_SCENE', 'scene_sim.usda')))[0]
+SCENE = os.path.splitext(os.path.basename(os.environ.get('ISAAC_SCENE', 'maze_map_1711.usda')))[0]
 ARENA_MAP = os.path.join(HERE, '..', '..', 'mission', 'map', SCENE, 'map.yaml')
 WALLS = '/arena/static'
 

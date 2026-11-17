@@ -1,4 +1,4 @@
-"""Isaac Sim startup for the team: open usda/scene_sim.usda with the physx variant and start
+"""Isaac Sim startup for the team: open usda/maze_map_1711.usda with the physx variant and start
 opencr_bridge.py (virtual OpenCR on /tmp/opencr) so the ROS side can connect right away.
 Viewport starts with colliders hidden.
 While playing, puck ground truth goes to /tmp/beebot_sim_pucks.json (loops/pick_loop.py use_sim=true logs it).
@@ -29,7 +29,7 @@ import omni.usd
 from pxr import Gf, PhysxSchema, Usd, UsdGeom
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCENE = os.environ.get("ISAAC_SCENE") or os.path.join(HERE, "..", "..", "usda", "scene_sim.usda")  # isaac_sim.sh <scene>
+SCENE = os.environ.get("ISAAC_SCENE") or os.path.join(HERE, "..", "..", "usda", "maze_map_1711.usda")  # isaac_sim.sh <scene>
 RESET_FILE = "/tmp/beebot_isaac_reset"  # isaac_sim.sh와 같은 경로
 TRUTH_FILE = "/tmp/beebot_sim_pucks.json"
 TRUTH_EVERY = 15  # frames (~4 Hz at 60 fps)
@@ -179,7 +179,7 @@ async def _setup():
         settings.set_int("/rtx/post/motionblur/numSamples", 8)
     print(f"[isaac_startup] sensor noise BEE_SIM_NOISE={noise:g} (motion blur {'on' if noise > 0 else 'off'})", flush=True)
     stage = omni.usd.get_context().get_stage()
-    # scene_sim.usda selects no Physics variant ("none" = no articulation, opencr_bridge finds nothing).
+    # maze_map_1711.usda selects no Physics variant ("none" = no articulation, opencr_bridge finds nothing).
     # Pick physx in the session layer: never saved into the file.
     with Usd.EditContext(stage, stage.GetSessionLayer()):
         stage.GetPrimAtPath("/World/beebot").GetVariantSet("Physics").SetVariantSelection("physx")

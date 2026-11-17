@@ -35,7 +35,7 @@ python3 isaac/mission/run_mission.py   # 터미널 2: ROS 노드가 다 뜬 뒤
 
 ## 신호 조건 (maze_map_1711 퍽)
 
-`scene_sim.usda` 퍽은 빨강 7개(box 4 · cyl 3), 초록 5개(box 2 · cyl 3)다. `mission_solver`의 `allocate`가 받는 신호는 다음과 같다.
+`maze_map_1711.usda` 퍽은 빨강 7개(box 4 · cyl 3), 초록 5개(box 2 · cyl 3)다. `mission_solver`의 `allocate`가 받는 신호는 다음과 같다.
 
 - R은 빨간 퍽 수 이하, G는 초록 퍽 수 이하.
 - 남는 퍽(Y)이 한 모양(전부 box 또는 전부 cyl).
@@ -50,7 +50,7 @@ python3 isaac/mission/run_mission.py   # 터미널 2: ROS 노드가 다 뜬 뒤
 
 다른 장면은 `make_map.py`의 `SCENE`·`--out`을 바꿔 `map/<장면 이름>/`에 만든다. 지금 있는 지도는 `maze_map_1711` · `scene_approach` · `scene_approach_matte`이고, `lab`은 지도가 없어 `/arena/walls`를 쓴다. `isaac_system.launch.py`는 `isaac_sim.sh`가 연 장면(`ISAAC_SCENE`) 이름으로 `map/<장면>/map.yaml`을 찾고, 없으면 실기처럼 `/arena/walls`를 쓴다.
 
-`scene_sim.usda`의 경기장 벽 · 기둥(`/World/maze`)을 높이 0.02~0.47 m 띠로 잘라 바닥에 투영한 map_server 형식 지도다(0.05 m/칸). 원점은 USD의 beebot 자세(로봇을 켠 자리)라 cuVSLAM·nvblox의 map 프레임과 같다. 시작 박스 · 장소 받침대(상자)와 퍽은 넣지 않는다. 미션이 다가가 붙는 대상이라 정적 지도에 있으면 목표 자리가 막힌다. 장면을 고치면 다시 만든다.
+`maze_map_1711.usda`의 경기장 벽 · 기둥(`/World/maze`)을 높이 0.02~0.47 m 띠로 잘라 바닥에 투영한 map_server 형식 지도다(0.05 m/칸). 원점은 USD의 beebot 자세(로봇을 켠 자리)라 cuVSLAM·nvblox의 map 프레임과 같다. 시작 박스 · 장소 받침대(상자)와 퍽은 넣지 않는다. 미션이 다가가 붙는 대상이라 정적 지도에 있으면 목표 자리가 막힌다. 장면을 고치면 다시 만든다.
 
 `isaac_system.launch.py`가 이 지도를 Nav2 `/map`에 넣는다.
 

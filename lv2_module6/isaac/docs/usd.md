@@ -7,7 +7,7 @@
 `usda/` 안. 화살표는 어느 파일이 어느 파일을 불러오는지(payload·sublayer·asset 참조).
 
 ```
-scene_sim.usda                     전체 미션 장면 진입점
+maze_map_1711.usda                     전체 미션 장면 진입점
 ├── /World/beebot                  → beebot/beebot.usda
 ├── /World/Environment/DomeLight   → ../source/HDRI/class_room_03_4k.exr
 ├── /World/Environment/GroundPlane → ../source/texture/class_room_floor/*.png
@@ -43,15 +43,15 @@ ctrl+S 하지 말것
 
 ## 장면 열기
 
-Isaac Sim에서 `usda/scene_sim.usda`를 연다. 로봇만 볼 때는 `usda/beebot/beebot.usda`.
+Isaac Sim에서 `usda/maze_map_1711.usda`를 연다. 로봇만 볼 때는 `usda/beebot/beebot.usda`.
 
 ## 에셋
 
-`scene_sim.usda`가 미로, 표지판, 바코드, 시작 상자 6개, 선반 상자 3개, 퍽 12개, 카펫 바닥을 물리 설정까지 포함해 불러온다. 경로는 모두 상대 경로다.
+`maze_map_1711.usda`가 미로, 표지판, 바코드, 시작 상자 6개, 선반 상자 3개, 퍽 12개, 카펫 바닥을 물리 설정까지 포함해 불러온다. 경로는 모두 상대 경로다.
 
 ```
 usda/
-├─ scene_sim.usda          전체 미션 장면 (isaac_sim.sh 기본)
+├─ maze_map_1711.usda          전체 미션 장면 (isaac_sim.sh 기본)
 ├─ scene_approach.usda     approach 시험 장면 · scene_approach_matte.usda (벽 무광)
 ├─ scene_lab.usda          옛 시연 장면 (지금은 rl/scripts/stand_plan.py만 읽음)
 ├─ beebot/    로봇 (위 구조)
