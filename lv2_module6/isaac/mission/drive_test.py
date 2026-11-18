@@ -52,7 +52,8 @@ def main():
     log = n.get_logger()
     latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     cmd = n.create_publisher(String, '/cmd/mission', 10)
-    st = {'phase': None, 'note': None, 'started': False, 'running': False, 'exit': None}
+    st = {'phase': None, 'note': None, 'started': False, 'running': False, 'exit': None,
+          'seen_results': 0, 'approach_failed_streak': 0, 'abort_requested': False}
     legs = []  # [상자, 시작 wall 시각, 끝 wall 시각, 결과] — 결과 "GOTO S4: ok" · "GOTO S6: nav_failed" (goto_seq)
 
     if a.clear_basket:
@@ -74,10 +75,24 @@ def main():
         for leg, r in zip(legs, goto):
             if leg[3] is None:
                 leg[2], leg[3] = time.monotonic(), r
+        if st['started']:
+            for result in goto[st['seen_results']:]:
+                if result.strip() == 'approach_failed':
+                    st['approach_failed_streak'] += 1
+                else:
+                    st['approach_failed_streak'] = 0
+                if st['approach_failed_streak'] >= 2 and not st['abort_requested']:
+                    st['abort_requested'] = True
+                    log.error('접근 실패 2회 연속 — GOTO 시험 중단, MissionManager abort 요청')
+                    cmd.publish(String(data='abort'))
+        st['seen_results'] = len(goto)
         if st['started'] and m.phase not in IDLE:
             st['running'] = True
         if st['running'] and m.phase in ('DONE', 'ERROR'):
-            st['exit'] = m.phase
+            st['exit'] = 'APPROACH_FAILED_STREAK' if st['abort_requested'] else m.phase
+        # Abort may leave the manager in IDLE (for example, if a retry raced startup).
+        if st['abort_requested'] and m.phase in IDLE:
+            st['exit'] = 'APPROACH_FAILED_STREAK'
         if st['started'] and '시작 거부' in m.note:
             st['exit'] = 'ERROR'
 
@@ -99,6 +114,8 @@ def main():
                 log.error('시작이 안 받아짐 — mission_manager · ROS_DOMAIN_ID · Fast DDS 프로파일 확인')
             return
         if st['phase'] in IDLE and cmd.get_subscription_count() > 0:
+            st['approach_failed_streak'] = 0
+            st['abort_requested'] = False
             cmd.publish(String(data=start))
             st['started'] = True
             st['t0'] = st['sent'] = time.monotonic()
