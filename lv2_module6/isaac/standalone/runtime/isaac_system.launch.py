@@ -42,9 +42,8 @@ ARGS = {
     'perception': 'auto',
     'use_perception': 'true',    # YOLO · signal_decoder · hand_relative (매핑 중에도)
     'operation': 'AUTO',         # coordinator가 skill을 실행하는 모드
-    'taught_routes': os.environ.get('TAUGHT_ROUTES', 'false'),
     'use_ekf': 'false',          # EKF는 아래에서 늦게 띄움 (EKF_DELAY_S 설명)
-    'start_pose': os.environ.get('START_POSE', ''),  # '[x, y, yaw]' arena — SPAWN과 같게 (구간 하나만 시험, 11-16)  # 움직임 정답표 재생 (~/.ros/routes) — TAUGHT_ROUTES=true ./isaac_sim.sh (11-15)
+    'start_pose': os.environ.get('START_POSE', ''),  # '[x, y, yaw]' arena — SPAWN과 같게 (구간 하나만 시험, 11-16)
 }
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCENE = os.path.splitext(os.path.basename(os.environ.get('ISAAC_SCENE', 'maze_map_1711.usda')))[0]
