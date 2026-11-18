@@ -82,11 +82,25 @@ replay() {  # $1 = bag · $2 = 지도 이름 · $3 = localization true|false
   # 재생 SLAM은 Isaac · 실기 스택과 같은 도메인에 있으면 TF가 섞인다 — 혼자 있을 때만
   OTHERS=$(ros2 node list --no-daemon --spin-time 3 2>/dev/null | grep -vE '^/(rviz|transform_listener_impl_|_ros2cli_)')
   [ -n "$OTHERS" ] && { echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}에 다른 노드가 떠 있음 — Isaac · 스택을 끄고 다시:"; echo "$OTHERS" | sed 's/^/  /'; exit 1; }
+  # Fast DDS 공유 메모리 찌꺼기 비우기 (isaac_sim.sh와 같음) — local_only 프로파일은 SHM뿐이라, 꺼진 실행이 남긴 포트 잠금이 있으면
+  #   새 노드 일부가 서로 못 찾는다 (11-19 replay: EKF가 그래프에 안 보여 odom TF 없음 → map→odom 0). 쓰는 프로세스가 없을 때만 전부 지움
+  SHM_USERS=$(for p in /proc/[0-9]*; do grep -qs "/dev/shm/fastdds_" "$p/maps" && echo "${p#/proc/}"; done | paste -sd,)
+  if [ -z "$SHM_USERS" ]; then
+    rm -f /dev/shm/fastdds_* /dev/shm/sem.fastdds_*
+  else
+    echo "[mapping] Fast DDS 공유 메모리를 쓰는 프로세스가 있어 다 비우지 않음 (RViz 등을 끄고 재생하면 확실):"
+    ps -o pid=,args= -p "$SHM_USERS" | cut -c1-100 | sed 's/^/  /'
+    fastdds shm clean >/dev/null 2>&1
+  fi
+  ros2 daemon stop >/dev/null 2>&1
   setsid ros2 launch "$HERE/replay.launch.py" map_dir:="$WS/map" map_name:="$2" localization:="$3" &
   LAUNCH=$!
   stop() { trap - EXIT INT TERM HUP; kill -INT -- -$LAUNCH 2>/dev/null; wait $LAUNCH 2>/dev/null; }  # SIGINT → cuVSLAM · nvblox 저장
   trap stop EXIT INT TERM HUP
   sleep "${BEE_REPLAY_WAIT:-8}"  # 노드가 뜨고 구독할 때까지 — 앞 프레임을 놓치면 출발 자리가 달라짐
+  # EKF가 그래프에 보이고 /odom을 구독하는지 — 안 보이면 odom TF가 없어 지도가 안 생기므로 재생 전에 멈춤
+  ros2 topic info -v /odom --no-daemon --spin-time 3 2>/dev/null | grep -q "Node name: ekf_filter_node" \
+    || { echo "[mapping] EKF가 /odom을 구독하지 않음 — DDS가 노드를 못 찾음. 모든 ROS 창(RViz 포함)을 끄고 다시"; exit 1; }
   echo "[mapping] 재생: $1 → 지도 $WS/map/$2 ($( [ "$3" = true ] && echo 위치추정 || echo 매핑))"
   ros2 bag play --clock 100 "$1"
   sleep 3  # 마지막 프레임 처리
