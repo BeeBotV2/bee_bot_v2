@@ -1759,7 +1759,7 @@ void MissionManager::wall_tick() {
     const auto a = arena_to_map({walls_[i], walls_[i + 1], 0}, start_), b = arena_to_map({walls_[i + 2], walls_[i + 3], 0}, start_);
     segs.push_back({a.x, a.y, b.x, b.y});
   }
-  const auto f = fit_walls(segs, cells, wall_ok_ ? wall_.c : acorr_, wall_gate_, wall_min_cells_, wall_min_eig_, acorr_max_shift_,
+  const auto f = fit_walls(segs, cells, acorr_, wall_gate_, wall_min_cells_, wall_min_eig_, acorr_max_shift_,
                            acorr_max_rot_);
   if (!f.ok) {
     if (f.why != wall_why_) RCLCPP_INFO(get_logger(), "벽 정합 안 됨 (%s · 맞은 칸 %d · 고유값 %.3f)%s", f.why.c_str(), f.inliers, f.min_eig,
@@ -1771,16 +1771,11 @@ void MissionManager::wall_tick() {
   const bool first = !wall_ok_;
   wall_ok_ = true;
   wall_ = f;  // 격자 그대로의 차이 (다음 정합의 시작점)
-  ArenaCorr c = f.c;
-  if (loc_on_) {
-    // 이미 로봇 위치로 넘긴 몫을 뺌 — 격자의 예전 벽은 안 옮겨져 같은 차이가 다시 보임 (loc_sent_ 설명)
-    //   다시 본 벽이 새 자리로 쌓이면 차이가 줄어 '남은 것'이 넘긴 쪽과 반대가 됨 → 되돌리지 않고 0 (넘침 없이 덜 고치는 쪽)
-    if (std::hypot(f.c.dx, f.c.dy) < loc_min_m_ && std::abs(f.c.dth) < loc_min_rad_) loc_sent_ = {};  // 격자가 다 맞음 — 처음부터
-    c = corr_after_step(f.c, loc_sent_);
-    if (c.dx * f.c.dx + c.dy * f.c.dy < 0) c.dx = c.dy = 0;
-    if (c.dth * f.c.dth < 0) c.dth = 0;
-  }
-  if (first || corr_moved(c, acorr_, acorr_step_m_, acorr_step_rad_))
+  // 벽 칸은 odom으로 쌓아 지금의 map→odom으로 되돌리므로(위) 로봇 위치를 옮기면 예전 벽도 따라옴 — f.c가 곧 남은 오차.
+  //   11-18: 예전엔 넘긴 몫(loc_sent_)을 한 번 더 빼서 남은 회전이 반대 부호 → 0으로 잘려 0.5°가 끝까지 남았음 (sim Y1: −2.5° 넣고 S4 4 cm)
+  //   바뀜 문턱도 loc_min(2 cm · 0.2°) — acorr_step(3 cm · 1°)이면 1° 아래 회전은 영영 안 고쳐짐 (4 m 앞 7 cm)
+  const ArenaCorr c = f.c;
+  if (first || corr_moved(c, acorr_, loc_min_m_, loc_min_rad_))
     commit_corr(c, "walls", fmt("맞은 칸 %.0f · rms %.1f cm", f.inliers, f.rms * 100));
 }
 
@@ -1801,7 +1796,6 @@ void MissionManager::loc_tick() {
     mk.qx = q.x;
     mk.qy = q.y;
   }
-  if (acorr_src_ == "walls") loc_sent_ = compose_corr(loc_sent_, st);  // wall_.c(격자 그대로)는 안 건드림 — 다음 정합이 거기서 시작
   loc_last_ = wall_s();
   RCLCPP_INFO(get_logger(), "도면 보정 → 로봇 위치 %+.3f %+.3f %+.1f° (%s) · 남은 보정 %+.3f %+.3f %+.1f°", st.dx, st.dy, st.dth * 180 / M_PI,
               acorr_src_.c_str(), acorr_.dx, acorr_.dy, acorr_.dth * 180 / M_PI);

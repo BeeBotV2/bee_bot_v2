@@ -406,7 +406,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     arena_corr_loc_step_m: 0.05 # [m] 한 번에 넘기는 조각 (MapGate 잠금 0.30 m보다 훨씬 작게)
     arena_corr_loc_step_rad: 0.0175 # [rad] (1°)
     arena_corr_loc_min_m: 0.02 # [m] 남은 보정이 이보다 작으면 안 넘김
-    arena_corr_loc_min_rad: 0.0087 # [rad] (0.5°)
+    arena_corr_loc_min_rad: 0.0035 # [rad] (0.2°) — 11-18: 0.5° → 0.2° (4 m 앞 1.4 cm · 0.5°면 3.5 cm가 남음)
     arena_corr_loc_period: 2.0 # [s] 조각 사이 간격
     arena_corr_loc_settle_s: 1.5 # [s] 넘긴 뒤 이만큼은 상자 관측을 안 셈 (좌표가 옮겨지는 중)
     # 적재함: 장부(칸 → tag)는 coordinator가 씀 (/coordinator/basket) — 쓰는 칸은 coordinator basket_use. 다 차면 나머지는 시작 박스에서 직접 운반
