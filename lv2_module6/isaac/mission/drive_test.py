@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """주행만 시험 — 신호등 · 바코드 · inspect · pick · load · place 없이 상자마다 다가가기(Nav2 → 도킹 → exit)만 하고 출발 구역으로 복귀.
 
-  python3 isaac/mission/drive_test.py                 # 기본 = plan.yaml 순서: survey_order(S) → build_location_order(L) → 그 거꾸로
+  python3 isaac/mission/drive_test.py                 # 기본 = plan.yaml 순서: survey_order(S) → build_location_order(L)
   python3 isaac/mission/drive_test.py S4,S6,L2        # 고른 상자만 (S1~S6 시작 박스 · L1~L3 장소)
   python3 isaac/mission/drive_test.py --clear-basket  # 적재함 장부가 남아 시작이 거부될 때 먼저 비움
   python3 isaac/mission/drive_test.py --real S4       # 실기 (Jetson start.sh로 띄운 스택) — 시뮬 시계(/clock) 안 씀 · 프로파일 기본 fastdds.xml
@@ -32,7 +32,7 @@ def default_targets():
     p = yaml.safe_load(open(os.path.join(WS, 'src', 'plan', 'config', 'plan.yaml')))['mission_manager']['ros__parameters']
     s = [f'S{i}' for i in p['survey_order']]
     loc = [f'L{i}' for i in p['build_location_order']]
-    return s + loc + loc[-2::-1]  # 마지막 L은 놓은 자리에서 확인이라 되돌아올 때 뺌
+    return s + loc  # 11-18: 재검증 순회(L2·L1로 되돌아가기) 뺌 — 놓은 자리에서 바로 확인(verify_in_place)이라 필요 없음 (사용자)
 
 
 def main():

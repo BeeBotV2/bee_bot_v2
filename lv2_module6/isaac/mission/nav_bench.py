@@ -13,6 +13,8 @@ Per leg it records: success, wall time, planning time (one ComputePathToPose bef
 distance driven, mean / peak truth speed, time standing still, minimum body clearance to the scene walls
 (1 cm grid from make_map.py --res 0.01), to every box (truth pose) and to the moving obstacle, box displacement,
 localization error (TF map vs truth) and distance of the robot from the current /plan.
+Path quality: shortest feasible length (Dijkstra on the wall grid + truth boxes, body half width kept clear) vs planned
+and driven length. Smoothness from /cmd_vel: speed reversals >= 5 cm/s per 10 s of driving and share of crawl time.
 Results: ~/.ros/nav_bench/<time>_<tag>.json and a table on stdout.
 """
 import argparse
@@ -25,7 +27,9 @@ import time
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseStamped
+import heapq
+
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from nav_msgs.msg import Path
 from rclpy.action import ActionClient
@@ -95,6 +99,50 @@ class Walls:
         j = np.clip(((pts[:, 0] - self.ox) / self.res).astype(int), 0, self.dist.shape[1] - 1)
         return float(self.dist[i, j].min()) - self.res / 2
 
+    def shortest(self, a, b, boxes, clear=FOOT[2] + 0.01, step=0.02):
+        """Shortest 8-connected path [m] from a to b keeping `clear` from walls and boxes (lower bound for the planner)."""
+        k = max(1, int(round(step / self.res)))
+        free = self.dist[::k, ::k] > clear
+        h, w = free.shape
+        jj, ii = np.meshgrid(np.arange(w), np.arange(h))
+        X, Y = self.ox + jj * k * self.res, self.oy + (self.h - 1 - ii * k) * self.res
+        for bx, by, bth in boxes:
+            c, s_ = math.cos(bth), math.sin(bth)
+            lx, ly = np.abs(c * (X - bx) + s_ * (Y - by)) - BOX_HALF, np.abs(-s_ * (X - bx) + c * (Y - by)) - BOX_HALF
+            free &= np.hypot(np.maximum(lx, 0), np.maximum(ly, 0)) > clear
+        cell = lambda p: (int(np.clip(round((self.h - 1 - (p[1] - self.oy) / self.res) / k), 0, h - 1)),
+                          int(np.clip(round((p[0] - self.ox) / self.res / k), 0, w - 1)))
+        s0, g = cell(a), cell(b)
+        free[s0] = free[g] = True
+        D = {s0: 0.0}
+        q = [(0.0, s0)]
+        nb = [(1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0), (1, 1, 1.4142), (1, -1, 1.4142), (-1, 1, 1.4142), (-1, -1, 1.4142)]
+        while q:
+            d, (i, j) = heapq.heappop(q)
+            if (i, j) == g:
+                return d * k * self.res
+            if d > D[(i, j)]:
+                continue
+            for di, dj, c_ in nb:
+                n = (i + di, j + dj)
+                if 0 <= n[0] < h and 0 <= n[1] < w and free[n] and d + c_ < D.get(n, 1e18):
+                    D[n] = d + c_
+                    heapq.heappush(q, (d + c_, n))
+        return None
+
+
+def reversals(v, amp=0.05):
+    """Number of speed direction changes of at least `amp` (peak-to-trough), i.e. accel/decel swings."""
+    n, ext, d = 0, v[0] if len(v) else 0.0, 0
+    for x in v:
+        if d >= 0 and x < ext - amp:
+            n, d, ext = n + 1, -1, x
+        elif d <= 0 and x > ext + amp:
+            n, d, ext = n + 1, 1, x
+        elif (d >= 0 and x > ext) or (d <= 0 and x < ext):
+            ext = x
+    return n
+
 
 def yaw_q(th):
     return math.sin(th / 2), math.cos(th / 2)
@@ -124,6 +172,8 @@ class Bench:
         self.tfl = TransformListener(self.tf, node)
         self.plan = np.zeros((0, 2))
         node.create_subscription(Path, '/plan', self.on_plan, QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
+        self.cmd = []
+        node.create_subscription(TwistStamped, '/cmd_vel', lambda m: self.cmd.append((m.twist.linear.x, m.twist.angular.z)), 50)
 
     def on_plan(self, m):
         self.plan = np.array([[p.pose.position.x, p.pose.position.y] for p in m.poses]) if m.poses else np.zeros((0, 2))
@@ -187,6 +237,9 @@ class Bench:
         poly = cp['poly'] if cp and cp.get('ok') else None
         poses0, _ = self.truth()
         boxes0 = {k: v for k, v in (poses0 or {}).items() if k != 'robot'}
+        if poses0 and 'robot' in poses0:
+            sp = self.walls.shortest(poses0['robot'][:2], g[:2], boxes0.values())
+            rec['shortest_m'] = round(sp, 3) if sp else None
         if not self.nav.wait_for_server(timeout_sec=10):
             rec['ok'], rec['why'] = False, 'no_nav_server'
             return rec
@@ -195,6 +248,7 @@ class Bench:
             rec['ok'], rec['why'] = False, 'rejected'
             return rec
         res = h.get_result_async()
+        self.cmd = []
         t0 = time.time()
         _, st0 = self.truth()
         last, drove, still, vmax, vs = None, 0.0, 0.0, 0.0, []
@@ -294,6 +348,15 @@ class Bench:
                          round(math.degrees(abs(math.remainder(end[2] - g[2], 2 * math.pi))), 1)] if end else None,
             'traj': traj[::4],
         })
+        sp = rec.get('shortest_m')
+        rec['plan_ratio'] = round(rec['plan']['len_m'] / sp, 2) if sp and rec['plan'].get('len_m') else None
+        rec['drove_ratio'] = round(drove / sp, 2) if sp else None
+        cv = np.array(self.cmd) if self.cmd else np.zeros((0, 2))
+        mv = cv[(np.abs(cv[:, 0]) > 0.01) | (np.abs(cv[:, 1]) > 0.05)] if len(cv) else cv
+        drive_s = len(mv) / 20.0  # /cmd_vel at controller_frequency 20 Hz
+        rec['cmd_swings_10s'] = round(reversals(cv[:, 0]) / drive_s * 10, 1) if drive_s > 1 else None
+        rec['cmd'] = [[round(float(v), 3), round(float(w), 3)] for v, w in cv[::2]]  # 10 Hz
+        rec['crawl_share'] = round(float(np.mean((np.abs(mv[:, 0]) > 0.01) & (np.abs(mv[:, 0]) < 0.08))), 2) if len(mv) else None
         return rec
 
     def drive_dyn(self, dyn, st, poly, here, t, fp):
@@ -370,7 +433,8 @@ def main():
               f"still {rec.get('still_s', 0):4.1f} wall {rec.get('wall_clear_min', 9):+.3f} ({rec.get('wall_contact_s', 0):.1f}s) "
               f"box {rec.get('box_clear_min', 9):+.3f} {rec.get('pushed') or ''} "
               f"{'dyn %+.3f ' % rec['dyn_clear_min'] if rec.get('dyn_clear_min') is not None else ''}"
-              f"loc {rec.get('loc_err_max')} dev95 {rec.get('plan_dev_p95')} {rec.get('why', '')}", flush=True)
+              f"loc {rec.get('loc_err_max')} dev95 {rec.get('plan_dev_p95')} short {rec.get('shortest_m')} "
+              f"ratio {rec.get('plan_ratio')}/{rec.get('drove_ratio')} swings {rec.get('cmd_swings_10s')} crawl {rec.get('crawl_share')} {rec.get('why', '')}", flush=True)
     legs = out['legs']
     out['summary'] = {
         'ok': sum(r['ok'] for r in legs), 'n': len(legs), 'time_s': round(sum(r.get('time_s', 0) for r in legs), 1),
@@ -379,6 +443,10 @@ def main():
         'wall_contacts': sum(r.get('wall_clear_min', 9) <= 0.005 for r in legs),
         'box_pushed': sum(bool(r.get('pushed')) for r in legs),
         'dyn_contacts': sum(r.get('dyn_clear_min') is not None and r['dyn_clear_min'] <= 0.0 for r in legs),
+        'shortest_m': round(sum(r.get('shortest_m') or 0 for r in legs), 2),
+        'drove_ratio': round(sum(r.get('drove_m', 0) for r in legs) / max(sum(r.get('shortest_m') or 0 for r in legs), 1e-3), 2),
+        'swings_10s_med': float(np.median([r['cmd_swings_10s'] for r in legs if r.get('cmd_swings_10s') is not None] or [0])),
+        'crawl_med': float(np.median([r['crawl_share'] for r in legs if r.get('crawl_share') is not None] or [0])),
     }
     print('SUMMARY', json.dumps(out['summary']), flush=True)
     d = os.path.expanduser('~/.ros/nav_bench')
@@ -394,4 +462,5 @@ def main():
 if __name__ == '__main__':
     assert inside_rect(np.array([[0.0, 0.0]]), 0, 0, 0, *FOOT) and not inside_rect(np.array([[0.2, 0.0]]), 0, 0, 0, *FOOT)
     assert abs(rect_clearance(np.array([[0.3, 0.0]]), 0, 0, 0, 0.1) - 0.2) < 1e-9
+    assert reversals([0, 0.2, 0.1, 0.2, 0.0]) == 4 and reversals([0, 0.1, 0.2, 0.26, 0.26]) == 1
     sys.exit(main())

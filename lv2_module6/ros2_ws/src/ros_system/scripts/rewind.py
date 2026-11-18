@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """경로 리와인드 — 실패한 주행의 실제 궤적(odom)을 따라 0.4 m 후진한다.
 
-  /navigate_to_pose·/navigate_through_poses 액션이 ABORTED 되면 자동 시작.
+  auto_on_abort:=true면 /navigate_to_pose·/navigate_through_poses 액션이 ABORTED 될 때 자동 시작 (기본 끔, rewind.cpp 참고).
   /odometry/filtered의 실제 주행 궤적을 기록해 두었다가 가장 최근 점에서
   뒤로 0.4 m 지점까지 역방향 pure-pursuit. /cmd_vel_smoothed로 발행하므로
   collision_monitor를 그대로 통과한다. 수동: ros2 service call /rewind std_srvs/srv/Trigger
@@ -25,6 +25,7 @@ def yaw_of(q):
 class Rewind(Node):
     def __init__(self):
         super().__init__('rewind')
+        self.auto = self.declare_parameter('auto_on_abort', False).value
         self.traj = deque(maxlen=4000)   # [(x,y)] 실제 주행 궤적
         self.odom = None                 # (x,y,yaw)
         self.active = False
@@ -52,7 +53,7 @@ class Rewind(Node):
             key = bytes(s.goal_info.goal_id.uuid)
             if s.status in (1, 2, 3):        # ACCEPTED / EXECUTING / CANCELING
                 self.active_goals.add(key)
-            elif s.status == 6 and key in self.active_goals:  # ABORTED
+            elif s.status == 6 and key in self.active_goals and self.auto:  # ABORTED
                 self.active_goals.discard(key)
                 self.start_rewind()
 

@@ -1,5 +1,6 @@
 // rewind C++판 (11-16) — scripts/rewind.py와 같음: 실패한 주행의 실제 궤적(odom)을 따라 0.4 m 후진
-//   /navigate_to_pose·/navigate_through_poses 액션이 ABORTED 되면 자동 시작 · 수동: ros2 service call /rewind std_srvs/srv/Trigger
+//   수동: ros2 service call /rewind std_srvs/srv/Trigger · auto_on_abort:=true면 /navigate_to_pose·/navigate_through_poses ABORTED 때 자동
+//   자동은 기본 끔 (11-18): 앞 카메라만 있어 뒤를 못 보는 채 0.4 m 후진 → 장애물 앞에서 멈춘 뒤 벽에 박고 "Start occupied"로 갇힘 (nav_bench)
 //   /cmd_vel_smoothed로 발행 → collision_monitor를 그대로 통과
 #include <algorithm>
 #include <array>
@@ -35,6 +36,7 @@ std::string py_repr(double v) {
 class Rewind : public rclcpp::Node {
 public:
   explicit Rewind(const rclcpp::NodeOptions & options) : Node("rewind", options) {
+    auto_ = declare_parameter<bool>("auto_on_abort", false);
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", 10,
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m) { on_odom(*m); });
     for (const char * topic : {"/navigate_to_pose/_action/status", "/navigate_through_poses/_action/status"})
@@ -48,10 +50,11 @@ public:
       });
     pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_smoothed", 10);
     timer_ = create_timer(std::chrono::milliseconds(50), [this]() { tick(); });
-    RCLCPP_INFO(get_logger(), "rewind ready — abort 시 자동 0.4 m 후진 · 수동 /rewind");
+    RCLCPP_INFO(get_logger(), "rewind ready — 수동 /rewind%s", auto_ ? " · abort 시 자동 0.4 m 후진" : "");
   }
 
 private:
+  bool auto_ = false;
   using XY = std::array<double, 2>;
   static double dist(const XY & a, const XY & b) { return std::hypot(a[0] - b[0], a[1] - b[1]); }
 
@@ -74,7 +77,7 @@ private:
         active_goals_.insert(key);
       } else if (s.status == 6 && active_goals_.count(key)) {  // ABORTED
         active_goals_.erase(key);
-        start_rewind();
+        if (auto_) start_rewind();
       }
     }
   }

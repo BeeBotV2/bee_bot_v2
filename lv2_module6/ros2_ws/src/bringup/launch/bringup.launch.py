@@ -97,7 +97,7 @@ def container(name, nodes, condition):
 
 # ros_system에 그대로 넘기는 하드웨어·서버 인자 (기본값 = 실기). 테스트베드 faker가 대역에 맞게 덮어씀
 ROS_SYSTEM_ARGS = {
-    'map_backend': ('nvblox', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox)'),
+    'map_backend': ('static_2d', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox) — 11-18 기본 static_2d: map:=saved면 <map_dir>/<map_name>/map.yaml을 /map으로 (매핑 map:=slam은 nvblox)'),
     'nvblox_params_file': ('', 'optional nvblox parameter YAML; empty uses ros_system default'),
     'urdf': ('default', '로봇 모델 = lv2_module6/urdf/<이 이름>/urdf.xacro (폴더 하나 = 모델 하나, 메시는 그 폴더 meshes/)'),
     'mock_hardware': ('false', 'true면 OpenCR 없이 BeebotSystemHardware가 명령을 상태로 되돌림'),
@@ -161,6 +161,9 @@ def setup_map(context):
     backend = LaunchConfiguration('map_backend').perform(context)
     if backend not in ('nvblox', 'static_2d'):
         raise RuntimeError(f'map_backend:={backend} — nvblox | static_2d')
+    # 11-18: 기본 static_2d — 매핑(map:=slam)·가짜 SLAM은 nvblox로 (static_2d는 저장 지도 위치추정 전용)
+    if backend == 'static_2d' and (mode != 'saved' or fake_slam):
+        backend = 'nvblox'
     if backend == 'static_2d' and mode != 'none' and (mode != 'saved' or fake_slam):
         raise RuntimeError('static_2d requires map:=saved and fake_slam:=false')
     map_file = MAP_FILE
@@ -247,6 +250,7 @@ def setup_map(context):
             SetLaunchConfiguration('static_map_yaml', os.path.join(d, name, 'map.yaml') if effective != 'none' and backend == 'static_2d' else ''),
             SetLaunchConfiguration('nvblox_params_file', LaunchConfiguration('nvblox_params_file').perform(context)
                 or os.path.join(get_package_share_directory('ros_system'), 'config', 'nvblox.yaml')),
+            SetLaunchConfiguration('map_backend', backend),
             SetLaunchConfiguration('use_perception', use_perception),
             SetLaunchConfiguration('use_gripper_cam', ug),
             SetLaunchConfiguration('use_pole_back_cam', ub),
@@ -328,8 +332,6 @@ def generate_launch_description():
                               description='초기 조작 모드: AUTO(기본, 11-16) | MANUAL'),
         DeclareLaunchArgument('start_pose', default_value='',
                               description='mission_manager 출발 자세 arena [x, y, yaw] YAML (비면 plan.yaml start_pose_arena)'),
-        DeclareLaunchArgument('taught_routes', default_value='true',
-                              description='움직임 정답표 재생 (~/.ros/routes/*.motion.csv · tools/cli start.sh route로 녹화) — 구간 표가 있으면 Nav2 경로 대신 표대로'),
         DeclareLaunchArgument('grasp_check', default_value='true',
                               description='coordinator 잡기 판정(그리퍼 위치 + 전류) — 물리 없는 대역(faker)은 손가락이 끝까지 닫혀 늘 빈손이라 false'),
         DeclareLaunchArgument('restart_prepare', default_value='',
@@ -385,8 +387,7 @@ def generate_launch_description():
         #   시작 자세(stow)는 skill_pose
         GroupAction([IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare('skills'), 'launch', 'skills.launch.py'])),
-            launch_arguments={'grasp_check': LaunchConfiguration('grasp_check'),
-                              'taught_routes': LaunchConfiguration('taught_routes')}.items())],
+            launch_arguments={'grasp_check': LaunchConfiguration('grasp_check')}.items())],
             condition=IfCondition(LaunchConfiguration('use_mission'))),
         # 주사위 미션 — /cmd/mission start로 시작 (abort로 멈춤). 출발 자세만 launch 인자로 덮어씀
         node('plan', 'mission_manager', condition=when('use_mission', 'use_mission_manager', composed=False,

@@ -239,6 +239,12 @@ class CuvslamSlam(Node):
         # [rad/s] odom 회전 속도가 이보다 크면 map→odom을 그대로 둠 (회전 중 보정 멈춤, 11-16) · 0 = 안 멈춤
         self.hold_wz = float(self.declare_parameter('gate_hold_wz', 0.2).value)
         self.prev_odom = None  # (t, (x, y, yaw))
+        # map 기준 (11-18): cuvslam(기본) · odom = EKF odom을 그대로 map에 두고 도면 보정만 얹음 (cuvslam_slam.cpp 설명과 같음)
+        #   환경 변수 BEE_MAP_ANCHOR=odom이 덮음
+        self.odom_anchor = os.environ.get('BEE_MAP_ANCHOR',
+                                          str(self.declare_parameter('map_anchor', 'cuvslam').value)) == 'odom'
+        if self.odom_anchor:
+            self.get_logger().warning('map 기준 = EKF odom (+도면 보정) — cuVSLAM 자세는 map→odom에 안 씀')
         # BEE_MAP_FREEZE=1 (시험용, 11-13): 첫 map→odom(출발 자세 ≈ 항등)에 고정 — 보정 끔, TF map = EKF odom 그대로
         if os.environ.get('BEE_MAP_FREEZE') == '1':
             self.gate = MapGate(math.inf, math.inf, 0.0, 0.0)
@@ -476,7 +482,7 @@ class CuvslamSlam(Node):
             return
         odom_from_base = mat((o.rotation.x, o.rotation.y, o.rotation.z, o.rotation.w),
                              (o.translation.x, o.translation.y, o.translation.z))
-        base_raw = base_pose(self.base_from_cam, mat(p.rotation, p.translation))
+        base_raw = planar(odom_from_base) if self.odom_anchor else base_pose(self.base_from_cam, mat(p.rotation, p.translation))
         self.last_base = base_raw
         base = compose(self.map_offset, base_raw)
         x, y, yaw = map_to_odom(base, odom_from_base)
