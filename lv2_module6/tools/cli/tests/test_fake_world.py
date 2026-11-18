@@ -127,33 +127,8 @@ run(0.2)
 assert 'FAILED' in app.state.task_status, 'MANUAL에서는 거부돼야 함'
 print('PASS test_fake_world')
 
-# 지도 화면에 쓰는 토픽 — costmap(c)·경로(p)가 fake에서도 흘러온다 (MapPage.show와 같은 구독)
-from nav_msgs.msg import Path as PathMsg  # noqa: E402
-from op.pages.map import MapPage  # noqa: E402
-from op.views.map import CostGrid  # noqa: E402
-app.state.values['operation_mode'] = 'AUTO'
-w.set_robot_pose(0.0, 0.0, 0.0)
-page = MapPage(app, mode='view')
-for kind, topic in (('plan', '/plan'), ('local_plan', '/local_plan')):
-    app.create_subscription(PathMsg, topic, lambda m, k=kind: page._on_path(k, m), None)
-from plan.msg import SubGoalArray  # noqa: E402
-app.create_subscription(SubGoalArray, '/task/sub_goals', page._on_goals, None)
-w.send_nav_goal({'x': w.x + 0.6, 'y': w.y})
-run(1.2)
-page.plan_on = True
-bus.cmd_skill('navigate', f'{w.x + 0.3:.2f},{w.y:.2f}')   # 경유점 — 실행 중인 navigate 목표가 번호로 찍힘
-run(0.3)
-assert len(page._waypoint_pts()) == 1 and '경유점' in page._plan_lines()[1], page._plan_lines()
-lines, info = page._plan_lines()
-assert len(lines) == 2 and '전역' in info and '지역' in info, info
-cg = CostGrid.from_msg(LATEST['/global_costmap/costmap'])
-assert any(cg.code(*w._world(c, r)) == 2 for r in range(0, w.h, 3) for c in range(0, w.w, 3)), 'costmap에 벽(내접)이 있어야 함'
-assert LATEST['/local_costmap/costmap'].info.width > 10
-print('PASS test_fake_world (map topics)')
-
 # 저장 지도 = ros/fake/map/<이름> (테스트 지도 폴더 — 도커 /ws/map과 같은 곳) — 매핑한 /map 저장 → 목록 · 보기(map.yaml) · 그 지도로 위치추정
 import shutil  # noqa: E402
-from op.views.map import MapGrid  # noqa: E402
 from ros.fake.FakeRos import CURRENT, MAP_DIR, fake_map_names  # noqa: E402
 assert bus.default_map_dir() == MAP_DIR and MAP_DIR.parts[-3:] == ('ros', 'fake', 'map'), bus.default_map_dir()
 tmp = MAP_DIR / '_test_saved'
@@ -162,8 +137,8 @@ try:
     assert bus.cmd_map(bus.map_args('save', file=str(tmp / 'map'), localize=False)) == 0
     assert (tmp / 'map.yaml').is_file() and (tmp / 'map.pgm').is_file(), '저장하면 폴더에 지도가 생겨야 함'
     assert '_test_saved' in bus.map_names(), bus.map_names()
-    saved = MapGrid.from_yaml(tmp / 'map.yaml')   # 지도 목록 → 보기가 읽는 파일
-    assert saved.w == w.w and saved.h == w.h, (saved.w, saved.h)
+    saved_yaml = (tmp / 'map.yaml').read_text()
+    assert 'resolution:' in saved_yaml and (tmp / 'map.pgm').stat().st_size > 0
     bus.cmd_map(bus.map_args('switch', name='_test_saved'))
     app.poll(0.3)
     assert CURRENT['name'] == '_test_saved' and app.state.values.get('map_mode') == 'LOCALIZATION', CURRENT

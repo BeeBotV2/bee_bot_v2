@@ -2,11 +2,8 @@
 from __future__ import annotations
 
 import math
-import os
 import time
 from collections import deque
-
-from .fielddebug import SignalTracker, light_state
 
 # 3S LiPo (TurtleBot3 11.1V) 방전 곡선 — 대략값. 12.6V 만충 · 11.1V 공칭 · 10.5V 방전.
 #   아답터를 꽂으면 OpenCR 전원 입력값이라 배터리 잔량이 아니다 (표시에 '충전?'을 붙인다).
@@ -53,7 +50,7 @@ class StateStore:
         self.devices: list[str] = []
         self.device_details: dict[str] = {}
         self.diagnostics: dict = {}
-        self.diag_values: dict = {}
+        self.diag_values: dict[str, dict[str, str]] = {}
         self.joints: dict[str, float] = {}
         self.joint_vel: dict[str, float] = {}
         self.joint_effort: dict[str, float] = {}  # BeebotSystemHardware effort = 모터 전류 [A]
@@ -72,6 +69,11 @@ class StateStore:
         self.tracked_at = 0.0
         self.task_status = ''
         self.rates: dict[str, Rate] = {}  # 상단 생존 표시 — 키는 bars/state/top_state_bar.py TOPIC_RATES
+        self.stream_headers: dict[str, tuple[float, float]] = {}  # ROS header age at receive, receive monotonic time
+        self.transport_ms: dict[str, tuple[float, float]] = {}  # RMW source→receive latency, milliseconds
+        self.command_samples: deque[tuple[float, float, float]] = deque(maxlen=512)  # final /cmd_vel: (mono, vx, wz)
+        self.odom_samples: deque[tuple[float, float, float]] = deque(maxlen=512)     # raw wheel odom twist
+        self.runtime_params: dict[str, tuple[object, float]] = {}  # fully-qualified key -> current value, receive time
         self.rl_status: list[float] = []  # controller_server FollowPath RL/DWB 상태
         self.rl_status_time = 0.0
         self.map_pose: tuple[float, float, float] | None = None  # TF map → base_footprint (x, y, yaw[rad]) — 없으면 None
@@ -80,7 +82,7 @@ class StateStore:
         self.mission = None                      # /mission/state (plan/MissionState)
         self.mission_since = 0.0                 # 지금 phase가 시작된 시각
         self.mission_phase = ''
-        self.phase_history: deque[tuple[float, str, str]] = deque(maxlen=12)  # TUI 연결 중 관측한 phase 전환
+        self.phase_history: deque[tuple[float, str, str]] = deque(maxlen=12)  # monitor 연결 중 관측한 phase 전환
         self.task: tuple | None = None           # /task/status (plan_id, step, state, reason)
         self.task_since = 0.0                    # 지금 step이 시작된 시각
         self.sub_goals: tuple[int, dict] = (0, {})  # /task/current_plan (legacy /task/sub_goals도 호환)
@@ -95,15 +97,70 @@ class StateStore:
         self.map_odom: tuple | None = None       # TF map → odom (x, y, yaw) 지난 값
         self.slam_jumps = 0                      # map→odom이 SLAM_JUMP_M·SLAM_JUMP_RAD 넘게 바뀐 횟수
         self.slam_last_jump: tuple | None = None  # (크기 m, 각 deg, HH:MM:SS)
-        # 현장 디버그 (op/fielddebug.py)
-        self.signal_track = SignalTracker.from_config()      # /tracked_objects 신호등 → 지금 몇 번째 점멸
-        self.signal_answer = os.environ.get('BEE_SIGNAL_ANSWER', 'R G R R G R G G Y G Y G')   # 정답 신호 — 기본 = 현장 고정 문제 (신호등 보드 고정 세트) · 미션 메뉴 a로 바꿈
         self.nav2_life: dict[str, str | None] = {}           # Nav2 노드 → 수명주기 상태 (None = 서비스 없음) · operator_tool이 5 s마다
         self.barcode_cam: tuple[str, str] | None = None      # 바코드를 마지막으로 본 (카메라, 내용) — /tracked_objects class barcode
+        self.barcode_target: tuple[str, float, float, float, float] | None = None  # 프레임·map XYZ·관측 시각
         self.mission_cmd: tuple[str, float] | None = None    # 마지막 /cmd/mission (값, 받은 시각) — 바코드 찾기 창 계산
 
     def tick(self, key: str, seq: int | None = None):
         self.rates.setdefault(key, Rate()).tick(seq)
+
+    def _set_transport(self, key: str, info, received: float):
+        source_ns = info.get('source_timestamp') if hasattr(info, 'get') else getattr(info, 'source_timestamp', None)
+        received_ns = info.get('received_timestamp') if hasattr(info, 'get') else getattr(info, 'received_timestamp', None)
+        if source_ns and received_ns and received_ns >= source_ns:
+            self.transport_ms[key] = ((received_ns - source_ns) / 1e6, received)
+
+    def on_stream(self, key: str, msg, seq: int | None = None, ros_now_s: float | None = None, info=None):
+        """Record receive rate and ROS-header age for a monitored topic."""
+        received = time.monotonic()
+        self.tick(key, seq)
+        if info is not None:
+            self._set_transport(key, info, received)
+        self._touch()
+        header = getattr(msg, 'header', None)
+        stamp = getattr(header, 'stamp', None)
+        if stamp is not None and ros_now_s is not None:
+            stamp_s = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+            if stamp_s > 0.0:
+                self.stream_headers[key] = (ros_now_s - stamp_s, received)
+        if key == 'cmd_vel':
+            self.command_samples.append((received, float(msg.twist.linear.x), float(msg.twist.angular.z)))
+        elif key == 'odom':
+            twist = msg.twist.twist
+            self.odom_samples.append((received, float(twist.linear.x), float(twist.angular.z)))
+
+    def on_transport(self, key: str, info, seq: int | None = None):
+        """Use DDS MessageInfo timestamps to measure publisher→subscriber transit."""
+        received = time.monotonic()
+        self.tick(key, seq)
+        self._set_transport(key, info, received)
+        self._touch()
+
+    def transport_latency_ms(self, key: str, now: float | None = None) -> float | None:
+        sample = self.transport_ms.get(key)
+        if sample is None:
+            return None
+        latency, received = sample
+        if (time.monotonic() if now is None else now) - received > 3.0:
+            return None
+        return latency
+
+    def on_odom(self, msg, seq: int | None = None, ros_now_s: float | None = None):
+        self.on_stream('odom', msg, seq, ros_now_s)
+
+    def stream_age(self, key: str, now: float | None = None) -> float | None:
+        sample = self.stream_headers.get(key)
+        if sample is None:
+            return None
+        age_at_receive, received = sample
+        age = age_at_receive + (time.monotonic() if now is None else now) - received
+        return age if age >= 0.0 else None
+
+    def set_runtime_params(self, node: str, values: dict[str, object]):
+        now = time.monotonic()
+        for name, value in values.items():
+            self.runtime_params[f'{node}.{name}'] = (value, now)
 
     @property
     def operation(self) -> str:
@@ -143,9 +200,16 @@ class StateStore:
         self.device_details[name] = text
         self._touch_state()
 
-    def on_joints(self, names, positions, velocities=None, efforts=None, seq=None):
+    def on_joints(self, names, positions, velocities=None, efforts=None, seq=None,
+                  stamp=None, ros_now_s: float | None = None, info=None):
         self._touch()
         self.tick('joint_states', seq)
+        if info is not None:
+            self._set_transport('joint_states', info, time.monotonic())
+        if stamp is not None and ros_now_s is not None:
+            stamp_s = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+            if stamp_s > 0.0:
+                self.stream_headers['joint_states'] = (ros_now_s - stamp_s, time.monotonic())
         vels = [] if velocities is None else list(velocities)
         effs = [] if efforts is None else list(efforts)
         for i, name in enumerate(names):
@@ -207,11 +271,18 @@ class StateStore:
             else:
                 level = int(level)
             self.diagnostics[status.name] = (level, status.message)
-            self.diag_values[status.name] = [(kv.key, kv.value) for kv in status.values]
+            self.diag_values[status.name] = {kv.key: kv.value for kv in status.values}
 
-    def on_objects(self, objects, frame_id: str = 'map'):
+    def on_objects(self, objects, frame_id: str = 'map', stamp=None, ros_now_s: float | None = None,
+                   seq=None, info=None):
         self._touch()
-        self.tick('tracked_objects')
+        self.tick('tracked_objects', seq)
+        if info is not None:
+            self._set_transport('tracked_objects', info, time.monotonic())
+        if stamp is not None and ros_now_s is not None:
+            stamp_s = float(stamp.sec) + float(stamp.nanosec) * 1e-9
+            if stamp_s > 0.0:
+                self.stream_headers['tracked_objects'] = (ros_now_s - stamp_s, time.monotonic())
         try:
             self.tracked_count = len(objects)
             self.tracked = list(objects)
@@ -227,21 +298,9 @@ class StateStore:
             if name == 'barcode' and getattr(o, 'cameras', None):
                 content = next((kv.value for kv in getattr(o, 'details', ()) if kv.key == 'content'), '')
                 self.barcode_cam = (o.cameras[-1], content)
+                p = o.pose.pose.position
+                self.barcode_target = (self.tracked_frame, float(p.x), float(p.y), float(p.z), self.tracked_at)
         self.class_counts = counts
-        self._feed_signal(objects or ())
-
-    def _feed_signal(self, objects):
-        """신호등 색 → SignalTracker (signal_decoder on_objects와 같은 고르기). 시각은 로봇 벽시계 —
-        last_seen이 그와 크게 다르면(시뮬 시각) 메시지 안 가장 최근 last_seen을 기준으로."""
-        lights = []
-        for o in objects:
-            if getattr(o, 'class_name', '') == 'traffic_light':
-                ls = getattr(o, 'last_seen', None)
-                lights.append((ls.sec + ls.nanosec * 1e-9 if ls is not None else time.time(), o.color))
-        now = time.time()
-        if lights and abs(now - max(t for t, _ in lights)) > 60:
-            now = max(t for t, _ in lights)
-        self.signal_track.feed(time.monotonic(), light_state(lights, now))
 
     def on_mission_cmd(self, data: str):
         self.mission_cmd = (data, time.monotonic())

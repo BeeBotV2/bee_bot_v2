@@ -9,8 +9,7 @@ from ros.fake.FakeRos import FakeRos  # noqa: E402
 
 FakeRos.install()
 from op.state import StateStore  # noqa: E402
-from op.terminal import Terminal  # noqa: E402
-from op.pages.mission import mission_lines  # noqa: E402
+from op.monitor import mission_status_lines  # noqa: E402
 from ros.msgs import _Msg  # noqa: E402
 
 st = StateStore()
@@ -29,7 +28,7 @@ st.on_map_odom(0.01, 0.0, 0.0)                    # 조금 — 점프 아님
 st.on_map_odom(0.30, 0.0, math.radians(1))        # 큰 보정 — 점프
 assert st.slam_jumps == 1 and abs(st.slam_last_jump[0] - 0.29) < 1e-6
 
-text = '\n'.join(mission_lines(st, Terminal(color=False)))
-for want in ('[미션] ERROR', 'skill_unavailable:pick', 'map→odom 점프 1회', 'nav_no_progress'):
+text = '\n'.join(mission_status_lines(st))
+for want in ('MISSION ERROR', 'skill_unavailable:pick', 'nav_no_progress'):
     assert want in text, (want, text)
 print('PASS test_mission_state')

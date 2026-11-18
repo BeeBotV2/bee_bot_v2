@@ -293,7 +293,7 @@ class Session:
             raise RuntimeError(f'E-stop 상태를 OFF로 확인하지 못함: {s["estop"]}')
         expected = 'AUTO' if require_auto else 'MANUAL'
         if s['operation'] != expected:
-            raise RuntimeError(f'현재 모드 {s["operation"]!r}; 필요한 모드 {expected}. TUI에서 직접 전환한 뒤 다시 시도.')
+            raise RuntimeError(f'현재 모드 {s["operation"]!r}; 필요한 모드 {expected}. 별도 ROS 운영 명령으로 모드를 바꾼 뒤 다시 시도.')
         if s['mission_phase'] is None:
             raise RuntimeError('MissionManager /mission/state 응답 없음; bringup와 ROS domain을 확인.')
         if require_idle and s['mission_phase'] not in ('IDLE', 'DONE'):
@@ -349,7 +349,7 @@ def ask_skill_goal(session):
     coordinate = re.compile(r'^\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\s*,\s*(-?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*,\s*(-?(?:\d+(?:\.\d*)?|\.\d+)))?\s*$')
 
     if skill in ('navigate', 'approach'):
-        raw = input('map target x,y,yaw(rad), current observation/TUI 확인값: ').strip()
+        raw = input('map target x,y,yaw(rad), 확인한 목표 좌표: ').strip()
         match = coordinate.fullmatch(raw)
         if not match or match.group(3) is None:
             raise RuntimeError('이 skill은 x,y,yaw 세 값이 필요함.')
@@ -502,7 +502,7 @@ def run_skill(session, timeout):
 def run_drive(session):
     state = session.safety(require_auto=False)
     if state['operation'] != 'MANUAL':
-        raise RuntimeError('수동 휠 시험은 MANUAL mode에서만 실행. TUI로 mode manual을 선택한 뒤 재시도.')
+        raise RuntimeError('수동 휠 시험은 MANUAL mode에서만 실행. 별도 ROS 운영 명령으로 MANUAL 전환 후 재시도.')
     print('고정 저속 프로브: 전진 0.06 m/s 0.4 s, 회전 0.20 rad/s 0.4 s 이하.')
     direction = input('방향 forward/back/left/right: ').strip()
     if direction not in ('forward', 'back', 'left', 'right'):

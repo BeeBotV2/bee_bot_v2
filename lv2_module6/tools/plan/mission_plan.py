@@ -4,7 +4,7 @@
   mission_manager가 회차마다 남기는 ~/.ros/mission/<시각>/signal.json · allocation.json · build.json · verify.json
   (plan.yaml log_dir) 중 가장 최근 회차를 2초마다 다시 읽음. 아직 안 정해진 건 '대기'로.
   실행: python3 tools/plan/mission_plan.py [--dir 회차폴더 또는 log_dir] [--once]   (표준 라이브러리만 · ROS 없이)
-  TUI 미션 메뉴 'p'가 새 창(tmux 창 · 터미널)으로 띄움.
+  수동 개발 실행 시 독립 프로세스로 띄움.
 """
 import argparse
 import json
