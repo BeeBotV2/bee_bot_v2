@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <utility>
 
 #include "plan/msg/task_status.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
@@ -62,9 +63,31 @@ public:
       }
     });
     serve("pose", [this](const SkillGoal & g, Done done) {
-      const auto it = poses_.find(g.target);
-      if (it == poses_.end() || it->second.size() != 5) { done(false, "pose_unknown"); return; }
-      when_ready([this]() { return arm_.moveit_ready(); }, "arm_unavailable", done, [this, q = it->second, g, done]() {
+      auto it = poses_.find(g.target);
+      std::vector<double> q;
+      if (it != poses_.end()) {
+        q = it->second;
+      } else if (g.target.rfind("gaze@", 0) == 0 && poses_.count("gaze")) {
+        try {
+          size_t end = 0;
+          const double yaw = std::stod(g.target.substr(5), &end);
+          if (end != g.target.size() - 5 || !std::isfinite(yaw) || std::abs(yaw) > 0.65) {
+            done(false, "gaze_target_out_of_range");
+            return;
+          }
+          q = poses_.at("gaze");
+          if (q.size() != 5) { done(false, "pose_unknown"); return; }
+          q[0] = yaw;  // candidate bearing relative to base; other joints retain calibrated gaze posture
+        } catch (const std::exception &) {
+          done(false, "gaze_target_invalid");
+          return;
+        }
+      } else {
+        done(false, "pose_unknown");
+        return;
+      }
+      if (q.size() != 5) { done(false, "pose_unknown"); return; }
+      when_ready([this]() { return arm_.moveit_ready(); }, "arm_unavailable", done, [this, q = std::move(q), g, done]() {
         stage(g.target);
         arm_.move_joints(q, [done](bool ok) { done(ok, ok ? "" : "pose_failed"); });
       });

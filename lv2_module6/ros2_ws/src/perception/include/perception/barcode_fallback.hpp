@@ -64,6 +64,24 @@ inline std::vector<std::pair<int, int>> barcode_cuts(const std::vector<uchar> & 
   return {{a, b}, {bstart[1], b}, {a, bend[bend.size() - 2]}};
 }
 
+// 빠른 후보 검출: 흰 라벨 안 여러 가로줄에서 반복되는 바코드 막대 패턴이
+// 확인될 때만 후보로 반환한다. QR/미션 내용은 읽지 않아도 되는 정렬 준비용.
+inline std::vector<cv::Rect> barcode_candidates(const cv::Mat & bgr) {
+  cv::Mat g;
+  cv::cvtColor(bgr, g, cv::COLOR_BGR2GRAY);
+  std::vector<cv::Rect> out;
+  for (const auto & r : barcode_labels(bgr)) {
+    int stripe_rows = 0;
+    const int step = std::max(2, r.height / 12);
+    for (int y = r.y + 2; y < r.y + r.height - 2; y += step) {
+      const uchar * p = g.ptr<uchar>(y) + r.x;
+      if (barcode_cuts(std::vector<uchar>(p, p + r.width)).empty()) continue;
+      if (++stripe_rows >= 3) { out.push_back(r); break; }
+    }
+  }
+  return out;
+}
+
 // decode(회색 그림, 이진화 종류 0 = 고정 임계 · 1 = 지역 평균) → 내용 ("" = 못 읽음). where에 읽은 라벨 사각형
 inline std::string barcode_fallback(const cv::Mat & bgr, const std::function<std::string(const cv::Mat &, int)> & decode,
                                     double budget_s = 0.15, cv::Rect * where = nullptr) {
