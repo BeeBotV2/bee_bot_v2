@@ -243,6 +243,7 @@ class CuvslamSlam(Node):
         self.prev_odom = None  # (t, (x, y, yaw))
         # map 기준 (11-18): cuvslam(기본) · odom = EKF odom을 그대로 map에 두고 도면 보정만 얹음 (cuvslam_slam.cpp 설명과 같음)
         #   환경 변수 BEE_MAP_ANCHOR=odom이 덮음
+        self.odom_tol = float(self.declare_parameter('odom_lookup_tolerance', 0.1).value)  # [s] 영상 시각 odom TF가 없을 때 최근 TF 한도
         self.odom_anchor = os.environ.get('BEE_MAP_ANCHOR',
                                           str(self.declare_parameter('map_anchor', 'cuvslam').value)) == 'odom'
         if self.odom_anchor:
@@ -569,8 +570,18 @@ class CuvslamSlam(Node):
         self.odom_pub.publish(o)
 
     def publish_map(self, stamp, p):
+        from tf2_ros import ExtrapolationException
         try:
             o = self.tf_buf.lookup_transform(self.odom, self.base, stamp).transform
+        except ExtrapolationException:
+            # 영상이 EKF의 마지막 odom TF보다 먼저 오면 최근 TF로 (cuvslam_slam.cpp와 같음 — odom_lookup_tolerance 안에서만)
+            try:
+                t = self.tf_buf.lookup_transform(self.odom, self.base, Time())
+            except Exception:  # noqa: BLE001
+                return
+            if abs((Time.from_msg(stamp) - Time.from_msg(t.header.stamp)).nanoseconds) * 1e-9 > self.odom_tol:
+                return
+            o = t.transform
         except Exception:  # noqa: BLE001 — 그 시각 odom이 없으면 이 프레임은 TF만 건너뜀 (추적은 계속)
             return
         odom_from_base = mat((o.rotation.x, o.rotation.y, o.rotation.z, o.rotation.w),

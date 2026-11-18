@@ -95,14 +95,22 @@ replay() {  # $1 = bag · $2 = 지도 이름 · $3 = localization true|false
   ros2 daemon stop >/dev/null 2>&1
   setsid ros2 launch "$HERE/replay.launch.py" map_dir:="$WS/map" map_name:="$2" localization:="$3" &
   LAUNCH=$!
-  stop() { trap - EXIT INT TERM HUP; kill -INT -- -$LAUNCH 2>/dev/null; wait $LAUNCH 2>/dev/null; }  # SIGINT → cuVSLAM · nvblox 저장
+  # SIGINT → cuVSLAM · nvblox 저장. bag play는 이 셸의 백그라운드라 SIGINT를 무시하므로 TERM
+  stop() { trap - EXIT INT TERM HUP; [ -n "$PLAY" ] && kill -TERM $PLAY 2>/dev/null; kill -INT -- -$LAUNCH 2>/dev/null; wait $LAUNCH 2>/dev/null; }
   trap stop EXIT INT TERM HUP
   sleep "${BEE_REPLAY_WAIT:-8}"  # 노드가 뜨고 구독할 때까지 — 앞 프레임을 놓치면 출발 자리가 달라짐
-  # EKF가 그래프에 보이고 /odom을 구독하는지 — 안 보이면 odom TF가 없어 지도가 안 생기므로 재생 전에 멈춤
-  ros2 topic info -v /odom --no-daemon --spin-time 3 2>/dev/null | grep -q "Node name: ekf_filter_node" \
-    || { echo "[mapping] EKF가 /odom을 구독하지 않음 — DDS가 노드를 못 찾음. 모든 ROS 창(RViz 포함)을 끄고 다시"; exit 1; }
   echo "[mapping] 재생: $1 → 지도 $WS/map/$2 ($( [ "$3" = true ] && echo 위치추정 || echo 매핑))"
-  ros2 bag play --clock 100 "$1"
+  ros2 bag play --clock 100 "$1" &
+  PLAY=$!
+  # EKF가 odom을 내는지 — EKF는 /clock이 오기 전엔 구독도 안 하므로(Waiting for clock to start) 재생을 시작한 뒤에 봄.
+  #   안 나오면 odom TF가 없어 지도가 끝까지 안 생긴다 (11-19: DDS가 EKF를 못 찾아 map→odom 0)
+  if ! timeout 15 ros2 topic echo --once /odometry/filtered --field header.stamp >/dev/null 2>&1; then
+    echo "[mapping] EKF가 /odometry/filtered를 안 냄 — 지도가 안 생김. 모든 ROS 창(RViz 포함)을 끄고 다시"
+    kill $PLAY 2>/dev/null
+    exit 1
+  fi
+  echo "[mapping] EKF 확인 — 이제 RViz를 띄워도 됨 (mapping.sh rviz)"
+  wait $PLAY
   sleep 3  # 마지막 프레임 처리
   echo "[mapping] 재생 끝 — SLAM 끔$( [ "$3" = true ] || echo ' (끌 때 저장)')"
 }
