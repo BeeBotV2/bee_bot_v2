@@ -2,6 +2,7 @@
 
   ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py            # → isaac/mission/map/maze_map_1711/
   ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py --res 0.02 --z 0.02 0.45
+  ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py --walls   # plan.yaml arena_walls 선분 (경기장 좌표) 출력
 
 pxr가 필요해서 Isaac venv python으로 돌린다 (Isaac은 안 띄움 · USD 파일은 읽기만).
 지도 좌표 = map 프레임 = 로봇을 켠 자리(beebot prim 자세, base_footprint) — 앞 = +x, cuVSLAM·nvblox의 map과 같은 원점.
@@ -11,6 +12,7 @@ pxr가 필요해서 Isaac venv python으로 돌린다 (Isaac은 안 띄움 · US
 import argparse
 import math
 import os
+import sys
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -28,6 +30,9 @@ def main():
     ap.add_argument('--res', type=float, default=0.05, help='[m/칸] — Nav2 costmap 해상도(0.05)와 같게')
     ap.add_argument('--z', type=float, nargs=2, default=[0.02, 0.47], help='[m] 장애물로 볼 높이 띠')
     ap.add_argument('--out', default=os.path.join(HERE, 'map', 'maze_map_1711'))
+    ap.add_argument('--walls', action='store_true', help='지도 대신 벽판 선분을 plan.yaml arena_walls 형식으로 출력')
+    ap.add_argument('--start-arena', type=float, nargs=3, default=[0.734, 0.950, math.pi],
+                    help='plan.yaml start_pose_arena (x y yaw) — map → 경기장 좌표 변환')
     a = ap.parse_args()
 
     st = Usd.Stage.Open(SCENE)
@@ -38,6 +43,15 @@ def main():
     def world_to_map(p):
         q = to_map.Transform(Gf.Vec3d(*p))
         return q[0], q[1], q[2]
+
+    if a.walls:
+        sx, sy, sth = a.start_arena
+        c, s_ = math.cos(sth), math.sin(sth)
+        segs = wall_segments(st, world_to_map, lambda x, y: (sx + c * x - s_ * y, sy + s_ * x + c * y))
+        vals = [f'{v:.3f}' for p0, p1 in segs for v in (*p0, *p1)]
+        print('    arena_walls:\n      [\n' + ',\n'.join('        ' + v for v in vals) + '\n      ]')
+        print(f'# {len(segs)} segments from {os.path.relpath(SCENE, HERE)} */wall/geo', file=sys.stderr)
+        return
 
     for root in ROOTS:
         for p in Usd.PrimRange(st.GetPrimAtPath(root), Usd.TraverseInstanceProxies()):
@@ -79,6 +93,60 @@ def main():
                 f'negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n')
     occ = int((np.array(img) == 0).sum())
     print(f'{a.out}/map.pgm  {w}x{h} @ {a.res} m · origin ({ox:.3f}, {oy:.3f}) · 면 {len(polys)}개 · 장애물 칸 {occ}')
+
+
+def wall_segments(st, world_to_map, to_arena, min_len=0.1, pair=0.05):
+    """벽판(*/wall/geo) 세로 면 → 경기장 좌표 선분. 같은 판의 두 면(두께 ≤ pair)은 경기장 가운데 쪽 면만 —
+    바깥 틀은 안쪽 면, 얇은 안쪽 벽(4 mm)은 사실상 판 가운데. 한 직선 위에서 겹치거나 맞닿은 선분은 하나로."""
+    faces = []
+    for p in Usd.PrimRange(st.GetPrimAtPath(ROOTS[0]), Usd.TraverseInstanceProxies()):
+        if not p.IsA(UsdGeom.Mesh) or not str(p.GetPath()).endswith('/wall/geo'):
+            continue
+        m = UsdGeom.Mesh(p)
+        xf = UsdGeom.Xformable(p).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        pts = [world_to_map(xf.Transform(v)) for v in m.GetPointsAttr().Get()]
+        idx, k = m.GetFaceVertexIndicesAttr().Get(), 0
+        for n in m.GetFaceVertexCountsAttr().Get():
+            f = [pts[i] for i in idx[k:k + n]]
+            k += n
+            if max(v[2] for v in f) - min(v[2] for v in f) < 0.1:
+                continue  # 윗면 · 밑면
+            xy = [to_arena(v[0], v[1]) for v in f]
+            a, b = max(((u, w) for u in xy for w in xy), key=lambda t: math.dist(*t))
+            if math.dist(a, b) >= min_len:
+                faces.append((a, b))
+    cx = sum(x for f in faces for x, _ in f) / (2 * len(faces))
+    cy = sum(y for f in faces for _, y in f) / (2 * len(faces))
+
+    def line(f):  # 단위 방향 · 법선 거리 · 구간 [t0, t1]
+        (ax, ay), (bx, by) = f
+        L = math.dist(f[0], f[1])
+        ux, uy = (bx - ax) / L, (by - ay) / L
+        if ux < -1e-6 or (abs(ux) <= 1e-6 and uy < 0):
+            ux, uy = -ux, -uy
+        d = ax * -uy + ay * ux
+        t0, t1 = sorted((ax * ux + ay * uy, bx * ux + by * uy))
+        return ux, uy, d, t0, t1
+
+    L = [line(f) for f in faces]
+
+    def same_dir(p, q):
+        return abs(p[0] * q[1] - p[1] * q[0]) < 0.02
+
+    def mid_dist(q):  # 선분 가운데에서 경기장 가운데까지
+        t = (q[3] + q[4]) / 2
+        return math.hypot(q[0] * t - q[1] * q[2] - cx, q[1] * t + q[0] * q[2] - cy)
+    keep = [q for q in L if not any(  # 겹치는 평행 면 중 가운데에서 먼 쪽은 버림
+        same_dir(q, o) and 1e-4 < abs(q[2] - o[2]) <= pair and min(q[4], o[4]) - max(q[3], o[3]) > 0.05 and mid_dist(o) < mid_dist(q)
+        for o in L)]
+    merged = []
+    for q in sorted(keep, key=lambda q: (round(q[0], 2), round(q[1], 2), round(q[2], 2), q[3])):
+        m = merged[-1] if merged else None
+        if m and same_dir(q, m) and abs(q[2] - m[2]) < 0.01 and q[3] <= m[4] + 0.02:
+            merged[-1] = (m[0], m[1], (m[2] + q[2]) / 2, m[3], max(m[4], q[4]))
+        else:
+            merged.append(q)
+    return [((ux * t0 - uy * d, uy * t0 + ux * d), (ux * t1 - uy * d, uy * t1 + ux * d)) for ux, uy, d, t0, t1 in merged]
 
 
 def convex_hull(pts):

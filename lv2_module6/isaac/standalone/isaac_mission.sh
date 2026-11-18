@@ -32,7 +32,7 @@ case "${1:-mission}" in
     ;;
   mission)
     [ -f "$MAP_DIR/$NAME/nvblox.nvblx" ] || { echo "저장 지도 없음: $MAP_DIR/$NAME/nvblox.nvblx — 먼저 $0 map"; exit 1; }
-    export ISAAC_ROS_ARGS="map:=saved perception:=true $COMMON"
+    export ISAAC_ROS_ARGS="map:=saved perception:=true $COMMON ${ISAAC_EXTRA_ROS_ARGS:-}"  # e.g. ISAAC_EXTRA_ROS_ARGS=map_backend:=nvblox
     export BEE_BLINK=1
     ;;
   *) sed -n '2,9p' "$0"; exit 1 ;;
