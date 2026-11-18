@@ -149,6 +149,21 @@ def main():
         ('nav2_composition:=false = 서버마다 프로세스', 'nav2_container' not in separate and {'controller_server', 'planner_server'} <= separate),
         ('지도 없음(use_nav2:=false)에도 바퀴 체인용 nav2_container', 'nav2_container' in on),
         ('nvblox(끌 때 지도 저장)는 launch 기본 5+5초', stop_timeouts('nvblox_node') == ('5', '5')),
+        ('cuVSLAM 지도: 매핑 = 저장만', params('cuvslam_slam', **base, localization='false', cuvslam_map='/maps/a/cuvslam')
+         == {**params('cuvslam_slam', **base), 'map_save_dir': '/maps/a/cuvslam', 'map_load_dir': ''}),
+        ('cuVSLAM 지도: 위치추정 = 불러오기만', params('cuvslam_slam', **base, localization='true', cuvslam_map='/maps/a/cuvslam')
+         == {**params('cuvslam_slam', **base), 'map_save_dir': '', 'map_load_dir': '/maps/a/cuvslam'}),
+        ('cuVSLAM 지도 인자 없으면 둘 다 빔', params('cuvslam_slam', **base).get('map_save_dir') == ''
+                                         and params('cuvslam_slam', **base).get('map_load_dir') == ''),
+        ('cuVSLAM은 끌 때 지도 저장 시간 20초', stop_timeouts('cuvslam_slam')[0] == '20'),
+        ('nvblox_map: 매핑이면 끌 때 nvblox.nvblx 옆 map.yaml', params('nvblox_map', **base, localization='false',
+                                                               nvblox_map='/maps/a/nvblox.nvblx').get('save_yaml') == '/maps/a/map.yaml'),
+        ('collision_monitor: SLAM이면 카메라 + 도면 벽', list(params('collision_monitor', **base, nav2_composition='false').get('observation_sources', []))
+         == ['pole_front_cam', 'arena_walls']),
+        ('collision_monitor: 지도 없음(use_slam:=false)이면 카메라만 — 도면 벽 점구름이 없어 막힘',
+         list(params('collision_monitor', **base, nav2_composition='false', use_slam='false').get('observation_sources', [])) == ['pole_front_cam']),
+        ('nvblox_map: 위치추정이면 map.yaml 안 씀', params('nvblox_map', **base, localization='true',
+                                                       nvblox_map='/maps/a/nvblox.nvblx').get('save_yaml') == ''),
     ]
     bad = [name for name, ok in checks if not ok]
     for name, ok in checks:

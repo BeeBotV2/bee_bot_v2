@@ -248,6 +248,8 @@ def setup_map(context):
             SetLaunchConfiguration('use_nav2', use_nav2),
             SetLaunchConfiguration('localization', 'false' if effective == 'slam' else 'true'),
             SetLaunchConfiguration('nvblox_map', nvblox_map),
+            # cuVSLAM 지도(랜드마크 · pose graph) — 매핑이면 끌 때 저장 · 위치추정이면 그 안에서 자리 찾기 (지도 백엔드와 상관없이)
+            SetLaunchConfiguration('cuvslam_map', os.path.join(d, name, 'cuvslam') if effective != 'none' else ''),
             SetLaunchConfiguration('static_map_yaml', os.path.join(d, name, 'map.yaml') if effective != 'none' and backend == 'static_2d' else ''),
             SetLaunchConfiguration('nvblox_params_file', LaunchConfiguration('nvblox_params_file').perform(context)
                 or os.path.join(get_package_share_directory('ros_system'), 'config', 'nvblox.yaml')),
@@ -372,6 +374,7 @@ def generate_launch_description():
                               'use_slam': LaunchConfiguration('use_real_slam'),
                               'localization': LaunchConfiguration('localization'),
                               'nvblox_map': LaunchConfiguration('nvblox_map'),
+                              'cuvslam_map': LaunchConfiguration('cuvslam_map'),
                               'static_map_yaml': LaunchConfiguration('static_map_yaml')}.items())],
             condition=IfCondition(LaunchConfiguration('use_ros_system'))),
         *map_saver(),  # SLAM일 때 지도 저장 서버 (map_saver() 설명)

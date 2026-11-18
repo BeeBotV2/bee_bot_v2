@@ -19,12 +19,14 @@
 """
 import math
 import os
+import threading
 
 import numpy as np
 import rclpy
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped, TransformStamped
 from nav_msgs.msg import Odometry, Path
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
@@ -290,6 +292,34 @@ class CuvslamSlam(Node):
         # BEE_CUVSLAM_VIS=1 (보기용, 11-15): 특징점·랜드마크·포즈 그래프를 RViz용으로 냄 — isaac_ros_visual_slam의 visual_slam/vis/*에 해당.
         #   트래커에 export를 켜야 해서 시작 때만 정함 · GPU→CPU 복사가 늘어 실기(Orin)에서는 끔
         self.vis = os.environ.get('BEE_CUVSLAM_VIS') == '1'
+        # cuVSLAM 지도 저장 · 불러오기 (cuvslam_slam.cpp 설명과 같음) — 매핑 map_save_dir · 위치추정 map_load_dir
+        self.save_dir = str(self.declare_parameter('map_save_dir', '').value)
+        self.load_dir = str(self.declare_parameter('map_load_dir', '').value)
+        self.loc_cfg = dict(horizontal_search_radius=float(self.declare_parameter('localize_horizontal_radius', 1.5).value),
+                            vertical_search_radius=float(self.declare_parameter('localize_vertical_radius', 0.5).value),
+                            horizontal_step=float(self.declare_parameter('localize_horizontal_step', 0.5).value),
+                            vertical_step=float(self.declare_parameter('localize_vertical_step', 0.25).value),
+                            angular_step_rads=float(self.declare_parameter('localize_angular_step', 0.1745).value))
+        self.loc_retry_s = float(self.declare_parameter('localize_retry_s', 2.0).value)
+        self.loc_lock = threading.Lock()
+        self.loc_busy = self.localized = False
+        self.loc_result = None   # 콜백(cuVSLAM 스레드)이 넣는 (성공, 오류) — 다음 프레임에서 꺼냄
+        self.loc_img = None      # 요청이 끝날 때까지 쥐고 있는 영상
+        self.loc_last_try = -math.inf
+        self.loc_tries = 0
+        if self.load_dir and not os.path.isdir(self.load_dir):
+            self.get_logger().warning(f'cuVSLAM 저장 지도 없음: {self.load_dir} — 켠 자리를 원점으로 새로 시작 (nvblox 지도만 있는 옛 폴더)')
+            self.load_dir = ''
+        if self.save_dir:
+            from std_srvs.srv import Trigger
+
+            def srv(_req, res):
+                res.success, res.message = self.save_map(10.0)
+                return res
+            self.create_service(Trigger, '~/save_map', srv)
+            self.get_logger().info(f'cuVSLAM 지도 저장 위치: {self.save_dir} (끌 때 · ~/save_map)')
+        if self.load_dir:
+            self.get_logger().info(f'cuVSLAM 저장 지도에서 위치 찾기: {self.load_dir}')
         self.last_gray = None
         if self.vis:
             self.vis_obs = self.create_publisher(Image, '/cuvslam/vis/observations_image', 1)
@@ -413,8 +443,71 @@ class CuvslamSlam(Node):
         if self.pending_initialpose is not None:
             self.apply_initialpose(self.pending_initialpose)
             self.pending_initialpose = None
+        if self.load_dir and slam is not None:
+            self.localize_step(ns, rgb, slam)
         if self.publish_map_tf:
             self.publish_map(c.header.stamp, slam if slam is not None else p)  # 루프 클로저 반영된 SLAM 위치 우선
+
+    def save_map(self, timeout_s):
+        """SaveMap은 비동기 — 콜백을 기다림. (성공, 메시지)"""
+        if self.tracker is None:
+            return False, 'cuVSLAM이 아직 시작 안 함 (첫 프레임 전)'
+        done, box = threading.Event(), [False]
+
+        def cb(ok):
+            box[0] = ok
+            done.set()
+        try:
+            self.tracker.save_map(self.save_dir, cb)
+        except Exception as e:  # noqa: BLE001 — 바인딩 오류를 그대로 알림
+            return False, f'cuVSLAM 지도 저장 실패: {e}'
+        if not done.wait(timeout_s):
+            return False, f'cuVSLAM 지도 저장 시간 초과 ({timeout_s:.0f} s): {self.save_dir}'
+        return box[0], ('cuVSLAM 지도 저장: ' if box[0] else 'cuVSLAM 지도 저장 실패: ') + self.save_dir
+
+    def localize_step(self, ns, rgb, guess):
+        """위치추정: 저장 지도 안에서 지금 자리 찾기 — 요청은 하나씩, 결과는 다음 프레임에서 받음"""
+        import cuvslam
+        with self.loc_lock:
+            res, self.loc_result = self.loc_result, None
+        if res is not None:
+            ok, err = res
+            if ok:
+                self.localized = True
+                if self.gate is not None:
+                    self.gate.reset()  # map 원점이 저장 지도 쪽으로 옮겨 감 — 튐으로 잠그지 않게
+                self.map_offset = (0.0, 0.0, 0.0)  # 켠 자리 기준 initialpose · 도면 보정은 저장 지도 원점에서 안 맞음
+                self.path.poses.clear()
+                self.get_logger().warning(f'저장 지도 안에서 위치 찾음 ({self.loc_tries}번째 시도) — map 원점 = 그 지도의 출발 자리')
+                return
+            self.get_logger().warning(f'저장 지도에서 위치 못 찾음 ({self.loc_tries}번째): {err} — {self.loc_retry_s:.0f} s 뒤 다시')
+        if self.localized or self.loc_busy or ns * 1e-9 - self.loc_last_try < self.loc_retry_s:
+            return
+        self.loc_last_try = ns * 1e-9
+        self.loc_img = np.array(rgb, copy=True)  # 메시지 버퍼를 가리키는 배열일 수 있어 사본
+        self.loc_tries += 1
+        self.loc_busy = True
+
+        def finish(pose, err):
+            with self.loc_lock:
+                self.loc_result = (pose is not None, str(err))
+                self.loc_busy = False
+        try:
+            self.tracker.localize_in_map(self.load_dir, ns, guess, [self.loc_img],
+                                         cuvslam.Tracker.SlamLocalizationSettings(**self.loc_cfg), lambda: None, finish)
+        except Exception as e:  # noqa: BLE001
+            self.loc_busy = False
+            self.get_logger().error(f'localize_in_map 실패: {e}', throttle_duration_sec=5.0)
+
+    def on_exit(self):
+        """spin이 끝난 뒤 (SIGINT) — 매핑이면 지도 저장"""
+        if not self.save_dir:
+            return
+        if self.tracker is None or self.ok == 0:
+            print('[cuvslam_slam] cuVSLAM 지도 저장 안 함 — 추적한 프레임 없음', flush=True)
+            return
+        ok, msg = self.save_map(15.0)
+        print(f'[cuvslam_slam] {msg}', flush=True)
 
     def publish_vis(self):
         """BEE_CUVSLAM_VIS: 마지막 프레임 특징점(영상 위 점) · 그 프레임 랜드마크 · SLAM 지도 랜드마크 · 루프 클로저 랜드마크 · 포즈 그래프.
@@ -527,8 +620,9 @@ def main():
     node = CuvslamSlam()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    node.on_exit()  # 매핑이면 cuVSLAM 지도 저장 (ROS 통신 없이)
     node.destroy_node()
     rclpy.shutdown()
 

@@ -55,14 +55,17 @@ if(CUVSLAM_INCLUDE_DIR AND CUVSLAM_LIB AND CUDAToolkit_FOUND AND Eigen3_FOUND)
   if(NOT CMAKE_CUDA_COMPILER)
     set(CMAKE_CUDA_COMPILER "${CUDAToolkit_NVCC_EXECUTABLE}")
   endif()
-  set(CMAKE_CUDA_ARCHITECTURES 87)   # Orin
+  # 빌드하는 기계의 GPU (Orin = 87 · Isaac PC RTX 2070 = 75) — 87 고정이면 x86 PC에서 마스크 커널이 "no kernel image"로 안 돎
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native)
+  endif()
   enable_language(CUDA)              # src/cuvslam_gpu.cu — 가까운 depth 마스크 커널
   add_executable(cuvslam_slam_cpp src/cuvslam_slam.cpp src/cuvslam_gpu.cu)
   target_compile_features(cuvslam_slam_cpp PRIVATE cxx_std_17)
   target_include_directories(cuvslam_slam_cpp PRIVATE include src "${CUVSLAM_INCLUDE_DIR}")
   target_link_libraries(cuvslam_slam_cpp "${CUVSLAM_LIB}" CUDA::cudart Eigen3::Eigen rclcpp::rclcpp tf2_ros::tf2_ros
     message_filters::message_filters ${geometry_msgs_TARGETS} ${sensor_msgs_TARGETS} ${nav_msgs_TARGETS} ${std_msgs_TARGETS}
-    ${visualization_msgs_TARGETS})
+    ${visualization_msgs_TARGETS} ${std_srvs_TARGETS})
   # libcuvslam.so가 pip 패키지 폴더에 있어 실행할 때 찾게 (설치 위치가 바뀌면 다시 빌드)
   set_target_properties(cuvslam_slam_cpp PROPERTIES INSTALL_RPATH "${CUVSLAM_PY_DIR}" BUILD_RPATH "${CUVSLAM_PY_DIR}")
   install(TARGETS cuvslam_slam_cpp DESTINATION lib/${PROJECT_NAME})
