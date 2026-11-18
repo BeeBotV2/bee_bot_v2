@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "nav_msgs/msg/occupancy_grid.hpp"
@@ -73,6 +75,30 @@ inline nav_msgs::msg::OccupancyGrid overlay(const nav_msgs::msg::OccupancyGrid &
       if (d != 100) d = grid->data[(y - oy) * gw + (x - ox)];
     }
   return m;
+}
+
+// map_server 지도 파일 (nav2_map_saver 기본과 같은 trinary · 점유 0.65 · 빈칸 0.25) — 매핑을 끌 때 /map을 map.pgm · map.yaml로
+//   pgm 첫 줄 = 격자 맨 위(y 큰 쪽) · 점유 0(검정) · 빈칸 254 · 모름 205
+inline std::string to_pgm(const nav_msgs::msg::OccupancyGrid & g) {
+  const unsigned w = g.info.width, h = g.info.height;
+  std::string out = "P5\n" + std::to_string(w) + " " + std::to_string(h) + "\n255\n";
+  out.reserve(out.size() + static_cast<size_t>(w) * h);
+  for (unsigned r = 0; r < h; ++r)
+    for (unsigned c = 0; c < w; ++c) {
+      const int v = g.data[static_cast<size_t>(h - 1 - r) * w + c];
+      out.push_back(static_cast<char>(v < 0 ? 205 : v >= 65 ? 0 : v <= 25 ? 254 : 205));
+    }
+  return out;
+}
+
+inline std::string to_map_yaml(const nav_msgs::msg::OccupancyGrid & g, const std::string & image) {
+  const auto & q = g.info.origin.orientation;
+  const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+  std::ostringstream y;
+  y.precision(9);
+  y << "image: " << image << "\nmode: trinary\nresolution: " << g.info.resolution << "\norigin: [" << g.info.origin.position.x
+    << ", " << g.info.origin.position.y << ", " << yaw << "]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n";
+  return y.str();
 }
 
 }  // namespace ros_system

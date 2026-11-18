@@ -1,6 +1,8 @@
 // nvblox_map C++판 (11-16) — scripts/nvblox_map.py와 같음 (설명은 그 머리말). 격자 계산은 include/ros_system/grid_ops.hpp
 //   불러오기(load_path)는 nvblox_msgs가 있을 때만 빌드 (CMake NVBLOX_MSGS) — 없으면 load_path를 주면 오류 로그만
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,6 +24,8 @@ public:
   explicit NvbloxMap(const rclcpp::NodeOptions & options) : Node("nvblox_map", options) {
     frame_ = declare_parameter<std::string>("map_frame", "map");
     load_path_ = declare_parameter<std::string>("load_path", "");
+    // 매핑이면 끌 때 마지막 /map을 map_server 지도(map.pgm · map.yaml)로 — 저장 지도 주행(map_backend:=static_2d)이 읽는 파일
+    save_yaml_ = declare_parameter<std::string>("save_yaml", "");
     const double rate = declare_parameter<double>("rate_hz", 1.0);
     speckle_ = declare_parameter<int>("speckle_min_cells", 0);  // 11-15 예전으로 (끔) — 시험할 때 8
     const auto latched = rclcpp::QoS(1).reliable().transient_local();
@@ -42,6 +46,18 @@ public:
                   grid_ ? "" : " — nvblox 격자 아직 없음");
     });
     if (!load_path_.empty()) load();
+  }
+
+  ~NvbloxMap() override {  // 프로세스가 끝날 때 (SIGINT로 spin이 멈춘 뒤) — ROS 통신 없이 파일만 씀
+    if (save_yaml_.empty()) return;
+    if (!last_) {
+      RCLCPP_WARN(get_logger(), "map.yaml 저장 안 함 — 낸 /map이 없음");
+      return;
+    }
+    const std::filesystem::path yaml(save_yaml_), pgm = std::filesystem::path(save_yaml_).replace_extension(".pgm");
+    std::ofstream(pgm, std::ios::binary) << to_pgm(*last_);
+    std::ofstream(yaml) << to_map_yaml(*last_, pgm.filename().string());
+    RCLCPP_INFO(get_logger(), "map_server 지도 저장: %s (%ux%u)", yaml.c_str(), last_->info.width, last_->info.height);
   }
 
 private:
@@ -67,6 +83,7 @@ private:
     }
     auto out = std::make_unique<OccupancyGrid>(walls_ ? overlay(*walls_, grid) : *grid);  // walls 없으면 fresh는 격자가 왔을 때만
     out->header.frame_id = frame_;
+    if (!save_yaml_.empty()) last_ = std::make_unique<OccupancyGrid>(*out);  // 끌 때 저장할 것
     pub_->publish(std::move(out));
     ++n_out_;
   }
@@ -99,7 +116,8 @@ private:
 #endif
   }
 
-  std::string frame_, load_path_;
+  std::string frame_, load_path_, save_yaml_;
+  std::unique_ptr<OccupancyGrid> last_;
   int speckle_ = 0;
   long n_speckle_ = 0;
   unsigned long n_in_ = 0, n_out_ = 0;

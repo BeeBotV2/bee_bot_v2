@@ -13,11 +13,32 @@
     진짜 물체는 없음 (상자·퍽은 8 cm 아래) · 가까운 장애물은 local costmap(카메라)·collision_monitor가 따로 봄. 0 = 끔.
     11-15 실기 지도 20261115_110106: 0.55 m 문 가운데 2~3칸 점이 문을 둘로 갈라 (각 0.25 m < 로봇 내접 지름 0.26 m) 전역 경로가 없었음
 """
+import os
+
 import numpy as np
+
 import rclpy
 from nav_msgs.msg import OccupancyGrid
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+
+
+def save_map_files(g, yaml_path):
+    """map_server 지도 (nvblox_map.cpp to_pgm · to_map_yaml과 같음 — trinary · 점유 0.65 · 빈칸 0.25 · pgm 첫 줄 = 맨 위)"""
+    import math
+    w, h = g.info.width, g.info.height
+    v = np.asarray(g.data, dtype=np.int16).reshape(h, w)[::-1]
+    px = np.full(v.shape, 205, np.uint8)
+    px[(v >= 0) & (v <= 25)] = 254
+    px[v >= 65] = 0
+    pgm = os.path.splitext(yaml_path)[0] + '.pgm'
+    with open(pgm, 'wb') as f:
+        f.write(f'P5\n{w} {h}\n255\n'.encode() + px.tobytes())
+    q, o = g.info.origin.orientation, g.info.origin.position
+    yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+    with open(yaml_path, 'w') as f:
+        f.write(f'image: {os.path.basename(pgm)}\nmode: trinary\nresolution: {g.info.resolution}\n'
+                f'origin: [{o.x}, {o.y}, {yaw}]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n')
 
 
 class NvbloxMap(Node):
@@ -25,6 +46,9 @@ class NvbloxMap(Node):
         super().__init__('nvblox_map')
         self.frame = self.declare_parameter('map_frame', 'map').value
         self.load_path = self.declare_parameter('load_path', '').value
+        # 매핑이면 끌 때 마지막 /map을 map.pgm · map.yaml로 (nvblox_map.cpp와 같음 — 저장 지도 주행 static_2d가 읽는 파일)
+        self.save_yaml = self.declare_parameter('save_yaml', '').value
+        self.last = None
         rate = float(self.declare_parameter('rate_hz', 1.0).value)
         self.speckle = int(self.declare_parameter('speckle_min_cells', 0).value)  # 11-15 예전으로 (끔) — 시험할 때 8
         self.n_speckle = 0
@@ -68,8 +92,18 @@ class NvbloxMap(Node):
             grid, self.n_speckle = despeckle(grid, self.speckle)
         out = grid if self.walls is None else overlay(self.walls, grid)
         out.header.frame_id = self.frame
+        self.last = out
         self.pub.publish(out)
         self.n_out += 1
+
+    def destroy_node(self):
+        if self.save_yaml:
+            if self.last is None:
+                print('[nvblox_map] map.yaml 저장 안 함 — 낸 /map이 없음', flush=True)
+            else:
+                save_map_files(self.last, self.save_yaml)
+                print(f'[nvblox_map] map_server 지도 저장: {self.save_yaml}', flush=True)
+        super().destroy_node()
 
     def load(self):
         """nvblox_node가 뜰 때까지 1 s마다 봄 (최대 60 s) — 생성자에서 기다리면 같은 프로세스의 다른 노드(py_helpers)까지 멈춤"""
