@@ -14,6 +14,7 @@
 #include <sstream>
 #include "skills/arm_io.hpp"
 #include "nav2_msgs/action/back_up.hpp"
+#include "nav2_msgs/msg/collision_monitor_state.hpp"
 #include "nav2_msgs/action/drive_on_heading.hpp"
 #include "nav2_msgs/action/spin.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
@@ -22,8 +23,10 @@
 #include "skills/skill_node.hpp"
 
 #include <cmath>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <vector>
 
@@ -42,6 +45,14 @@ public:
     backup_ = rclcpp_action::create_client<BackUp>(this, "/backup");
     drive_ = rclcpp_action::create_client<DriveOnHeading>(this, "/drive_on_heading");
     spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
+    collision_state_sub_ = create_subscription<nav2_msgs::msg::CollisionMonitorState>(
+      "/collision_monitor_state", 10, [this](nav2_msgs::msg::CollisionMonitorState::ConstSharedPtr msg) {
+        const bool detected = msg->action_type != nav2_msgs::msg::CollisionMonitorState::DO_NOTHING &&
+          !msg->polygon_name.empty();
+        std::lock_guard<std::mutex> lock(collision_state_mutex_);
+        collision_detected_ = detected;
+        collision_state_received_ = std::chrono::steady_clock::now();
+      });
     unstuck_tries_ = declare_parameter<int>("nav_unstuck_tries", 3);   // 0이면 끼임 풀기 안 함
     unstuck_back_m_ = declare_parameter<double>("nav_unstuck_back_m", 0.15);
     unstuck_fwd_m_ = declare_parameter<double>("nav_unstuck_fwd_m", 0.10);
@@ -88,6 +99,8 @@ private:
           std::to_string(goal.pose.pose.position.y).substr(0, 5) + ")" + (tries ? " 다시" : ""));
     rclcpp_action::Client<NavigateToPose>::SendGoalOptions opt;
     auto finished = std::make_shared<bool>(false);  // 감시가 먼저 끝내면 취소 뒤 오는 결과는 무시
+    auto canceled_for_stall = std::make_shared<bool>(false);
+    auto collision_blocked_at_stall = std::make_shared<bool>(false);
     auto watch = std::make_shared<ProgressWatch>(stall_s_, stall_gain_m_);
     auto look = std::make_shared<bool>(flags.count("look") > 0);  // true = 아직 팔을 안 올림
     const bool near = flags.count("near") > 0;
@@ -95,7 +108,8 @@ private:
     auto yaw_err = std::make_shared<double>(M_PI);  // 목표 방향과 차 [rad]
     const auto gp = target.pose.position;
     const double gyaw = yaw_of(target.pose.orientation);
-    auto finish = [this, near, left, yaw_err, done, target, flags, seq, tries](bool ok, const std::string & why) {
+    auto finish = [this, near, left, yaw_err, done, target, flags, seq, tries, collision_blocked_at_stall](
+        bool ok, const std::string & why) {
       if (!ok && near && *left <= near_m_ && *yaw_err <= near_yaw_) {
         RCLCPP_WARN(get_logger(), "%s — 목표 %.2f m · %.0f° 앞이라 성공 처리 (near, 나머지는 approach)", why.c_str(), *left,
                     *yaw_err * 180.0 / M_PI);
@@ -103,12 +117,20 @@ private:
       }
       // 목표가 막힘(206)·거절이면 풀어도 소용없음 → 바로 실패 (mission이 다른 면으로). 11-18 sim: 206에 풀기 3번으로 53 s 버림
       if (!ok && why != "nav_rejected" && why != "nav_goal_occupied" && tries < unstuck_tries_ && seq == nav_seq_) {
-        unstuck(seq, tries, [this, target, flags, seq, done, tries]() { drive(target, flags, seq, done, tries + 1); });
+        const bool collision_limited = why == "nav_collision_blocked" || *collision_blocked_at_stall;
+        unstuck(seq, tries, [this, target, flags, seq, done, tries, why, collision_limited](bool recovered) {
+          if (!recovered) {
+            done(false, collision_limited ? "nav_collision_recovery_failed" : why);
+            return;
+          }
+          drive(target, flags, seq, done, tries + 1);
+        }, collision_limited);
         return;
       }
       done(ok, ok ? "" : why);
     };
-    opt.feedback_callback = [this, finished, watch, look, left, yaw_err, gp, gyaw, finish](
+    opt.feedback_callback = [this, finished, canceled_for_stall, collision_blocked_at_stall,
+        watch, look, left, yaw_err, gp, gyaw, finish](
         rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr h, const std::shared_ptr<const NavigateToPose::Feedback> fb) {
       if (*finished) return;
       *left = std::hypot(fb->current_pose.pose.position.x - gp.x, fb->current_pose.pose.position.y - gp.y);
@@ -123,8 +145,11 @@ private:
       *finished = true;
       RCLCPP_WARN(get_logger(), "진척 없음 — 남은 %.2f m가 %.0f s 동안 %.2f m도 안 줄음 (회복 %d회) → 취소",
                   fb->distance_remaining, stall_s_, stall_gain_m_, fb->number_of_recoveries);
+      *collision_blocked_at_stall = collision_monitor_blocked_recently();
+      if (*collision_blocked_at_stall)
+        RCLCPP_WARN(get_logger(), "정체 시점 collision_monitor 감지 활성 — 충돌 검사된 후진만 1회 시도하고 실패하면 즉시 상위로 반환");
+      *canceled_for_stall = true;
       nav_->async_cancel_goal(h);
-      finish(false, "nav_no_progress");
     };
     opt.goal_response_callback = [this, seq, finished, finish](const rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr & h) {
       if (seq != nav_seq_) {  // 응답 전에 멈춤 — 늦게 받아진 goal도 취소
@@ -136,10 +161,16 @@ private:
       *finished = true;
       finish(false, "nav_rejected");
     };
-    opt.result_callback = [this, seq, finished, finish](const rclcpp_action::ClientGoalHandle<NavigateToPose>::WrappedResult & r) {
+    opt.result_callback = [this, seq, finished, canceled_for_stall, finish](
+        const rclcpp_action::ClientGoalHandle<NavigateToPose>::WrappedResult & r) {
       if (seq == nav_seq_) nav_goal_.reset();
-      if (*finished || seq != nav_seq_) return;
+      if (seq != nav_seq_ || (*finished && !*canceled_for_stall)) return;
       *finished = true;
+      if (*canceled_for_stall) {
+        *canceled_for_stall = false;
+        finish(false, "nav_no_progress");
+        return;
+      }
       const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED;
       // 205 = 출발 칸 막힘 (상자·벽에 붙은 채 끝난 뒤 다음 이동이 전부 205로 끝났음) → 끼임 풀기 대상
       const int code = r.result ? r.result->error_code : 0;
@@ -150,17 +181,27 @@ private:
 
   // 끼임 풀기 한 번 (try번째): 1 후진→전진 · 2 +40°→−40° · 3 전진→후진. 첫 동작이 충돌 검사로 막히면 두 번째로 → then
   //   behavior_server가 local costmap(도면 벽 + 카메라)·몸 모양으로 검사 — 앞 카메라라 뒤·옆은 도면 벽만 앎
-  void unstuck(uint64_t seq, int attempt, std::function<void()> then) {
+  void unstuck(uint64_t seq, int attempt, std::function<void(bool)> done, bool collision_limited) {
     static const char * names[] = {"후진", "전진", "+40° 회전", "−40° 회전"};
     const int k = attempt % 3;
-    const int a = k == 0 ? 0 : k == 1 ? 2 : 1, b = k == 0 ? 1 : k == 1 ? 3 : 0;
-    RCLCPP_WARN(get_logger(), "끼임 풀기 %d/%d — %s (막히면 %s) 뒤 같은 목표로 다시", attempt + 1, unstuck_tries_, names[a], names[b]);
+    const int a = collision_limited ? 0 : k == 0 ? 0 : k == 1 ? 2 : 1;
+    const int b = k == 0 ? 1 : k == 1 ? 3 : 0;
+    RCLCPP_WARN(get_logger(), "끼임 풀기 %d/%d — %s%s", attempt + 1, unstuck_tries_, names[a],
+                collision_limited ? " (충돌 감지 상태라 후진만, 전진·회전 재시도 생략)" : "");
     stage(std::string("끼임 풀기: ") + names[a]);
-    escape(seq, a, [this, seq, b, then](bool ok) {
-      if (ok || seq != nav_seq_) { if (seq == nav_seq_) then(); return; }
+    escape(seq, a, [this, seq, b, done, collision_limited](bool ok) {
+      if (seq != nav_seq_) return;
+      if (ok) { done(true); return; }
+      if (collision_limited) { done(false); return; }
       stage(std::string("끼임 풀기: ") + names[b]);
-      escape(seq, b, [this, seq, then](bool) { if (seq == nav_seq_) then(); });
+      escape(seq, b, [this, seq, done](bool second_ok) { if (seq == nav_seq_) done(second_ok); });
     });
+  }
+
+  bool collision_monitor_blocked_recently() const {
+    std::lock_guard<std::mutex> lock(collision_state_mutex_);
+    return collision_detected_ &&
+      std::chrono::steady_clock::now() - collision_state_received_ <= std::chrono::seconds(1);
   }
 
   // 0 후진 unstuck_back_m · 1 전진 unstuck_fwd_m · 2 +unstuck_turn · 3 −unstuck_turn (충돌 검사 켬) → done(성공 여부)
@@ -213,6 +254,10 @@ private:
   rclcpp_action::Client<BackUp>::SharedPtr backup_;
   rclcpp_action::Client<DriveOnHeading>::SharedPtr drive_;
   rclcpp_action::Client<Spin>::SharedPtr spin_;
+  rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_state_sub_;
+  mutable std::mutex collision_state_mutex_;
+  bool collision_detected_ = false;
+  std::chrono::steady_clock::time_point collision_state_received_{};
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
   rclcpp_action::ClientGoalHandle<BackUp>::SharedPtr backup_goal_;
   rclcpp_action::ClientGoalHandle<DriveOnHeading>::SharedPtr drive_goal_;

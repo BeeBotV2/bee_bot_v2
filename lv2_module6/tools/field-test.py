@@ -30,11 +30,13 @@ BAG_REGEX = (
     r'^/(tf|tf_static|joint_states|imu|odom|odometry/filtered|cuvslam/odom|'
     r'cmd_vel.*|cmd/.*|state/.*|diagnostics_agg|diagnostics_toplevel_state|rosout|plan|local_plan|map|'
     r'tracked_objects|global_costmap/costmap|local_costmap/costmap|controller_server/FollowPath/status|'
+    r'collision_monitor_state|collision_monitor/triggering_points|polygon_approach|arena/walls_cloud|'
     r'mission/.*|coordinator/.*|task/.*|skills/.*/_action/.*|skill_context|rl_arm_correction/debug|hand_relative.*|'
     r'arm_safety_event|motor_status)$'
 )
 CAMERA_BAG_TOPICS = (
     r'|((pole_front_cam|gripper_cam)/(color/image_raw|aligned_depth_to_color/image_raw|color/camera_info))'
+    r'|(pole_front_cam/depth/color/points_filtered)'
     r'|(perception/(pole_front_cam|gripper_cam)/(yolo_detections|detections|debug_image))'
 )
 
@@ -114,7 +116,9 @@ class Monitor:
     def __init__(self):
         import rclpy
         from diagnostic_msgs.msg import DiagnosticArray
+        from geometry_msgs.msg import TwistStamped
         from nav_msgs.msg import Odometry
+        from nav2_msgs.msg import CollisionMonitorState
         from plan.msg import BasketState, MissionState, TaskStatus, SubGoal, SubGoalArray
         from perception.msg import TrackedObjectArray
         from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
@@ -137,6 +141,8 @@ class Monitor:
         self.rl_nav_status = None
         self.map_pose = None
         self.rates: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=100))
+        self.motion: dict[str, deque] = defaultdict(lambda: deque(maxlen=80))
+        self.collision_state = None
         self.active_plan_id: int | None = None
         self.last_skill_success = ''
 
@@ -150,9 +156,14 @@ class Monitor:
                                       lambda m: setattr(self, 'basket', m), latched)
         self.node.create_subscription(TrackedObjectArray, '/tracked_objects', self._objects, 10)
         self.node.create_subscription(DiagnosticArray, '/diagnostics_agg', self._diagnostics, 10)
-        self.node.create_subscription(Odometry, '/odom', lambda _m: self._rate('odom'), qos_profile_sensor_data)
-        self.node.create_subscription(Odometry, '/odometry/filtered', lambda _m: self._rate('ekf'), qos_profile_sensor_data)
-        self.node.create_subscription(Odometry, '/cuvslam/odom', lambda _m: self._rate('cuvslam'), qos_profile_sensor_data)
+        self.node.create_subscription(Odometry, '/odom', lambda m: self._odom('wheel_odom', 'odom', m), qos_profile_sensor_data)
+        self.node.create_subscription(Odometry, '/odometry/filtered', lambda m: self._odom('filtered_odom', 'ekf', m), qos_profile_sensor_data)
+        self.node.create_subscription(Odometry, '/cuvslam/odom', lambda m: self._odom('cuvslam_odom', 'cuvslam', m), qos_profile_sensor_data)
+        for topic in ('/cmd_vel_nav', '/cmd_vel_smoothed', '/cmd_vel'):
+            key = topic.rsplit('/', 1)[-1]
+            self.node.create_subscription(TwistStamped, topic,
+                                          lambda m, key=key: self._twist(key, m), qos_profile_sensor_data)
+        self.node.create_subscription(CollisionMonitorState, '/collision_monitor_state', self._collision, 10)
         self.node.create_subscription(Imu, '/imu', lambda _m: self._rate('imu'), qos_profile_sensor_data)
         self.node.create_subscription(CameraInfo, '/pole_front_cam/color/camera_info',
                                       lambda _m: self._rate('front_camera'), qos_profile_sensor_data)
@@ -178,6 +189,72 @@ class Monitor:
 
     def _rate(self, key):
         self.rates[key].append(time.monotonic())
+
+    def _odom(self, key, rate_key, msg):
+        self._rate(rate_key)
+        twist = msg.twist.twist
+        self.motion[key].append((time.monotonic(), twist.linear.x, twist.angular.z))
+
+    def _twist(self, key, msg):
+        twist = msg.twist
+        self.motion[key].append((time.monotonic(), twist.linear.x, twist.angular.z))
+
+    def _collision(self, msg):
+        self.collision_state = {'action_type': int(msg.action_type), 'polygon_name': msg.polygon_name,
+                                'received': time.monotonic()}
+
+    def motion_diagnosis(self):
+        now = time.monotonic()
+        windowed = {}
+        for name, history in self.motion.items():
+            recent = [sample for sample in history if now - sample[0] <= 1.0]
+            if recent:
+                windowed[name] = {'vx': sum(sample[1] for sample in recent) / len(recent),
+                                  'wz': sum(sample[2] for sample in recent) / len(recent),
+                                  'abs_vx': sum(abs(sample[1]) for sample in recent) / len(recent),
+                                  'abs_wz': sum(abs(sample[2]) for sample in recent) / len(recent),
+                                  'received': recent[-1][0]}
+        samples = {name: {'vx_mps': round(value['vx'], 4), 'wz_rps': round(value['wz'], 4),
+                          'mean_abs_vx_mps': round(value['abs_vx'], 4),
+                          'mean_abs_wz_rps': round(value['abs_wz'], 4),
+                          'age_s': round(now - value['received'], 3)}
+                   for name, value in windowed.items()}
+        fresh = {name: value for name, value in windowed.items() if now - value['received'] <= 0.5}
+        collision = None
+        if self.collision_state:
+            state = self.collision_state
+            collision = {'action_type': state['action_type'], 'polygon_name': state['polygon_name'],
+                         'age_s': round(now - state['received'], 3)}
+
+        def moving(value):
+            return value.get('abs_vx', 0.0) >= 0.04 or value.get('abs_wz', 0.0) >= 0.15
+
+        nav = fresh.get('cmd_vel_nav')
+        smoothed = fresh.get('cmd_vel_smoothed')
+        final = fresh.get('cmd_vel')
+        wheel = fresh.get('wheel_odom')
+        visual = fresh.get('cuvslam_odom')
+        filtered = fresh.get('filtered_odom')
+        flags = []
+        if not nav or not wheel or not visual or not filtered:
+            diagnosis = 'insufficient_fresh_motion_data'
+        else:
+            if abs(wheel['vx'] - visual['vx']) >= 0.08 or abs(wheel['wz'] - visual['wz']) >= 0.25:
+                flags.append('wheel_and_cuvslam_motion_disagree')
+            if nav and moving(nav) and smoothed and not moving(smoothed):
+                flags.append('upstream_velocity_chain_limited_output')
+            if smoothed and moving(smoothed) and final and not moving(final):
+                active_detection = bool(collision and collision['age_s'] <= 1.0 and
+                                        collision['action_type'] != 0 and collision['polygon_name'])
+                flags.append('collision_monitor_limited_output' if active_detection else 'command_chain_limited_output')
+            if nav and moving(nav) and not any(moving(fresh.get(name, {})) for name in
+                                               ('wheel_odom', 'cuvslam_odom', 'filtered_odom')):
+                flags.append('command_without_reported_motion')
+            diagnosis = ','.join(flags) if flags else 'no_immediate_motion_discrepancy'
+        return {'classification': diagnosis, 'signals': samples, 'collision_monitor': collision,
+                'thresholds_initial_not_calibrated': {'command_vx_mps': 0.04, 'command_wz_rps': 0.15,
+                               'odom_vx_difference_mps': 0.08, 'odom_wz_difference_rps': 0.25},
+                'note': 'Advisory only: odometry streams are estimates, not independent ground truth.'}
 
     def rate(self, key):
         now = time.monotonic()
@@ -242,6 +319,7 @@ class Monitor:
             'rates_hz': {k: round(self.rate(k), 2) for k in
                          ('front_camera', 'gripper_camera', 'imu', 'odom', 'ekf', 'cuvslam', 'joints', 'tracked_objects')},
             'controller_status_raw': self.rl_nav_status,
+            'motion_diagnosis': self.motion_diagnosis(),
             'diagnostics': self.diagnostics,
         }
 
