@@ -99,6 +99,10 @@ echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID} · Fast DDS 프로파일: $FASTDDS_DEFAULT_
 # 우리 노드 중요 이벤트는 WARN 이상이라 WARN으로 올려도 운영에 지장 없음 (INFO 계획 상세·주기 상태는 안 나옴).
 export RCUTILS_DEFAULT_LOGGER_DEFAULT_LEVEL="${RCUTILS_DEFAULT_LOGGER_DEFAULT_LEVEL:-INFO}"
 
+# map 기준 (cuvslam_slam) — 11-18 실기: cuVSLAM 기준이 map→odom을 0.5 m · 5°까지 끌고 가 S4 앞 벽 모서리에 2회 갇힘
+#   (상자 인지는 반대쪽 −0.33 · +0.30 · +8°를 가리킴) → 기본 odom (EKF odom + 도면 보정). cuVSLAM 기준: BEE_MAP_ANCHOR=cuvslam ./start.sh
+export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-odom}"
+
 # --- 아키텍처 확인: 다른 CPU용으로 빌드된 install/이면 노드가 Exec format error로 죽으므로 미리 멈춘다
 # (예: CI x86_64 패키지를 Raspberry Pi에서 실행). 실행 파일의 ELF 헤더 e_machine(오프셋 18)으로 판정.
 elf=''
