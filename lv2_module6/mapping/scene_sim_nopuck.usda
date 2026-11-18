@@ -1,0 +1,30 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+    timeCodesPerSecond = 60
+    startTimeCode = 0
+    endTimeCode = 1000000
+    subLayers = [
+        @../isaac/usda/scene_sim.usda@
+    ]
+)
+
+# scene_sim.usda 그대로 + 퍽 12개 · 신호등만 끔 (매핑용). 퍽은 미션 중 옮겨지므로 저장 지도에 굳으면 없는 장애물로 남는다.
+# 신호등(/World/sign)은 실기 매핑 때도 경기장에서 빼고 하므로 같게 — 깜빡이는 등은 cuVSLAM 특징점으로도 나쁨 (보일 때마다 모양이 바뀜)
+# 스테이지 메타데이터(upAxis · metersPerUnit 등)는 sublayer에서 물려받지 않아 위에 다시 적는다 — scene_sim.usda와 같게.
+over "World"
+{
+    over "pucks" (
+        active = false
+    )
+    {
+    }
+
+    over "sign" (
+        active = false
+    )
+    {
+    }
+}

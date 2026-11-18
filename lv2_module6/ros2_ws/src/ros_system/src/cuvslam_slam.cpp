@@ -6,14 +6,18 @@
 #include <cuda_runtime.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
+#include <future>
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -37,6 +41,7 @@
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
@@ -132,6 +137,7 @@ public:
     //   Isaac nav_bench: EKF odom 오차 ~2 cm인데 cuVSLAM map→odom이 27~38 cm(보정 켜면 10~28 cm) 끌고 감 → 시뮬은 odom 기준이 정확.
     //   실기에서는 바퀴 미끄러짐을 cuVSLAM이 잡는지 확인 전이라 기본은 그대로. 환경 변수 BEE_MAP_ANCHOR=odom이 덮음
     odom_anchor_ = declare_parameter<std::string>("map_anchor", "cuvslam") == "odom";
+    odom_tol_ = declare_parameter<double>("odom_lookup_tolerance", 0.1);  // [s] 영상 시각의 odom TF가 아직 없을 때 최근 TF를 쓰는 한도
     max_twist_lin_ = declare_parameter<double>("max_twist_lin", 0.6);  // [m/s] 넘으면 /cuvslam/odom 안 냄 (자세 튐)
     max_twist_ang_ = declare_parameter<double>("max_twist_ang", 4.0);  // [rad/s]
     if (const char * a = std::getenv("BEE_MAP_ANCHOR")) odom_anchor_ = std::string(a) == "odom";
@@ -143,6 +149,30 @@ public:
     }
     level_ = env_on("BEE_CUVSLAM_LEVEL");
     vis_ = env_on("BEE_CUVSLAM_VIS");
+    // cuVSLAM 지도(랜드마크 · pose graph) 저장 · 불러오기 — 지도 폴더 <map_dir>/<map_name>/cuvslam/ (bringup이 정함)
+    //   매핑(map_save_dir): 끌 때 저장 (+ ~/save_map 서비스) · 위치추정(map_load_dir): 그 지도 안에서 지금 자리를 찾음.
+    //   찾으면 SLAM이 저장 지도로 바뀌어 map = 그 지도를 만들 때의 출발 자리 (nvblox.nvblx · map.yaml과 같은 원점) — 출발 자리가 달라도 됨.
+    //   못 찾는 동안은 예전처럼 켠 자리가 map 원점이다 (localize_retry_s마다 다시 시도)
+    save_dir_ = declare_parameter<std::string>("map_save_dir", "");
+    load_dir_ = declare_parameter<std::string>("map_load_dir", "");
+    // 찾는 범위 = 추측 자세(지금 SLAM 자세) 둘레 — 기본값은 Isaac ROS visual_slam localizer_* 와 같음
+    loc_.horizontal_search_radius = static_cast<float>(declare_parameter<double>("localize_horizontal_radius", 1.5));
+    loc_.vertical_search_radius = static_cast<float>(declare_parameter<double>("localize_vertical_radius", 0.5));
+    loc_.horizontal_step = static_cast<float>(declare_parameter<double>("localize_horizontal_step", 0.5));
+    loc_.vertical_step = static_cast<float>(declare_parameter<double>("localize_vertical_step", 0.25));
+    loc_.angular_step_rads = static_cast<float>(declare_parameter<double>("localize_angular_step", 0.1745));
+    loc_retry_s_ = declare_parameter<double>("localize_retry_s", 2.0);
+    if (!load_dir_.empty() && !std::filesystem::is_directory(load_dir_)) {
+      RCLCPP_WARN(get_logger(), "cuVSLAM 저장 지도 없음: %s — 켠 자리를 원점으로 새로 시작 (nvblox 지도만 있는 옛 폴더)", load_dir_.c_str());
+      load_dir_.clear();
+    }
+    if (!save_dir_.empty()) {
+      save_srv_ = create_service<std_srvs::srv::Trigger>(
+        "~/save_map", [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                             std::shared_ptr<std_srvs::srv::Trigger::Response> res) { res->success = save_map(10.0, res->message); });
+      RCLCPP_INFO(get_logger(), "cuVSLAM 지도 저장 위치: %s (끌 때 · ~/save_map)", save_dir_.c_str());
+    }
+    if (!load_dir_.empty()) RCLCPP_INFO(get_logger(), "cuVSLAM 저장 지도에서 위치 찾기: %s", load_dir_.c_str());
 
     tf_buf_ = std::make_shared<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buf_, this, true);  // 따로 스레드 — 콜백 안에서 TF를 읽어도 안 막힘
@@ -199,6 +229,19 @@ public:
                                      [this]() { publish_vis(); });
       RCLCPP_INFO(get_logger(), "BEE_CUVSLAM_VIS=1 — /cuvslam/vis/* 냄 (특징점 영상 · 랜드마크 · 포즈 그래프)");
     }
+  }
+
+  // spin이 끝난 뒤 (SIGINT) — 매핑이면 지도 저장. launch가 sigterm_timeout 안에 기다려 줌 (ros_system.launch.py)
+  void on_exit() {
+    if (save_dir_.empty()) return;
+    if (!slam_ || ok_ == 0) {
+      RCLCPP_WARN(get_logger(), "cuVSLAM 지도 저장 안 함 — 추적한 프레임 없음");
+      return;
+    }
+    std::string msg;
+    const bool ok = save_map(15.0, msg);
+    if (ok) RCLCPP_INFO(get_logger(), "%s", msg.c_str());
+    else RCLCPP_ERROR(get_logger(), "%s", msg.c_str());
   }
 
 private:
@@ -409,7 +452,72 @@ private:
       apply_initialpose(*pending_initialpose_);
       pending_initialpose_.reset();
     }
+    if (slam_ && !load_dir_.empty()) localize_step(c, ch, ns);
     if (publish_map_tf_) publish_map(c.header.stamp, slam_pose ? *slam_pose : p);  // 루프 클로저 반영된 SLAM 위치 우선
+  }
+
+  // SaveMap은 비동기 — 콜백을 기다림 (다른 스레드에서 불릴 수 있어 promise는 shared_ptr로 콜백이 늦어도 살아 있게)
+  bool save_map(double timeout_s, std::string & msg) {
+    if (!slam_) {
+      msg = "cuVSLAM이 아직 시작 안 함 (첫 프레임 전)";
+      return false;
+    }
+    auto done = std::make_shared<std::promise<bool>>();
+    auto f = done->get_future();
+    try {
+      slam_->SaveMap(save_dir_, [done](bool ok) { done->set_value(ok); });
+    } catch (const std::exception & e) {
+      msg = std::string("cuVSLAM 지도 저장 실패: ") + e.what();
+      return false;
+    }
+    if (f.wait_for(std::chrono::duration<double>(timeout_s)) != std::future_status::ready) {
+      msg = "cuVSLAM 지도 저장 시간 초과 (" + std::to_string(timeout_s) + " s): " + save_dir_;
+      return false;
+    }
+    const bool ok = f.get();
+    msg = (ok ? "cuVSLAM 지도 저장: " : "cuVSLAM 지도 저장 실패: ") + save_dir_;
+    return ok;
+  }
+
+  // 위치추정: 저장 지도 안에서 지금 자리 찾기 — 요청은 하나씩, 결과는 다음 프레임에서 받음 (콜백은 cuVSLAM 스레드)
+  void localize_step(const Image & c, int ch, int64_t ns) {
+    if (loc_done_.exchange(false)) {
+      std::lock_guard<std::mutex> lk(loc_mu_);
+      if (loc_ok_) {
+        localized_ = true;
+        if (gate_) gate_->reset();  // map 원점이 저장 지도 쪽으로 옮겨 감 — 튐으로 잠그지 않게
+        map_offset_ = Pose2{};      // 켠 자리 기준으로 받은 initialpose · 도면 보정은 저장 지도 원점에서는 안 맞음
+        path_.poses.clear();
+        RCLCPP_WARN(get_logger(), "저장 지도 안에서 위치 찾음 (%d번째 시도) — map 원점 = 그 지도의 출발 자리", loc_tries_);
+        return;
+      }
+      RCLCPP_WARN(get_logger(), "저장 지도에서 위치 못 찾음 (%d번째): %s — %.0f s 뒤 다시", loc_tries_, loc_err_.c_str(), loc_retry_s_);
+    }
+    if (localized_ || loc_busy_) return;
+    const double now = ns * 1e-9;
+    if (now - loc_last_try_ < loc_retry_s_) return;
+    loc_last_try_ = now;
+    // 영상은 요청이 끝날 때까지 쓰이므로 따로 CPU 사본 (추적용 두 벌 버퍼는 다음 프레임이 덮어씀)
+    const size_t row = static_cast<size_t>(c.width) * ch;
+    if (!loc_buf_.fits(c.width, c.height, ch, false)) loc_buf_.alloc(c.width, c.height, ch, false);
+    auto * dst = static_cast<uint8_t *>(loc_buf_.p);
+    for (uint32_t r = 0; r < c.height; ++r) std::memcpy(dst + r * loc_buf_.pitch, c.data.data() + r * c.step, row);
+    const cuvslam::Slam::ImageSet imgs{as_image(loc_buf_, ch, cuvslam::ImageData::DataType::UINT8, ns)};
+    ++loc_tries_;
+    loc_busy_ = true;
+    try {
+      slam_->LocalizeInMap(load_dir_, ns, slam_->GetPose(), imgs, loc_, [] {},
+                           [this](const cuvslam::Result<cuvslam::Pose> & r) {
+                             std::lock_guard<std::mutex> lk(loc_mu_);
+                             loc_ok_ = r.data.has_value();
+                             loc_err_ = std::string(r.error_message);  // string_view는 콜백 밖에서 못 씀
+                             loc_busy_ = false;
+                             loc_done_ = true;
+                           });
+    } catch (const std::exception & e) {
+      loc_busy_ = false;
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "LocalizeInMap 실패: %s", e.what());
+    }
   }
 
   // 속도만 (자세는 안 씀 — cuVSLAM 좌표는 추적을 잃으면 새로 시작해 자세를 EKF에 그대로 넣으면 튐)
@@ -431,6 +539,15 @@ private:
     geometry_msgs::msg::TransformStamped o;
     try {
       o = tf_buf_->lookupTransform(odom_, base_, rclcpp::Time(stamp));
+    } catch (const tf2::ExtrapolationException &) {
+      // 영상이 EKF의 마지막 odom TF보다 먼저 오면 (bag 재생에서 15~35 ms — 11-19) 그 시각이 아직 없음 → 거의 모든 프레임을 건너뛰어
+      //   map→odom이 처음 한 번만 나왔다. odom_lookup_tolerance 안이면 가장 최근 TF로 (0.26 m/s에서 0.1 s = 2.6 cm 이하)
+      try {
+        o = tf_buf_->lookupTransform(odom_, base_, tf2::TimePointZero);
+      } catch (const std::exception &) {
+        return;
+      }
+      if (std::abs((rclcpp::Time(stamp) - rclcpp::Time(o.header.stamp)).seconds()) > odom_tol_) return;
     } catch (const std::exception &) {  // 그 시각 odom이 없으면 이 프레임은 TF만 건너뜀 (추적은 계속)
       return;
     }
@@ -600,10 +717,21 @@ private:
   std::optional<ros_system::MapGate> gate_;
   Eigen::Matrix4d base_from_cam_ = Eigen::Matrix4d::Identity();
   Pose2 map_offset_;
-  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0;
+  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0, odom_tol_ = 0.1;
   bool odom_anchor_ = false;
   std::optional<Pose2> last_base_, pending_initialpose_;
   std::optional<std::pair<int64_t, Pose2>> prev_;  // 직전 오도메트리 자세 — 추적을 잃으면 비움
+  // 위치추정 콜백이 쓰는 것들은 slam_보다 먼저 선언 — 소멸 때 slam_(작업 스레드)이 먼저 없어지게
+  std::string save_dir_, load_dir_;
+  cuvslam::Slam::LocalizationSettings loc_{};
+  double loc_retry_s_ = 2.0, loc_last_try_ = -1e18;
+  std::atomic<bool> loc_busy_{false}, loc_done_{false};
+  bool loc_ok_ = false, localized_ = false;
+  int loc_tries_ = 0;
+  std::string loc_err_;
+  std::mutex loc_mu_;
+  Buf loc_buf_;  // LocalizeInMap에 넘긴 영상 (요청이 끝날 때까지)
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_;
   std::unique_ptr<cuvslam::Odometry> odom_trk_;
   std::unique_ptr<cuvslam::Slam> slam_;
   struct Bufs {
@@ -645,7 +773,9 @@ private:
 
 int main(int argc, char ** argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<CuvslamSlam>());
+  auto node = std::make_shared<CuvslamSlam>();
+  rclcpp::spin(node);
+  node->on_exit();  // 매핑이면 cuVSLAM 지도 저장 (ROS 통신 없이 — 이미 shutdown)
   rclcpp::shutdown();
   return 0;
 }

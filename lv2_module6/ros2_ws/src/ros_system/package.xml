@@ -41,7 +41,7 @@
   <depend>sensor_msgs</depend>
   <depend>message_filters</depend>
   <depend>nav_msgs</depend>
-  <depend>std_srvs</depend>          <!-- cpp_helpers rewind /rewind -->
+  <depend>std_srvs</depend>          <!-- cpp_helpers rewind /rewind · cuvslam_slam ~/save_map -->
   <depend>action_msgs</depend>       <!-- cpp_helpers rewind 액션 상태 -->
   <!-- 진짜 Nav2 서버 (launch가 직접 띄움 — nav2_bringup은 시뮬레이션 의존성까지 끌어와 안 씀) -->
   <exec_depend>nav2_lifecycle_manager</exec_depend>

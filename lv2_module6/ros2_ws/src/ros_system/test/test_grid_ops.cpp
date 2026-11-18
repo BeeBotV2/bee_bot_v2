@@ -18,6 +18,24 @@ static OccupancyGrid make(unsigned w, unsigned h, std::vector<int8_t> data, doub
   return g;
 }
 
+TEST(GridOps, PgmTopRowIsHighestYAndTrinary) {
+  // 2×2: 아래 줄(y=0) [점유 100, 빈칸 0] · 위 줄(y=1) [모름 -1, 애매 50] → pgm은 위 줄부터
+  const auto g = make(2, 2, {100, 0, -1, 50}, -1.5, 2.0);
+  const std::string pgm = ros_system::to_pgm(g);
+  const std::string head = "P5\n2 2\n255\n";
+  ASSERT_EQ(pgm.size(), head.size() + 4);
+  EXPECT_EQ(pgm.substr(0, head.size()), head);
+  const auto px = [&](size_t i) { return static_cast<unsigned char>(pgm[head.size() + i]); };
+  EXPECT_EQ(px(0), 205);  // 위 왼쪽 모름
+  EXPECT_EQ(px(1), 205);  // 위 오른쪽 50 = 0.25~0.65 사이 → 모름
+  EXPECT_EQ(px(2), 0);    // 아래 왼쪽 점유
+  EXPECT_EQ(px(3), 254);  // 아래 오른쪽 빈칸
+  const std::string yaml = ros_system::to_map_yaml(g, "map.pgm");
+  EXPECT_NE(yaml.find("image: map.pgm"), std::string::npos);
+  EXPECT_NE(yaml.find("resolution: 0.05"), std::string::npos);
+  EXPECT_NE(yaml.find("origin: [-1.5, 2, 0]"), std::string::npos);
+}
+
 TEST(GridOps, DespeckleRemovesSmallBlobsEightConnected) {
   // 5×4: 왼쪽 위 대각선 2칸(8방향 이웃 = 한 덩어리) · 오른쪽 아래 3칸 덩어리 · 49는 점유 아님
   const auto g = make(5, 4, {100, 0, 0, 0, 0,

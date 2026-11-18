@@ -205,6 +205,7 @@ def generate_launch_description():
         flag('static_map_yaml', '', 'static_2d map YAML in the cuVSLAM map frame'),
         flag('nvblox_params_file', share('config', 'nvblox.yaml'), 'nvblox parameter file'),
         flag('nvblox_map', '~/.ros/nvblox.nvblx', 'nvblox 지도 파일 — 매핑이면 끌 때 여기에 저장, 위치추정이면 시작할 때 여기서 불러옴'),
+        flag('cuvslam_map', '', 'cuVSLAM 지도 폴더 — 매핑이면 끌 때 저장, 위치추정이면 그 지도 안에서 자리를 찾음 (비면 안 씀 · 켠 자리가 원점)'),
         flag('use_cmd_chain', 'true', '바퀴 명령 체인 (velocity_smoother · collision_monitor · lifecycle_manager_base) — use_nav2와 별개: 지도 없이(map:=none)도 수동 조작이 되려면 늘 필요'),
         flag('use_nav2', 'true', '진짜 Nav2 서버 (planner · controller · behavior · bt_navigator) — 바퀴 명령 체인(velocity_smoother · collision_monitor)은 use_cmd_chain'),
         flag('nav2_composition', 'true', 'Nav2 서버·관리자를 한 프로세스(nav2_container, 컴포넌트)로 — 메모리 절약 · false면 서버마다 프로세스 (예전)'),
@@ -292,6 +293,11 @@ def nav2_nodes():
               'default_nav_through_poses_bt_xml': share('config', 'navigate_through_poses.xml')}
     # (패키지, 실행 파일, 컴포넌트 플러그인, 리매핑, 추가 파라미터, 켜는 인자)
     #   use_cmd_chain = 바퀴 명령 체인 — bringup이 지도 없음(map:=none)이면 use_nav2를 끄는데, 그때도 수동 조작은 돼야 한다
+    # 지도 없음(use_slam:=false — map:=none 녹화 · 수동 주행): 도면 벽 점구름(/arena/walls_cloud)을 내는 grid_obstacle_cloud가 SLAM일 때만
+    #   떠서, collision_monitor가 그 입력을 기다리며 /cmd_vel을 하나도 안 냈다 (11-18 Isaac drive: teleop → /cmd_vel_smoothed까지만).
+    #   그때는 앞 카메라 점구름만 본다
+    cm_sources = {'observation_sources': PythonExpression(
+        ["['pole_front_cam', 'arena_walls'] if '", LaunchConfiguration('use_slam'), "'.lower() == 'true' else ['pole_front_cam']"])}
     servers = [
         ('nav2_planner', 'planner_server', 'nav2_planner::PlannerServer', [], [], 'use_nav2'),
         ('nav2_controller', 'controller_server', 'nav2_controller::ControllerServer', [('cmd_vel', '/cmd_vel_nav')], [], 'use_nav2'),
@@ -301,7 +307,7 @@ def nav2_nodes():
         ('nav2_bt_navigator', 'bt_navigator', 'nav2_bt_navigator::BtNavigator', [], [bt_xml], 'use_nav2'),
         ('nav2_velocity_smoother', 'velocity_smoother', 'nav2_velocity_smoother::VelocitySmoother',
          [('cmd_vel', '/cmd_vel_mux'), ('cmd_vel_smoothed', '/cmd_vel_smoothed')], [], 'use_cmd_chain'),
-        ('nav2_collision_monitor', 'collision_monitor', 'nav2_collision_monitor::CollisionMonitor', [], [], 'use_cmd_chain'),  # 입출력 토픽은 yaml
+        ('nav2_collision_monitor', 'collision_monitor', 'nav2_collision_monitor::CollisionMonitor', [], [cm_sources], 'use_cmd_chain'),  # 입출력 토픽은 yaml
     ]
     managers = [('lifecycle_manager_base', 'use_cmd_chain'), ('lifecycle_manager_navigation', 'use_nav2')]
     standalone = 'controller_server'  # MPPI/RL controller composition crashed on Jetson
@@ -401,12 +407,18 @@ def slam_nodes():
     nvblox_file = ["__import__('os').path.expanduser('", LaunchConfiguration('nvblox_map'), "')"]
     save_path = PythonExpression(["'' if ", *loc, " else ", *nvblox_file])  # 매핑일 때만 저장 (위치추정이면 불러온 지도를 안 덮어씀)
     load_path = PythonExpression([*nvblox_file, " if ", *loc, " else ''"])
+    cuvslam_dir = ["__import__('os').path.expanduser('", LaunchConfiguration('cuvslam_map'), "')"]
+    cuvslam_save = PythonExpression(["'' if ", *loc, " else ", *cuvslam_dir])
+    cuvslam_load = PythonExpression([*cuvslam_dir, " if ", *loc, " else ''"])
 
     def gate_params(cam):
         return {'gate_by_pose': False, 'depth_min_range': 0.5, 'cloud_in': '',
                 'depth_in': f'/{cam}/aligned_depth_to_color/image_raw',
                 'depth_out': f'/{cam}/aligned_depth_to_color/image_nvblox'}
-    nvblox_map_params = {'load_path': ParameterValue(load_path, value_type=str)}
+    # 매핑이면 끌 때 /map → nvblox.nvblx 옆 map.pgm · map.yaml (저장 지도 주행 map_backend:=static_2d가 읽음 · nvblox_map 소멸자)
+    map_yaml = PythonExpression(["'' if ", *loc, " else __import__('os').path.join(__import__('os').path.dirname(", *nvblox_file, "), 'map.yaml')"])
+    nvblox_map_params = {'load_path': ParameterValue(load_path, value_type=str),
+                         'save_yaml': ParameterValue(map_yaml, value_type=str)}
     # py_helpers_one_process:=true(기본) — 아래 python 노드 셋(depth gate · nvblox_map · rewind)을 한 프로세스(py_helpers)로.
     #   python 노드마다 ~120 MB PSS(인터프리터·rclpy·DDS)를 한 번만 냄 (젯슨 8 GB 바닥 → 재부팅, 11-14). false = 예전처럼 따로
     separate = IfCondition(PythonExpression(["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '",
@@ -442,7 +454,10 @@ def slam_nodes():
         # 노드 이름은 둘 다 cuvslam_slam (파라미터·진단·토픽 같음) — 실행 파일만 고름
         Node(package='ros_system', executable=cuvslam_exe, name='cuvslam_slam', output='screen', condition=on,
              parameters=[{'publish_map_tf': True,
-                          'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int)}]),
+                          'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int),
+                          'map_save_dir': ParameterValue(cuvslam_save, value_type=str),
+                          'map_load_dir': ParameterValue(cuvslam_load, value_type=str)}],
+             sigterm_timeout='20'),  # 매핑이면 SIGINT 뒤 지도 저장 (on_exit) — launch 기본 5 s 안에 못 끝내면 SIGTERM
         # map→odom TF 이어 내기 (C++, 11-16) — cuvslam_slam이 낸 /cuvslam/map_to_odom을 30 Hz로 TF로 (파이썬이 멈춰도 안 끊김)
         Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
         # 도면 벽(/arena/walls_only) → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor 두 번째 입력 (옆·뒤)
