@@ -73,6 +73,9 @@ def _urdf_offsets():
 
 
 REAL = os.environ.get("BEE_SIM_REAL", "1") != "0"
+# Wheel response like the real base: first-order lag on the wheel speed target [s]. Real robot bag nav_1116_062046:
+# cmd -> gyro lag ~0.10 s, 0 -> 0.17 m/s reaches 90 % in ~0.30 s. 0 = instant (old behaviour).
+WHEEL_TAU = float(os.environ.get("OPENCR_WHEEL_TAU", "0.12"))
 NOISE = float(os.environ.get("BEE_SIM_NOISE", "1"))
 GYRO_SIGMA = math.radians(0.015) * math.sqrt(100.0) * NOISE  # [rad/s] ICM-20648 density x sqrt(assumed 100 Hz)
 ACCEL_SIGMA = 230e-6 * 9.80665 * math.sqrt(100.0) * NOISE  # [m/s^2]
@@ -208,6 +211,7 @@ class Board:
         self.apply_due()
         if self.t - self.last_cmd > COMMAND_TIMEOUT:  # watchdog: wheels stop, arm keeps its target
             self.set_targets(wheels=[0.0, 0.0])
+        self.wheel_response(dt)
         if self.t - self.last_state >= STATE_PERIOD - 1e-6:
             self.last_state = self.t
             self.send(self.state_line())
@@ -223,13 +227,27 @@ class Board:
         tau = gravity_torques(*(float(pos[self.idx[n]]) for n in ("joint2", "joint3", "joint4")))
         self.twist = {n: TWIST_SCALE * t / TWIST_K[n] for n, t in zip(("joint2", "joint3"), tau)}
 
+    def wheel_response(self, dt):
+        if not WHEEL_TAU:
+            return
+        cmd = getattr(self, "wheel_cmd", [0.0, 0.0])
+        out = getattr(self, "wheel_out", [0.0, 0.0])
+        a = min(1.0, dt / WHEEL_TAU)
+        self.wheel_out = [o + (c - o) * a for o, c in zip(out, cmd)]
+        self.write_wheels(self.wheel_out)
+
+    def write_wheels(self, wheels):
+        v = self.view.get_dof_velocity_targets()
+        for name, w in zip(WHEELS, wheels):
+            v[0, self.idx[name]] = w
+        self.view.set_dof_velocity_targets(v, np.array([0], dtype=np.int32))
+
     def set_targets(self, wheels=None, arm=None):
         all_ = np.array([0], dtype=np.int32)
         if wheels is not None:
-            v = self.view.get_dof_velocity_targets()
-            for name, w in zip(WHEELS, wheels):
-                v[0, self.idx[name]] = w
-            self.view.set_dof_velocity_targets(v, all_)
+            self.wheel_cmd = list(wheels)
+            if not WHEEL_TAU:
+                self.write_wheels(wheels)
         if arm:
             p = self.view.get_dof_position_targets()
             for name, q in arm.items():
