@@ -12,7 +12,7 @@ skill_navigate:
     #   Nav2 안쪽: progress_checker 4 s + 복구(1.5 s 대기 · 0.10 m 후진 · 2 s 대기)가 한 번 돌 시간은 남김
     nav_stall_s: 10.0
     # 끼임 풀기 — 진척 없음 · 출발 칸 막힘(205)이면 곧게 후진(충돌 검사 켬) → 같은 목표로 다시, 이 횟수까지 (0 = 끔)
-    nav_unstuck_tries: 1
+    nav_unstuck_tries: 3     # 11-18: 1 → 3 — 매번 다른 동작(후진·회전·전진), Nav2 실패(앞 충돌)도 대상
     nav_unstuck_back_m: 0.15
 skill_approach:
   ros__parameters:
@@ -29,6 +29,7 @@ skill_approach:
     approach_carrot_m: 0.05  # [m] sim: 목표 방향 직선 위 이만큼 앞 점을 향해 조향 (옆 어긋남을 도착 전에 없앰)
     approach_v_max: 0.06     # [m/s] sim 전진 상한 (11-13: 0.12는 빠름 — 사용자)
     approach_w_max: 0.5      # [rad/s] sim 회전 상한 (11-13: 1.0은 면 맞출 때 크게 돎)
+    approach_exit_v: 0.15    # [m/s] exit(상자에서 물러나기) 후진 상한 — 11-18: 0.05면 0.5 m 물러나는 데 16~19 s
     approach_exit_m: 0.165   # [m] goal.target "exit" 기본 후진 거리 (values[0]이 있으면 그 값) — 상자에서 standoff까지
     # 상자 도킹 (goal.values = [gap, half]): 도면 자리는 힌트 — 인지 상자로 목표를 정함 (11-12). 팔은 pose_look으로 천천히 (launch arm_velocity_scale 0.15)
     box_match_m: 0.45        # [m] 힌트 상자 가운데에서 이만큼 안의 start_box · location_box만 (11-13: 0.35 → 0.45 — 지도 오차 20~25 cm에 측정이 밖으로 나감, 상자끼리는 0.7 m 넘게 떨어짐)

@@ -74,6 +74,7 @@ struct Box {  // arena [m] — 정사각 박스 (윗면 = box_top_z)
   double x, y, half;
   std::vector<std::string> sides = {};  // 다가갈 변 "+x" "-x" "+y" "-y" (arena, 박스 가운데에서 그 변 쪽), "+x@0.41" = 가운데에서 0.41 m에 섬 — 비면 네 변 다
   double retreat = 0.0;  // [m] 도킹 뒤 다가설 자리보다 이만큼 더 똑바로 물러남 (start_box_retreat, 11-15)
+  bool nearest = false;  // true면 sides를 적은 순서가 아니라 지금 로봇에서 가까운 순서로 시도 (location_side_nearest, 11-18)
 };
 
 // 집을 퍽 트랙 고르기 — 인지는 안 보이는 물체를 2초 뒤 지우므로(long_memory: false) 퍽은 tag로 기억하고 집기 직전에 다시 찾는다.
@@ -331,6 +332,7 @@ private:
   double stand_check_s_ = 1.0;                   // stand 뒤 인지가 선 퍽을 볼 때까지 기다림
   double stand_find_m_ = 0.10;                   // stand 뒤 선 퍽을 찾는 반경 → pick (못 찾으면 stand_pick)
   int placed_ = 0, photo_n_ = 0;
+  int home_tries_ = 0;  // 출발 구역 복귀 Nav2 실패 횟수 — return_home_tries까지 다시 (11-18: 한 번 실패로 미션 ERROR 끝나던 것)
   std::string back_;   // 박스에 붙어 있을 때 물러날 standoff 자세 "x,y,yaw" (map) — 다음 go_near가 먼저 씀
   std::string run_dir_;
   perception::msg::TrackedObjectArray::ConstSharedPtr objects_;

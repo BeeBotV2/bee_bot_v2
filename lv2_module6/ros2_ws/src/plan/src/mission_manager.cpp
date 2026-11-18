@@ -120,6 +120,10 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   };
   set_sides(start_boxes_, "start_box_sides");
   set_sides(loc_boxes_, "location_box_sides");
+  // 11-18 사용자: 장소(L1~L3)는 적은 순서 말고 로봇에서 가까운 면부터 — 네 면 다 들어갈 수 있는데 첫 면 고정이면 반대편으로 돌아감 (sim L3→L2)
+  //   시작 박스는 적은 순서 유지 (첫 면 = 붙은 뒤 돌 공간까지 확인한 진입 면)
+  if (declare_parameter<bool>("location_side_nearest", true))
+    for (auto & b : loc_boxes_) b.nearest = true;
   // 박스마다 더 물러날 거리 — 칸 안 박스(B6)는 다가설 자리가 아직 칸 입구 안이라 돌 공간이 없어 다음 주행이 85 s 갇혔음 (11-15 시뮬)
   const auto retreat = declare_parameter<std::vector<double>>("start_box_retreat", std::vector<double>{});
   if (!retreat.empty() && retreat.size() != start_boxes_.size())
@@ -441,7 +445,7 @@ void MissionManager::enter(Phase p, const std::string & why) {
     case Phase::SURVEY: use_given(true); survey(0); break;
     case Phase::BUILD: build(0); break;
     case Phase::VERIFY: verify(0); break;
-    case Phase::RETURN: go_home(); break;
+    case Phase::RETURN: home_tries_ = 0; go_home(); break;
     case Phase::DONE:
       mission_line(true, "");
       active_ = false;
@@ -1126,6 +1130,12 @@ void MissionManager::go_home(bool corrected) {
   run({stow(), SubGoal().set__skill(corrected ? "approach" : "navigate").set__target(fmt("%.4f,%.4f,%.4f", p.x, p.y, p.yaw))
                  .set__relation(corrected ? "park_home" : leg_to("start"))},  // " leg:L3_start" — 앞 공백은 skill이 무시
     [this, corrected](bool ok, const std::string & why) {
+      // 11-18: 실패 한 번으로 미션을 끝내지 않음 — navigate의 끼임 풀기(후진·회전·전진) 뒤에도 안 되면 처음부터 다시 (사용자: 바로 죽으면 안 됨)
+      if (!ok && !corrected && ++home_tries_ < 3) {
+        RCLCPP_WARN(get_logger(), "출발 구역 복귀 실패 (%s) — 다시 %d/3", why.c_str(), home_tries_ + 1);
+        go_home(false);
+        return;
+      }
       if (!ok && !corrected) { finish(false, "return_nav:" + why); return; }
       Pose2 r;
       const bool known = robot_arena(r);
@@ -1395,6 +1405,12 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
         }
       }
       poses = kept;
+      Pose2 rb;
+      // ponytail: 직선 거리 — 벽 너머 면이 더 가까워 보일 수 있음. 그런 일이 보이면 Nav2 경로 길이(ComputePathToPose)로
+      if (box.nearest && robot_arena(rb))
+        std::stable_sort(poses.begin(), poses.end(), [&](const Pose2 & a, const Pose2 & b) {
+          return std::hypot(a.x - rb.x, a.y - rb.y) < std::hypot(b.x - rb.x, b.y - rb.y);
+        });
     }
     // 벽에 막힌 변은 처음부터 뺌 (예: 시작 박스 1 서쪽 — x 1.101 벽과 박스 사이 0.27 m. 다가설 자리가 벽 위라 Nav2가 벽으로 몰고 감)
     poses.erase(std::remove_if(poses.begin(), poses.end(), [this](const Pose2 & p) {
@@ -1445,7 +1461,10 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
         return;
       }
       // 붙은 뒤 exit은 Nav2 목표 자리(n)까지 물러남 — approach 시작 자리(@d)는 돌 공간이 없을 수 있음
-      if (ok) { back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + box.retreat); done(true, ""); return; }
+      //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
+      //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
+      //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
+      if (ok) { back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남

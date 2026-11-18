@@ -50,6 +50,16 @@ controller_server:
     goal_checker_plugins: ["goal_checker", "general_goal_checker"]
     controller_plugins: ["FollowPath"]
 
+    # 경로를 전진·후진 전환점(cusp)에서 끊어 한 구간씩 추종기에 넘긴다 (Lattice 후진 허용).
+    #   enforce_path_rotation(제자리 회전 지점에서도 끊기)은 끊긴 끝마다 감속·정지해서 끔 — B1 시뮬 3/8 (11-18)
+    PathHandler:
+      plugin: "nav2_controller::FeasiblePathHandler"
+      enforce_path_inversion: true
+      enforce_path_rotation: false
+      inversion_xy_tolerance: 0.10
+      inversion_yaw_tolerance: 0.4
+      minimum_rotation_angle: 0.785
+
     # 막힘 판단 — 4 s 동안 0.10 m도 못 가면 FollowPath 실패 → BT 복구. 제자리 회전도 진척으로 친다(PoseProgressChecker).
     progress_checker:
       plugin: "nav2_controller::PoseProgressChecker"
@@ -61,8 +71,10 @@ controller_server:
     goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
-      xy_goal_tolerance: 0.08
-      yaw_goal_tolerance: 0.3
+      # 11-18: 0.08 / 0.3 → 0.15 / 0.5 — 다가설 자리는 approach 출발점일 뿐(최종 자리는 approach가 상자를 보며 맞춤).
+      #   좁으면 Lattice(후진 허용 + 도착 방향 고정)가 자리를 0.24 m 지나쳤다 후진해 들어오는 경로를 냄 (sim S4)
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.7   # 11-18: 0.5 → 0.7 rad(40°, 사용자) — 앞 카메라 가로 시야 약 87°의 절반: 이 안이면 상자가 대체로 화면에 들어와 approach가 바로 시작
     # through-poses BT가 찾는 이름 — 통과 지점이라 넓게
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -75,7 +87,7 @@ controller_server:
     #   곡률이 크면 속도를 줄여(regulated) 바깥 바퀴가 한계(0.26 m/s)를 넘지 않게. 앞길에 충돌이 보이면 멈춤 → BT가 재계획.
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
-      angular_dist_threshold: 0.6
+      angular_dist_threshold: 1.047   # 60° — 넘으면 멈춰서 제자리 회전, 아래면 RPP가 곡선으로
       angular_disengage_threshold: 0.2
       forward_sampling_distance: 0.4
       rotate_to_heading_angular_vel: 1.6
@@ -93,13 +105,13 @@ controller_server:
         use_velocity_scaled_lookahead_dist: true
         rotate_to_heading_angular_vel: 1.6
         use_rotate_to_heading: false
-        allow_reversing: false
+        allow_reversing: false   # 11-18: SmacPlanner2D는 후진 경로를 안 냄 — true면 shim이 등 뒤 경로로 돌 때 RPP가 짧게 후진하며 13 s 떪 (sim M7 L1→L2)
         max_angular_accel: 2.5
         use_regulated_linear_velocity_scaling: true
-        regulated_linear_scaling_min_radius: 0.9
+        regulated_linear_scaling_min_radius: 0.35
         regulated_linear_scaling_min_speed: 0.08
         use_cost_regulated_linear_velocity_scaling: true
-        cost_scaling_dist: 0.25
+        cost_scaling_dist: 0.15
         cost_scaling_gain: 0.5
         inflation_cost_scaling_factor: 10.0   # = local_costmap inflation cost_scaling_factor
         use_collision_detection: true
@@ -120,35 +132,28 @@ planner_server:
     expected_planner_frequency: 5.0
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_smac_planner::SmacPlannerLattice"
-      lattice_filepath: "/opt/ros/lyrical/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json"
-      allow_unknown: true
+      # 11-18: Lattice(0.5 m 반경 primitive) → 2D 격자. Lattice는 좁은 코너에서 곡선으로 비집거나, 다가설 자리를 지나쳤다 후진하거나,
+      #   크게 돌았음 (sim 미션 M1~M4). 2D 경로 = 직선 + 꺾임 → 꺾이는 곳에서 RotationShim이 제자리 회전(몸 충돌 검사)하고 RPP가 직진.
+      #   몸(직사각형)은 2D가 모름 → 벽 가까운 칸을 비싸게(cost_travel_multiplier) 해서 통로 가운데로, 실제 충돌은 shim·RPP가 몸 모양으로 검사
+      plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.10
+      downsample_costmap: false
+      downsampling_factor: 1
+      allow_unknown: true
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 1.0
-      analytic_expansion_ratio: 3.5
-      analytic_expansion_max_length: 0.6
-      analytic_expansion_max_cost: 200.0
-      analytic_expansion_max_cost_override: false
-      reverse_penalty: 2.0
-      change_penalty: 0.05
-      non_straight_penalty: 1.05
-      cost_penalty: 3.5        # 벽 가까운 칸을 비싸게 → 문·통로 가운데로 (2.0이면 문 모서리에 붙은 경로)
-      rotation_penalty: 3.0
-      retrospective_penalty: 0.015
-      lookup_table_size: 20.0
-      cache_obstacle_heuristic: false
-      allow_reverse_expansion: false
-      smooth_path: true
+      cost_travel_multiplier: 1.5   # 11-18: 2 → 1 → 1.5 (사용자) — 2는 너무 가운데·집 앞 우회, 1은 벽 끝에 붙어 꼬리 걸림 (sim M16 L3→L2)
+      use_final_approach_orientation: false
+      # 11-18: 경로를 각지게 (사용자) — smoother 끔(w_smooth 0, refinement 없음): 격자 경로 그대로 = 직선 + 꺾임 →
+      #   꺾이는 곳에서 RotationShim 제자리 회전. 다듬으면 코너가 둥글어져 안쪽으로 붙고 꼬리가 바깥으로 쓸림
       smoother:
-        max_iterations: 1000
-        w_smooth: 0.3
+        max_iterations: 1
+        w_smooth: 0.15   # 11-18: 0 → 0.15 (사용자) — 0이면 대각선이 0°·45° 계단이라 RPP가 좌우로 출렁임. refinement는 끔(큰 꺾임 유지)
         w_data: 0.2
         tolerance: 1.0e-10
-        do_refinement: true
-        refinement_num: 2
-
+        do_refinement: false
+        refinement_num: 0
 # ─────────────────────────────────────────────────────────────────────────────
 # behavior_server — BT 복구 (Spin · BackUp · Wait). 출력 /cmd_vel_nav
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,9 +164,11 @@ behavior_server:
     local_footprint_topic: local_costmap/published_footprint
     global_footprint_topic: global_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "wait"]
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]   # 11-18: drive_on_heading 다시 — 끼임 풀기에서 뒤가 막히면 앞으로 빠짐
     spin:
       plugin: "nav2_behaviors::Spin"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
     backup:
       plugin: "nav2_behaviors::BackUp"
     wait:
@@ -200,7 +207,7 @@ local_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
-        map_topic: /arena/walls   # mission_manager: plan.yaml 실측 벽 + 상자 (경기장 보정은 로봇 위치로 들어감)
+        map_topic: /map   # 11-18: 저장 지도(maze_map_1711/map.pgm, map_backend:=static_2d의 map_server) — 실기도 이 지도 (사용자). 예전: /arena/walls(plan.yaml 실측 벽)
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
@@ -237,9 +244,11 @@ global_costmap:
       update_frequency: 5.0
       publish_frequency: 1.0
       global_frame: map
-      robot_base_frame: base_footprint
-      footprint: "[[0.069, 0.151], [0.069, -0.151], [-0.245, -0.151], [-0.245, 0.151]]"
-      footprint_padding: 0.02   # 0.04면 상자 앞 좁은 목표(S5·L2)로 가는 경로가 안 나옴 (nav_bench 11-18)
+      # 11-18: SmacPlanner2D는 기준점 한 칸의 cost만 봄 → 몸 원 = 기준점 중심 inscribed 반경. 기준점을 앞바퀴 축(base_footprint)에서
+      #   몸 가운데(base_center, URDF −0.088 m)로 — 축 중심 원(0.17)은 꼬리(축 뒤 0.245)가 원 밖이라 코너에서 꼬리가 걸림 (sim M6 L2 위 코너).
+      #   몸 가운데에서 반폭 0.151 · 반길이 0.157 · 모서리 0.218 → 0.22 (0.20이면 벽 끝·상자 사이 틈으로 경로를 내 돌 공간 없이 끼임, sim M7 L2)
+      robot_base_frame: base_center
+      robot_radius: 0.22
       resolution: 0.05
       track_unknown_space: false   # /arena/walls는 벽·상자 말고 −1 — 빈칸으로 읽음
       always_send_full_costmap: true
@@ -247,7 +256,7 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
-        map_topic: /arena/walls
+        map_topic: /map   # 11-18: 저장 지도 (위 local과 같음)
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -265,8 +274,8 @@ global_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.45   # ≥ 외접 반경 — Lattice가 몸 모양 검사를 하려면 필요. 바깥쪽은 통로 가운데로 끄는 비용
-        cost_scaling_factor: 8.0
+        inflation_radius: 0.45   # 바깥쪽은 통로 가운데로 끄는 비용
+        cost_scaling_factor: 6.0   # 11-18: 8 → 4 → 8 → 6 (사용자) — 4는 너무 가운데·집 앞 우회, 8(+multiplier 1)은 벽 끝에 붙어 꼬리 걸림 (sim M16)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # velocity_smoother — /cmd_vel_mux → /cmd_vel_smoothed. 한계 = 실기

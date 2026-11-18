@@ -97,7 +97,7 @@ def container(name, nodes, condition):
 
 # ros_system에 그대로 넘기는 하드웨어·서버 인자 (기본값 = 실기). 테스트베드 faker가 대역에 맞게 덮어씀
 ROS_SYSTEM_ARGS = {
-    'map_backend': ('nvblox', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox)'),
+    'map_backend': ('static_2d', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox) — 11-18 기본 static_2d: map:=saved면 <map_dir>/<map_name>/map.yaml을 /map으로 (매핑 map:=slam은 nvblox)'),
     'nvblox_params_file': ('', 'optional nvblox parameter YAML; empty uses ros_system default'),
     'urdf': ('default', '로봇 모델 = lv2_module6/urdf/<이 이름>/urdf.xacro (폴더 하나 = 모델 하나, 메시는 그 폴더 meshes/)'),
     'mock_hardware': ('false', 'true면 OpenCR 없이 BeebotSystemHardware가 명령을 상태로 되돌림'),
@@ -161,6 +161,9 @@ def setup_map(context):
     backend = LaunchConfiguration('map_backend').perform(context)
     if backend not in ('nvblox', 'static_2d'):
         raise RuntimeError(f'map_backend:={backend} — nvblox | static_2d')
+    # 11-18: 기본 static_2d — 매핑(map:=slam)·가짜 SLAM은 nvblox로 (static_2d는 저장 지도 위치추정 전용)
+    if backend == 'static_2d' and (mode != 'saved' or fake_slam):
+        backend = 'nvblox'
     if backend == 'static_2d' and mode != 'none' and (mode != 'saved' or fake_slam):
         raise RuntimeError('static_2d requires map:=saved and fake_slam:=false')
     map_file = MAP_FILE
@@ -247,6 +250,7 @@ def setup_map(context):
             SetLaunchConfiguration('static_map_yaml', os.path.join(d, name, 'map.yaml') if effective != 'none' and backend == 'static_2d' else ''),
             SetLaunchConfiguration('nvblox_params_file', LaunchConfiguration('nvblox_params_file').perform(context)
                 or os.path.join(get_package_share_directory('ros_system'), 'config', 'nvblox.yaml')),
+            SetLaunchConfiguration('map_backend', backend),
             SetLaunchConfiguration('use_perception', use_perception),
             SetLaunchConfiguration('use_gripper_cam', ug),
             SetLaunchConfiguration('use_pole_back_cam', ub),

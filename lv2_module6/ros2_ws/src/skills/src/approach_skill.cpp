@@ -47,6 +47,7 @@ public:
     res_v_ = declare_parameter<double>("residual_v", 0.02);          // 시뮬 res_v · res_w (행동 1 = 이만큼)
     res_w_ = declare_parameter<double>("residual_w", 0.1);
     min_speed_ = declare_parameter<double>("approach_min_speed", 0.03);  // [m/s] 실기 바퀴 데드밴드 위 (sim 모드 기준 제어)
+    exit_v_ = declare_parameter<double>("approach_exit_v", 0.15);  // [m/s] exit 후진 상한 (11-18: 0.05면 0.5 m에 16~19 s)
     exit_m_ = declare_parameter<double>("approach_exit_m", 0.165);  // exit 기본 후진 거리 [m] (= standoff 0.25 − gap 0.085)
     release_m_ = declare_parameter<double>("approach_release_m", 0.03);  // sim: 도착(tol_m×0.6) 뒤 이만큼 벗어나야 다시 위치 맞춤
     carrot_m_ = declare_parameter<double>("approach_carrot_m", 0.05);    // sim: 목표 직선 위 이만큼 앞 점을 향해 조향
@@ -158,8 +159,8 @@ private:
     gx_ = x - d * std::cos(yaw);
     gy_ = y - d * std::sin(yaw);
     gyaw_ = yaw;
-    tol_m_ = 0.01;
-    tol_yaw_ = 3.0 * M_PI / 180.0;
+    tol_m_ = 0.03;  // 11-18: 1 cm · 3° → 3 cm · 10° — 물러나기만 하면 됨, 정밀하게 맞추느라 후진 중 방향을 계속 고쳐 비틀댐 (sim)
+    tol_yaw_ = 10.0 * M_PI / 180.0;
     hold_s_ = 0.2;
     best_ = 1e9;
     still_s_ = 0.0;
@@ -390,7 +391,7 @@ private:
       if (dist > tol_m_ && std::abs(along) > latch && std::abs(gyaw) < 0.1)  // 옆 어긋남만이면 안 움직임 (앞으로 밀기만 됨)
         v = along > 0.0 ? std::clamp(1.5 * along, min_speed_, 0.05) : std::clamp(1.5 * along, -0.05, -min_speed_);
     } else if (along < -0.003) {
-      v = std::max(-0.05, 1.5 * along);
+      v = std::max(exit_ ? -exit_v_ : -0.05, 1.5 * along);  // exit(물러나기)만 빠르게 — 붙는 중 지나침 보정은 0.05 그대로
       if (v > -min_speed_) v = -min_speed_;  // 실기 바퀴 데드밴드 (develop 11-12 approach_min_speed)
       w = std::clamp(1.5 * gyaw, -0.3, 0.3);
     } else if (std::abs(head_c) > 45.0 * M_PI / 180.0 && dist > release) {
@@ -472,6 +473,7 @@ private:
   bool exit_ = false;
   std::map<uint32_t, std::pair<perception::msg::TrackedObject, rclcpp::Time>> seen_;  // 추적 id → 마지막 온전한 상자 측정 (box_seed_s 동안)
   double exit_m_ = 0.165;
+  double exit_v_ = 0.15;
   std::string frame_ = "map";  // 목표·로봇 자세 프레임 — 상자 도킹은 odom
   ArmIO arm_;
   std::vector<double> look_q_;

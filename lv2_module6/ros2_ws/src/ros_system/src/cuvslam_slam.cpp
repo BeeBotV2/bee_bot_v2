@@ -132,6 +132,8 @@ public:
     //   Isaac nav_bench: EKF odom 오차 ~2 cm인데 cuVSLAM map→odom이 27~38 cm(보정 켜면 10~28 cm) 끌고 감 → 시뮬은 odom 기준이 정확.
     //   실기에서는 바퀴 미끄러짐을 cuVSLAM이 잡는지 확인 전이라 기본은 그대로. 환경 변수 BEE_MAP_ANCHOR=odom이 덮음
     odom_anchor_ = declare_parameter<std::string>("map_anchor", "cuvslam") == "odom";
+    max_twist_lin_ = declare_parameter<double>("max_twist_lin", 0.6);  // [m/s] 넘으면 /cuvslam/odom 안 냄 (자세 튐)
+    max_twist_ang_ = declare_parameter<double>("max_twist_ang", 4.0);  // [rad/s]
     if (const char * a = std::getenv("BEE_MAP_ANCHOR")) odom_anchor_ = std::string(a) == "odom";
     if (odom_anchor_) RCLCPP_WARN(get_logger(), "map 기준 = EKF odom (+도면 보정) — cuVSLAM 자세는 map→odom에 안 씀");
     if (env_on("BEE_MAP_FREEZE")) {
@@ -394,7 +396,13 @@ private:
     ++ok_;
     const auto & p = est.world_from_rig->pose;
     const Pose2 cur = ros_system::base_pose(base_from_cam_, mat(p));
-    if (prev_) publish_odom(c.header.stamp, ros_system::body_twist(prev_->second, cur, (ns - prev_->first) * 1e-9));
+    if (prev_) {
+      // 11-18: 자세가 튀거나 dt가 아주 짧으면 차분 속도가 수 m/s로 나와 EKF가 적분해 odom이 순간이동 (sim M10: 0.1 s에 1.78 m · −108°,
+      //   벽 보정 없는 map 기준이라 2 m 틀린 채 남음). 몸이 낼 수 없는 속도(최고 0.26 m/s · 약 1.8 rad/s의 2배 넘게)는 버림
+      const Pose2 v = ros_system::body_twist(prev_->second, cur, (ns - prev_->first) * 1e-9);
+      if (std::hypot(v.x, v.y) <= max_twist_lin_ && std::abs(v.yaw) <= max_twist_ang_) publish_odom(c.header.stamp, v);
+      else RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "속도 튐 버림 (%.2f m/s, %.2f rad/s)", std::hypot(v.x, v.y), v.yaw);
+    }
     prev_ = std::make_pair(ns, cur);
     last_base_ = cur;
     if (pending_initialpose_) {
@@ -592,6 +600,7 @@ private:
   std::optional<ros_system::MapGate> gate_;
   Eigen::Matrix4d base_from_cam_ = Eigen::Matrix4d::Identity();
   Pose2 map_offset_;
+  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0;
   bool odom_anchor_ = false;
   std::optional<Pose2> last_base_, pending_initialpose_;
   std::optional<std::pair<int64_t, Pose2>> prev_;  // 직전 오도메트리 자세 — 추적을 잃으면 비움

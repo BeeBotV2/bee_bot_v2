@@ -6,12 +6,16 @@
 //   goal.target "look" (상자 도킹 앞 주행): 남은 거리가 nav_look_m 안이면 팔을 pose_look으로 (approach가 바로 상자를 봄)
 //   goal.target "near" (상자 앞 다가설 자리): 멈추거나 Nav2가 실패해도 목표에서 nav_near_m · nav_near_yaw 안이면 성공 —
 //     마지막 몇 cm·방향은 approach가 상자를 보며 맞춤
-//   끼임 풀기: 진척 없음 · 출발 칸 막힘(205)이면 nav_unstuck_tries번까지 nav_unstuck_back_m 곧게 후진(충돌 검사 켬 — 뒤는 도면 벽만 앎)
+//   끼임 풀기: 진척 없음 · 출발 칸 막힘(205) · Nav2 실패(앞 충돌로 patience 초과 등)면 nav_unstuck_tries번까지 매번 다른 동작
+//     (1: 후진 → 막히면 전진 · 2: 제자리 +40° → 막히면 −40° · 3: 전진 → 막히면 후진, 모두 behavior_server가 몸 모양 충돌 검사)
 //     → 같은 목표로 다시. 그래도 안 되면 실패 → mission_manager가 다른 면(plan.yaml start/location_box_sides)으로
+//     11-18 sim: 벽 끝·상자 옆에서 꼬리가 걸리면 앞 충돌(nav_failed)이라 예전엔 풀기 대상이 아니었고, 뒤가 막혀 후진 한 번도 실패
 //   target에 "leg:<구간>"이 있어도 무시 (예전 가르친 경로 재생 키)
 #include <sstream>
 #include "skills/arm_io.hpp"
 #include "nav2_msgs/action/back_up.hpp"
+#include "nav2_msgs/action/drive_on_heading.hpp"
+#include "nav2_msgs/action/spin.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "skills/progress_watch.hpp"
@@ -29,13 +33,19 @@ class NavigateSkill : public SkillNode {
 public:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using BackUp = nav2_msgs::action::BackUp;
+  using DriveOnHeading = nav2_msgs::action::DriveOnHeading;
+  using Spin = nav2_msgs::action::Spin;
   using Pose = geometry_msgs::msg::PoseStamped;
   explicit NavigateSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_navigate", options), arm_(*this) {
     nav_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
     backup_ = rclcpp_action::create_client<BackUp>(this, "/backup");
-    unstuck_tries_ = declare_parameter<int>("nav_unstuck_tries", 1);   // 0이면 끼임 풀기 안 함
+    drive_ = rclcpp_action::create_client<DriveOnHeading>(this, "/drive_on_heading");
+    spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
+    unstuck_tries_ = declare_parameter<int>("nav_unstuck_tries", 3);   // 0이면 끼임 풀기 안 함
     unstuck_back_m_ = declare_parameter<double>("nav_unstuck_back_m", 0.15);
+    unstuck_fwd_m_ = declare_parameter<double>("nav_unstuck_fwd_m", 0.10);
+    unstuck_turn_ = declare_parameter<double>("nav_unstuck_turn", 0.7);  // [rad] 약 40°
     stall_s_ = declare_parameter<double>("nav_stall_s", 15.0);        // 0이면 감시 안 함
     stall_gain_m_ = declare_parameter<double>("nav_stall_gain_m", 0.10);
     look_m_ = declare_parameter<double>("nav_look_m", 0.6);
@@ -61,6 +71,10 @@ protected:
     nav_goal_.reset();
     if (backup_goal_) backup_->async_cancel_goal(backup_goal_);
     backup_goal_.reset();
+    if (drive_goal_) drive_->async_cancel_goal(drive_goal_);
+    drive_goal_.reset();
+    if (spin_goal_) spin_->async_cancel_goal(spin_goal_);
+    spin_goal_.reset();
     arm_.stop();
   }
 
@@ -87,8 +101,9 @@ private:
                     *yaw_err * 180.0 / M_PI);
         ok = true;
       }
-      if (!ok && (why == "nav_no_progress" || why == "nav_start_occupied") && tries < unstuck_tries_ && seq == nav_seq_) {
-        unstuck(seq, [this, target, flags, seq, done, tries]() { drive(target, flags, seq, done, tries + 1); });
+      // 목표가 막힘(206)·거절이면 풀어도 소용없음 → 바로 실패 (mission이 다른 면으로). 11-18 sim: 206에 풀기 3번으로 53 s 버림
+      if (!ok && why != "nav_rejected" && why != "nav_goal_occupied" && tries < unstuck_tries_ && seq == nav_seq_) {
+        unstuck(seq, tries, [this, target, flags, seq, done, tries]() { drive(target, flags, seq, done, tries + 1); });
         return;
       }
       done(ok, ok ? "" : why);
@@ -127,31 +142,67 @@ private:
       *finished = true;
       const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED;
       // 205 = 출발 칸 막힘 (상자·벽에 붙은 채 끝난 뒤 다음 이동이 전부 205로 끝났음) → 끼임 풀기 대상
-      finish(ok, ok ? "" : r.result && r.result->error_code == 205 ? "nav_start_occupied" : "nav_failed");
+      const int code = r.result ? r.result->error_code : 0;
+      finish(ok, ok ? "" : code == 205 ? "nav_start_occupied" : code == 206 ? "nav_goal_occupied" : "nav_failed");
     };
     nav_->async_send_goal(goal, opt);
   }
 
-  // 곧게 후진 (충돌 검사 켬 — 앞 카메라라 뒤는 local costmap의 도면 벽만 보고 막음) → then
-  void unstuck(uint64_t seq, std::function<void()> then) {
-    if (!backup_->action_server_is_ready()) { then(); return; }
-    RCLCPP_WARN(get_logger(), "끼임 풀기 — %.2f m 후진 뒤 같은 목표로 다시", unstuck_back_m_);
-    stage("끼임 풀기: 후진");
-    BackUp::Goal b;
-    b.target.x = unstuck_back_m_;
-    b.speed = 0.05f;
-    b.time_allowance.sec = static_cast<int32_t>(unstuck_back_m_ / 0.05 + 4);
-    b.disable_collision_checks = false;
-    rclcpp_action::Client<BackUp>::SendGoalOptions bo;
-    bo.goal_response_callback = [this, seq, then](const rclcpp_action::ClientGoalHandle<BackUp>::SharedPtr & h) {
-      if (seq != nav_seq_) { if (h) backup_->async_cancel_goal(h); return; }
-      if (h) backup_goal_ = h; else then();
+  // 끼임 풀기 한 번 (try번째): 1 후진→전진 · 2 +40°→−40° · 3 전진→후진. 첫 동작이 충돌 검사로 막히면 두 번째로 → then
+  //   behavior_server가 local costmap(도면 벽 + 카메라)·몸 모양으로 검사 — 앞 카메라라 뒤·옆은 도면 벽만 앎
+  void unstuck(uint64_t seq, int attempt, std::function<void()> then) {
+    static const char * names[] = {"후진", "전진", "+40° 회전", "−40° 회전"};
+    const int k = attempt % 3;
+    const int a = k == 0 ? 0 : k == 1 ? 2 : 1, b = k == 0 ? 1 : k == 1 ? 3 : 0;
+    RCLCPP_WARN(get_logger(), "끼임 풀기 %d/%d — %s (막히면 %s) 뒤 같은 목표로 다시", attempt + 1, unstuck_tries_, names[a], names[b]);
+    stage(std::string("끼임 풀기: ") + names[a]);
+    escape(seq, a, [this, seq, b, then](bool ok) {
+      if (ok || seq != nav_seq_) { if (seq == nav_seq_) then(); return; }
+      stage(std::string("끼임 풀기: ") + names[b]);
+      escape(seq, b, [this, seq, then](bool) { if (seq == nav_seq_) then(); });
+    });
+  }
+
+  // 0 후진 unstuck_back_m · 1 전진 unstuck_fwd_m · 2 +unstuck_turn · 3 −unstuck_turn (충돌 검사 켬) → done(성공 여부)
+  void escape(uint64_t seq, int kind, std::function<void(bool)> done) {
+    const auto give_up = [done]() { done(false); };
+    if (kind <= 1) {
+      const double d = kind == 0 ? unstuck_back_m_ : unstuck_fwd_m_;
+      const auto allow = static_cast<int32_t>(d / 0.05 + 4);
+      if (kind == 0) {
+        if (!backup_->action_server_is_ready()) return give_up();
+        BackUp::Goal g;
+        g.target.x = d; g.speed = 0.05f; g.time_allowance.sec = allow; g.disable_collision_checks = false;
+        send_behavior<BackUp>(backup_, backup_goal_, g, seq, done);
+      } else {
+        if (!drive_->action_server_is_ready()) return give_up();
+        DriveOnHeading::Goal g;
+        g.target.x = d; g.speed = 0.05f; g.time_allowance.sec = allow; g.disable_collision_checks = false;
+        send_behavior<DriveOnHeading>(drive_, drive_goal_, g, seq, done);
+      }
+    } else {
+      if (!spin_->action_server_is_ready()) return give_up();
+      Spin::Goal g;
+      g.target_yaw = static_cast<float>(kind == 2 ? unstuck_turn_ : -unstuck_turn_);
+      g.time_allowance.sec = 6;
+      g.disable_collision_checks = false;
+      send_behavior<Spin>(spin_, spin_goal_, g, seq, done);
+    }
+  }
+
+  template <class A>
+  void send_behavior(typename rclcpp_action::Client<A>::SharedPtr cli, typename rclcpp_action::ClientGoalHandle<A>::SharedPtr & slot,
+            const typename A::Goal & g, uint64_t seq, std::function<void(bool)> done) {
+    typename rclcpp_action::Client<A>::SendGoalOptions o;
+    o.goal_response_callback = [this, cli, &slot, seq, done](const typename rclcpp_action::ClientGoalHandle<A>::SharedPtr & h) {
+      if (seq != nav_seq_) { if (h) cli->async_cancel_goal(h); return; }
+      if (h) slot = h; else done(false);
     };
-    bo.result_callback = [this, seq, then](const rclcpp_action::ClientGoalHandle<BackUp>::WrappedResult &) {
-      backup_goal_.reset();
-      if (seq == nav_seq_) then();
+    o.result_callback = [&slot, done](const typename rclcpp_action::ClientGoalHandle<A>::WrappedResult & r) {
+      slot.reset();
+      done(r.code == rclcpp_action::ResultCode::SUCCEEDED);
     };
-    backup_->async_send_goal(b, bo);
+    cli->async_send_goal(g, o);
   }
 
   static double yaw_of(const geometry_msgs::msg::Quaternion & q) {
@@ -160,10 +211,15 @@ private:
 
   rclcpp_action::Client<NavigateToPose>::SharedPtr nav_;
   rclcpp_action::Client<BackUp>::SharedPtr backup_;
+  rclcpp_action::Client<DriveOnHeading>::SharedPtr drive_;
+  rclcpp_action::Client<Spin>::SharedPtr spin_;
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
   rclcpp_action::ClientGoalHandle<BackUp>::SharedPtr backup_goal_;
+  rclcpp_action::ClientGoalHandle<DriveOnHeading>::SharedPtr drive_goal_;
+  rclcpp_action::ClientGoalHandle<Spin>::SharedPtr spin_goal_;
   uint64_t nav_seq_ = 0;  // 보낸 goal 번호 — stop하면 올라가 옛 응답·결과를 가려냄
-  int unstuck_tries_ = 1;
+  int unstuck_tries_ = 3;
+  double unstuck_fwd_m_ = 0.10, unstuck_turn_ = 0.7;
   double unstuck_back_m_ = 0.15, stall_s_ = 15.0, stall_gain_m_ = 0.10, look_m_ = 0.6, near_m_ = 0.15, near_yaw_ = 0.8;
   ArmIO arm_;
   std::vector<double> look_q_;

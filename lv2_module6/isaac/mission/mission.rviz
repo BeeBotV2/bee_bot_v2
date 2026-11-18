@@ -238,7 +238,7 @@ Visualization Manager:
       Color Scheme: map
       Draw Behind: false
       Enabled: true
-      Name: Map (/map = 벽 + nvblox)
+      Name: Map (/map = maze_map_1711)
       Topic:
         Depth: 1
         Durability Policy: Transient Local
