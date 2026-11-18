@@ -47,10 +47,10 @@ public:
     spin_ = rclcpp_action::create_client<Spin>(this, "/spin");
     collision_state_sub_ = create_subscription<nav2_msgs::msg::CollisionMonitorState>(
       "/collision_monitor_state", 10, [this](nav2_msgs::msg::CollisionMonitorState::ConstSharedPtr msg) {
-        const bool detected = msg->action_type != nav2_msgs::msg::CollisionMonitorState::DO_NOTHING &&
-          !msg->polygon_name.empty();
+        // SLOWDOWN/APPROACH/LIMIT reduce or cap speed; only STOP says the command is blocked.
+        const bool stopped = msg->action_type == nav2_msgs::msg::CollisionMonitorState::STOP;
         std::lock_guard<std::mutex> lock(collision_state_mutex_);
-        collision_detected_ = detected;
+        collision_stopped_ = stopped;
         collision_state_received_ = std::chrono::steady_clock::now();
       });
     unstuck_tries_ = declare_parameter<int>("nav_unstuck_tries", 3);   // 0이면 끼임 풀기 안 함
@@ -145,9 +145,9 @@ private:
       *finished = true;
       RCLCPP_WARN(get_logger(), "진척 없음 — 남은 %.2f m가 %.0f s 동안 %.2f m도 안 줄음 (회복 %d회) → 취소",
                   fb->distance_remaining, stall_s_, stall_gain_m_, fb->number_of_recoveries);
-      *collision_blocked_at_stall = collision_monitor_blocked_recently();
+      *collision_blocked_at_stall = collision_monitor_stopped_recently();
       if (*collision_blocked_at_stall)
-        RCLCPP_WARN(get_logger(), "정체 시점 collision_monitor 감지 활성 — 충돌 검사된 후진만 1회 시도하고 실패하면 즉시 상위로 반환");
+        RCLCPP_WARN(get_logger(), "정체 시점 collision_monitor STOP 활성 — 충돌 검사된 후진만 1회 시도하고 실패하면 즉시 상위로 반환");
       *canceled_for_stall = true;
       nav_->async_cancel_goal(h);
     };
@@ -198,9 +198,9 @@ private:
     });
   }
 
-  bool collision_monitor_blocked_recently() const {
+  bool collision_monitor_stopped_recently() const {
     std::lock_guard<std::mutex> lock(collision_state_mutex_);
-    return collision_detected_ &&
+    return collision_stopped_ &&
       std::chrono::steady_clock::now() - collision_state_received_ <= std::chrono::seconds(1);
   }
 
@@ -256,7 +256,7 @@ private:
   rclcpp_action::Client<Spin>::SharedPtr spin_;
   rclcpp::Subscription<nav2_msgs::msg::CollisionMonitorState>::SharedPtr collision_state_sub_;
   mutable std::mutex collision_state_mutex_;
-  bool collision_detected_ = false;
+  bool collision_stopped_ = false;
   std::chrono::steady_clock::time_point collision_state_received_{};
   rclcpp_action::ClientGoalHandle<NavigateToPose>::SharedPtr nav_goal_;  // 지금 보낸 Nav2 goal (stop이 이것만 취소)
   rclcpp_action::ClientGoalHandle<BackUp>::SharedPtr backup_goal_;
