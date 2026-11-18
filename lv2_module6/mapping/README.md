@@ -131,6 +131,13 @@ Isaac 녹화는 `--use-sim-time`으로 bag 시각도 시뮬 시계로 찍는다 
 python3 mapping/bag_retime.py ~/.ros/beebot_bags/lap1 ~/.ros/beebot_bags/lap1_sim
 ```
 
+필요한 것 (PC 한 번): `zstd` 명령과 파이썬 `mcap` · `zstandard`.
+
+```bash
+sudo apt install zstd
+/usr/bin/python3 -m pip install --user --break-system-packages mcap zstandard
+```
+
 ## 실행 — 실기 (Jetson + PC)
 
 Jetson은 센서 · 바퀴 스택만 띄우고, 녹화 · 매핑은 PC에서 한다. Jetson에 nvblox가 없어도 되고 Jetson 부하도 그대로다. PC 명령은 `--real`을 붙이면 Jetson과 같은 `ros2_ws/fastdds.xml`(SHM + UDP)로 붙는다 (`drive_test.py --real`과 같음).
