@@ -17,6 +17,7 @@ import time
 
 import rclpy
 import yaml
+from action_msgs.srv import CancelGoal
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
@@ -52,8 +53,20 @@ def main():
     log = n.get_logger()
     latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     cmd = n.create_publisher(String, '/cmd/mission', 10)
-    st = {'phase': None, 'note': None, 'started': False, 'running': False, 'exit': None}
+    st = {'phase': None, 'note': None, 'started': False, 'running': False, 'exit': None,
+          'goto_results': [], 'seen_results': 0, 'approach_failed_streak': 0,
+          'abort_requested': False}
     legs = []  # [상자, 시작 wall 시각, 끝 wall 시각, 결과] — 결과 "GOTO S4: ok" · "GOTO S6: nav_failed" (goto_seq)
+    cancel_clients = [n.create_client(CancelGoal, name + '/_action/cancel_goal') for name in (
+        '/task/execute_plan', '/skills/approach', '/skills/navigate', '/navigate_to_pose',
+        '/navigate_through_poses', '/follow_path', '/backup', '/spin', '/drive_on_heading',
+        '/move_action', '/execute_trajectory')]
+
+    def cancel_all_motion():
+        # Mission abort stops the coordinator; cancel nested Nav2 actions too.
+        for client in cancel_clients:
+            if client.service_is_ready():
+                client.call_async(CancelGoal.Request())  # zero UUID/time = all goals
 
     if a.clear_basket:
         c = n.create_client(Trigger, '/coordinator/basket_clear')
@@ -71,13 +84,29 @@ def main():
             if m.note.startswith('상자로 가기 ') and m.note.endswith(')'):  # "상자로 가기 S4 (1/9)"
                 legs.append([m.note.split()[2], time.monotonic(), None, None])
         goto = [r.split(': ', 1)[1] for r in m.results if r.startswith('GOTO ')]
+        st['goto_results'] = goto
         for leg, r in zip(legs, goto):
             if leg[3] is None:
                 leg[2], leg[3] = time.monotonic(), r
+        if st['started']:
+            for result in goto[st['seen_results']:]:
+                if result.strip() == 'approach_failed':
+                    st['approach_failed_streak'] += 1
+                else:
+                    st['approach_failed_streak'] = 0
+                if st['approach_failed_streak'] >= 2 and not st['abort_requested']:
+                    st['abort_requested'] = True
+                    log.error('APPROACH_FAILED 2회 연속 — 시험 실패 처리, 미션과 주행 action 전체 취소')
+                    cmd.publish(String(data='abort'))
+                    cancel_all_motion()
+        st['seen_results'] = len(goto)
         if st['started'] and m.phase not in IDLE:
             st['running'] = True
         if st['running'] and m.phase in ('DONE', 'ERROR'):
-            st['exit'] = m.phase
+            st['exit'] = 'APPROACH_FAILED_STREAK' if st['abort_requested'] else m.phase
+        # abort may return the manager directly to IDLE instead of publishing ERROR/DONE.
+        if st['abort_requested'] and m.phase in IDLE:
+            st['exit'] = 'APPROACH_FAILED_STREAK'
         if st['started'] and '시작 거부' in m.note:
             st['exit'] = 'ERROR'
 
@@ -99,6 +128,9 @@ def main():
                 log.error('시작이 안 받아짐 — mission_manager · ROS_DOMAIN_ID · Fast DDS 프로파일 확인')
             return
         if st['phase'] in IDLE and cmd.get_subscription_count() > 0:
+            st['seen_results'] = len(st['goto_results'])
+            st['approach_failed_streak'] = 0
+            st['abort_requested'] = False
             cmd.publish(String(data=start))
             st['started'] = True
             st['t0'] = st['sent'] = time.monotonic()
