@@ -137,6 +137,7 @@ public:
     //   Isaac nav_bench: EKF odom 오차 ~2 cm인데 cuVSLAM map→odom이 27~38 cm(보정 켜면 10~28 cm) 끌고 감 → 시뮬은 odom 기준이 정확.
     //   실기에서는 바퀴 미끄러짐을 cuVSLAM이 잡는지 확인 전이라 기본은 그대로. 환경 변수 BEE_MAP_ANCHOR=odom이 덮음
     odom_anchor_ = declare_parameter<std::string>("map_anchor", "cuvslam") == "odom";
+    odom_tol_ = declare_parameter<double>("odom_lookup_tolerance", 0.1);  // [s] 영상 시각의 odom TF가 아직 없을 때 최근 TF를 쓰는 한도
     max_twist_lin_ = declare_parameter<double>("max_twist_lin", 0.6);  // [m/s] 넘으면 /cuvslam/odom 안 냄 (자세 튐)
     max_twist_ang_ = declare_parameter<double>("max_twist_ang", 4.0);  // [rad/s]
     if (const char * a = std::getenv("BEE_MAP_ANCHOR")) odom_anchor_ = std::string(a) == "odom";
@@ -538,6 +539,15 @@ private:
     geometry_msgs::msg::TransformStamped o;
     try {
       o = tf_buf_->lookupTransform(odom_, base_, rclcpp::Time(stamp));
+    } catch (const tf2::ExtrapolationException &) {
+      // 영상이 EKF의 마지막 odom TF보다 먼저 오면 (bag 재생에서 15~35 ms — 11-19) 그 시각이 아직 없음 → 거의 모든 프레임을 건너뛰어
+      //   map→odom이 처음 한 번만 나왔다. odom_lookup_tolerance 안이면 가장 최근 TF로 (0.26 m/s에서 0.1 s = 2.6 cm 이하)
+      try {
+        o = tf_buf_->lookupTransform(odom_, base_, tf2::TimePointZero);
+      } catch (const std::exception &) {
+        return;
+      }
+      if (std::abs((rclcpp::Time(stamp) - rclcpp::Time(o.header.stamp)).seconds()) > odom_tol_) return;
     } catch (const std::exception &) {  // 그 시각 odom이 없으면 이 프레임은 TF만 건너뜀 (추적은 계속)
       return;
     }
@@ -707,7 +717,7 @@ private:
   std::optional<ros_system::MapGate> gate_;
   Eigen::Matrix4d base_from_cam_ = Eigen::Matrix4d::Identity();
   Pose2 map_offset_;
-  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0;
+  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0, odom_tol_ = 0.1;
   bool odom_anchor_ = false;
   std::optional<Pose2> last_base_, pending_initialpose_;
   std::optional<std::pair<int64_t, Pose2>> prev_;  // 직전 오도메트리 자세 — 추적을 잃으면 비움
