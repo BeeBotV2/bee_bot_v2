@@ -460,7 +460,12 @@ def slam_nodes():
              parameters=[{'publish_map_tf': True,
                           'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int),
                           'map_save_dir': ParameterValue(cuvslam_save, value_type=str),
-                          'map_load_dir': ParameterValue(cuvslam_load, value_type=str)}],
+                          'map_load_dir': ParameterValue(cuvslam_load, value_type=str),
+                          # 매핑일 때만 (11-19): 잠금 끔 — 잠긴 뒤(755 s) 보정이 멈춰 지도가 두 겹 · 3 m 넘는 depth 랜드마크 뺌 ·
+                          #   루프 클로저 1 s 간격 (max_map_size 150은 그대로 — 0이면 처리율 0.7 Hz). 위치추정은 cuVSLAM 기본
+                          'gate_lock': ParameterValue(PythonExpression(loc), value_type=bool),
+                          'max_landmarks_distance': ParameterValue(PythonExpression(['100.0 if ', *loc, ' else 3.0']), value_type=float),
+                          'throttling_time_ms': ParameterValue(PythonExpression(['0 if ', *loc, ' else 1000']), value_type=int)}],
              sigterm_timeout='20'),  # 매핑이면 SIGINT 뒤 지도 저장 (on_exit) — launch 기본 5 s 안에 못 끝내면 SIGTERM
         # map→odom TF 이어 내기 (C++, 11-16) — cuvslam_slam이 낸 /cuvslam/map_to_odom을 30 Hz로 TF로 (파이썬이 멈춰도 안 끊김)
         Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
