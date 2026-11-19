@@ -2,6 +2,7 @@
 
   ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py            # → isaac/mission/map/maze_map_1711/
   ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py --res 0.02 --z 0.02 0.45
+  ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py --boxes  # 시작 박스 1~6 · 장소 상자 L1~L3도 (ros2_ws/map/maze_map_1711 · 1911)
   ~/pa-course/.venv-isaacsim/bin/python isaac/mission/make_map.py --walls   # plan.yaml arena_walls 선분 (경기장 좌표) 출력
 
 pxr가 필요해서 Isaac venv python으로 돌린다 (Isaac은 안 띄움 · USD 파일은 읽기만).
@@ -21,6 +22,7 @@ from pxr import Gf, Usd, UsdGeom
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCENE = os.path.join(HERE, '..', 'usda', 'maze_map_1711.usda')
 ROOTS = ['/World/maze']
+BOXES = ['/World/start_boxes', '/World/shelf_L1', '/World/shelf_L2', '/World/shelf_L3']  # --boxes
 ROBOT = '/World/beebot'
 MARGIN = 0.3  # [m] 장애물 둘레 바깥 여백
 
@@ -30,6 +32,7 @@ def main():
     ap.add_argument('--res', type=float, default=0.05, help='[m/칸] — Nav2 costmap 해상도(0.05)와 같게')
     ap.add_argument('--z', type=float, nargs=2, default=[0.02, 0.47], help='[m] 장애물로 볼 높이 띠')
     ap.add_argument('--out', default=os.path.join(HERE, 'map', 'maze_map_1711'))
+    ap.add_argument('--boxes', action='store_true', help='시작 박스 1~6 · 장소 상자 L1~L3도 장애물로 넣음')
     ap.add_argument('--walls', action='store_true', help='지도 대신 벽판 선분을 plan.yaml arena_walls 형식으로 출력')
     ap.add_argument('--start-arena', type=float, nargs=3, default=[0.734, 0.950, math.pi],
                     help='plan.yaml start_pose_arena (x y yaw) — map → 경기장 좌표 변환')
@@ -53,7 +56,7 @@ def main():
         print(f'# {len(segs)} segments from {os.path.relpath(SCENE, HERE)} */wall/geo', file=sys.stderr)
         return
 
-    for root in ROOTS:
+    for root in ROOTS + (BOXES if a.boxes else []):
         for p in Usd.PrimRange(st.GetPrimAtPath(root), Usd.TraverseInstanceProxies()):
             if not p.IsA(UsdGeom.Gprim) or UsdGeom.Imageable(p).ComputePurpose() != UsdGeom.Tokens.default_:
                 continue
@@ -88,7 +91,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     img.save(os.path.join(a.out, 'map.pgm'))
     with open(os.path.join(a.out, 'map.yaml'), 'w') as f:
-        f.write(f'# isaac/mission/make_map.py — {os.path.relpath(SCENE, HERE)} 벽 · 기둥 · map 원점 = 로봇을 켠 자리 · z {z0}~{z1} m\n'
+        f.write(f'# isaac/mission/make_map.py — {os.path.relpath(SCENE, HERE)} 벽 · 기둥{' · 시작 박스 1~6 · 장소 상자 L1~L3' if a.boxes else ''} · map 원점 = 로봇을 켠 자리 · z {z0}~{z1} m\n'
                 f'image: map.pgm\nmode: trinary\nresolution: {a.res}\norigin: [{ox:.3f}, {oy:.3f}, 0.0]\n'
                 f'negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\n')
     occ = int((np.array(img) == 0).sum())
