@@ -72,7 +72,7 @@ cuVSLAM 지도 저장 · 불러오기는 같은 v17.0.1 라이브러리에 있�
 
 | 파일 | 쓰는 노드 | 내용 · 주행에서 쓰는 곳 |
 | --- | --- | --- |
-| `map.pgm` · `map.yaml` | nvblox_map | 끌 때의 `/map` (SLAM이 본 nvblox만 — 매핑 중엔 plan.yaml 벽을 안 겹침). 저장 지도 주행 기본 `map_backend:=static_2d`가 Nav2 `/map`으로 읽는 길찾기 지도 |
+| `map.pgm` · `map.yaml` | nvblox_map | 끌 때의 `/map` (nvblox + plan.yaml 벽). 저장 지도 주행 기본 `map_backend:=static_2d`가 Nav2 `/map`으로 읽는 길찾기 지도 |
 | `cuvslam/` | cuvslam_slam | 랜드마크 · pose graph. 주행 때 이 지도 안에서 로봇 자리를 찾아 map→odom을 맞춤 |
 | `nvblox.nvblx.png` · `.yaml` | nvblox_node | nvblox 5.0(apt)이 끌 때 쓰는 2D 점유 격자 (`after_shutdown_map_save_path`). 3D `nvblox.nvblx`는 생기지 않는다 (11-19 확인) — 그래서 이 폴더는 state_manager 지도 목록(`/state/map_list`, `nvblox.nvblx`가 있는 폴더)에 안 뜨고 `map_backend:=nvblox` 위치추정도 못 쓴다. 기본 `static_2d`(`map.yaml`)로 주행한다 |
 
@@ -208,6 +208,6 @@ SLAM 입력만: pole_front_cam 컬러 · 정렬 depth · camera_info 둘, `/odom
 
 ## 볼 것
 
-- 매핑 중 `/map`은 SLAM이 본 nvblox만이다 (plan.yaml 벽 `/arena/walls`를 안 겹침 — 겹치면 저장 map.pgm에 섞여 들어감). 저장 지도 주행 · 위치추정 때는 mission_manager가 plan.yaml 벽을 따로 겹친다.
+- `/map`은 nvblox_map이 plan.yaml 벽(`/arena/walls`) 위에 nvblox를 겹친 것이다. SLAM이 실제로 본 것만 보려면 RViz의 `nvblox raw` 표시를 켠다.
 - 지도 원점(map 프레임)은 매핑을 시작한 자리다. `cuvslam/`이 있는 지도는 출발 자리가 1.5 m 안에서 달라도 위치를 찾지만, 없는 지도는 매핑 때와 같은 자리 · 방향에서 켜야 한다.
 - 매핑은 천천히 돈다. 텔레옵 시작 속도는 0.15 m/s · 0.6 rad/s (`BEE_TELEOP_SPEED` · `BEE_TELEOP_TURN`).

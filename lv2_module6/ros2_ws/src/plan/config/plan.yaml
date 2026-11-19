@@ -418,7 +418,9 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
       true # 다가설 자리(start/location_box_sides) · Nav2 목표의 박스 가운데 = 이번 회차에 본 인지 상자 평균
       #   (arena_corr_min_hits번 넘게 · 도면 가운데에서 arena_corr_gate 안일 때) — 아니면 도면. 변 · @거리 · standoff는 그대로 (11-16)
       #   arena_correction을 꺼도 상자 인지 위치(marks)는 셈. 로그 "S3 다가설 자리 — 인지 상자 가운데 (도면에서 …)"
-    nav_turn_m: 0.55 # [m] Nav2 목표는 박스 가운데에서 이만큼까지 법선으로 물림 (몸 외접 0.30 m가 박스에 안 걸리고 제자리 회전 · 벽 쪽으로는 덜) — 나머지는 approach가 직선으로 (11-14)
+    nav_turn_m: 0.10 # [m] Nav2 목표는 박스 가운데에서 이만큼까지 법선으로 물림 (몸 외접 0.30 m가 박스에 안 걸리고 제자리 회전 · 벽 쪽으로는 덜) — 나머지는 approach가 직선으로 (11-14)
+    # 테스트를 위해서 좀더 큰 변화 테스트 20261119 변경 
+    # 기록을 위해서 여기에 남김
     approach_gap:
       0.085 # [m] 그다음 approach로 base_footprint ~ 박스 변을 이만큼까지 (로봇 앞면 0.069 → 1.6 cm)
       #   Isaac 도달 지도(dice_reach.py): 0.08이면 3×3 칸 9개 다 닿음 · 0.10이면 먼 줄 양끝 못 닿음
