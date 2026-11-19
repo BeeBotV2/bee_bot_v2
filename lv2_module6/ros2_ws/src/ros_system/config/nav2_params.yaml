@@ -22,7 +22,7 @@ bt_navigator:
     transform_tolerance: 0.5
     bt_loop_duration: 10
     default_server_timeout: 100
-    wait_for_service_timeout: 10000   # 기동 직후 부하로 1 s 안에 서버가 안 보이면 활성화 실패했음 (실측)
+    wait_for_service_timeout: 10000 # 기동 직후 부하로 1 s 안에 서버가 안 보이면 활성화 실패했음 (실측)
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
@@ -39,7 +39,7 @@ controller_server:
     controller_frequency: 20.0
     odom_topic: /odometry/filtered
     speed_limit_topic: /speed_limit
-    enable_stamped_cmd_vel: true   # Lyrical diff_drive_controller · twist_mux가 TwistStamped만 받음
+    enable_stamped_cmd_vel: true # Lyrical diff_drive_controller · twist_mux가 TwistStamped만 받음
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -74,7 +74,7 @@ controller_server:
       # 11-18: 0.08 / 0.3 → 0.15 / 0.5 — 다가설 자리는 approach 출발점일 뿐(최종 자리는 approach가 상자를 보며 맞춤).
       #   좁으면 Lattice(후진 허용 + 도착 방향 고정)가 자리를 0.24 m 지나쳤다 후진해 들어오는 경로를 냄 (sim S4)
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.7   # 11-18: 0.5 → 0.7 rad(40°, 사용자) — 앞 카메라 가로 시야 약 87°의 절반: 이 안이면 상자가 대체로 화면에 들어와 approach가 바로 시작
+      yaw_goal_tolerance: 0.7 # 11-18: 0.5 → 0.7 rad(40°, 사용자) — 앞 카메라 가로 시야 약 87°의 절반: 이 안이면 상자가 대체로 화면에 들어와 approach가 바로 시작
     # through-poses BT가 찾는 이름 — 통과 지점이라 넓게
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -87,7 +87,7 @@ controller_server:
     #   곡률이 크면 속도를 줄여(regulated) 바깥 바퀴가 한계(0.26 m/s)를 넘지 않게. 앞길에 충돌이 보이면 멈춤 → BT가 재계획.
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
-      angular_dist_threshold: 1.047   # 60° — 넘으면 멈춰서 제자리 회전, 아래면 RPP가 곡선으로
+      angular_dist_threshold: 1.047 # 60° — 넘으면 멈춰서 제자리 회전, 아래면 RPP가 곡선으로
       angular_disengage_threshold: 0.2
       forward_sampling_distance: 0.4
       rotate_to_heading_angular_vel: 1.6
@@ -99,13 +99,13 @@ controller_server:
         plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
         max_linear_vel: 0.26
         lookahead_dist: 0.30
-        min_lookahead_dist: 0.20   # 짧을수록 경로에 붙음 — 길면 문을 비스듬히 지날 때 carrot까지의 호가 모서리를 잘라 '앞 충돌'로 멈춤
+        min_lookahead_dist: 0.20 # 짧을수록 경로에 붙음 — 길면 문을 비스듬히 지날 때 carrot까지의 호가 모서리를 잘라 '앞 충돌'로 멈춤
         max_lookahead_dist: 0.5
         lookahead_time: 1.0
         use_velocity_scaled_lookahead_dist: true
         rotate_to_heading_angular_vel: 1.6
         use_rotate_to_heading: false
-        allow_reversing: false   # 11-18: SmacPlanner2D는 후진 경로를 안 냄 — true면 shim이 등 뒤 경로로 돌 때 RPP가 짧게 후진하며 13 s 떪 (sim M7 L1→L2)
+        allow_reversing: false # 11-18: SmacPlanner2D는 후진 경로를 안 냄 — true면 shim이 등 뒤 경로로 돌 때 RPP가 짧게 후진하며 13 s 떪 (sim M7 L1→L2)
         max_angular_accel: 2.5
         use_regulated_linear_velocity_scaling: true
         regulated_linear_scaling_min_radius: 0.35
@@ -113,7 +113,7 @@ controller_server:
         use_cost_regulated_linear_velocity_scaling: true
         cost_scaling_dist: 0.15
         cost_scaling_gain: 0.5
-        inflation_cost_scaling_factor: 10.0   # = local_costmap inflation cost_scaling_factor
+        inflation_cost_scaling_factor: 10.0 # = local_costmap inflation cost_scaling_factor
         use_collision_detection: true
         max_allowed_time_to_collision_up_to_carrot: 0.5
         approach_velocity_scaling_dist: 0.3
@@ -143,17 +143,17 @@ planner_server:
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 1.0
-      cost_travel_multiplier: 1.5   # 11-18: 2 → 1 → 1.5 (사용자) — 2는 너무 가운데·집 앞 우회, 1은 벽 끝에 붙어 꼬리 걸림 (sim M16 L3→L2)
+      cost_travel_multiplier: 1.5 # 11-18: 2 → 1 → 1.5 (사용자) — 2는 너무 가운데·집 앞 우회, 1은 벽 끝에 붙어 꼬리 걸림 (sim M16 L3→L2)
       use_final_approach_orientation: false
       # 11-18: 경로를 각지게 (사용자) — smoother 끔(w_smooth 0, refinement 없음): 격자 경로 그대로 = 직선 + 꺾임 →
       #   꺾이는 곳에서 RotationShim 제자리 회전. 다듬으면 코너가 둥글어져 안쪽으로 붙고 꼬리가 바깥으로 쓸림
       smoother:
-        max_iterations: 100   # 11-18: 1 → 100 (사용자) — 1번이면 w_smooth를 올려도 거의 안 펴져 계속 각졌음 (Nav2 기본 1000)
-        w_smooth: 0.15   # 11-18: 0 → 0.15 → 0.2 → 0.15 (사용자) — 0이면 대각선이 0°·45° 계단이라 RPP가 좌우로 출렁임. refinement는 끔(큰 꺾임 유지)
+        max_iterations: 100 # 11-18: 1 → 100 (사용자) — 1번이면 w_smooth를 올려도 거의 안 펴져 계속 각졌음 (Nav2 기본 1000)
+        w_smooth: 0.15 # 11-18: 0 → 0.15 → 0.2 → 0.15 (사용자) — 0이면 대각선이 0°·45° 계단이라 RPP가 좌우로 출렁임. refinement는 끔(큰 꺾임 유지)
         w_data: 0.2
         tolerance: 1.0e-10
-        do_refinement: true   # 11-18: false → true (사용자) — 반복 뒤 한 번 더 다듬기 (Nav2 기본)
-        refinement_num: 2   # Nav2 기본 — 0이면 do_refinement를 켜도 안 다듬음
+        do_refinement: true # 11-18: false → true (사용자) — 반복 뒤 한 번 더 다듬기 (Nav2 기본)
+        refinement_num: 2 # Nav2 기본 — 0이면 do_refinement를 켜도 안 다듬음
 # ─────────────────────────────────────────────────────────────────────────────
 # behavior_server — BT 복구 (Spin · BackUp · Wait). 출력 /cmd_vel_nav
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ behavior_server:
     local_footprint_topic: local_costmap/published_footprint
     global_footprint_topic: global_costmap/published_footprint
     cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]   # 11-18: drive_on_heading 다시 — 끼임 풀기에서 뒤가 막히면 앞으로 빠짐
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"] # 11-18: drive_on_heading 다시 — 끼임 풀기에서 뒤가 막히면 앞으로 빠짐
     spin:
       plugin: "nav2_behaviors::Spin"
     drive_on_heading:
@@ -190,7 +190,7 @@ behavior_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      initial_transform_timeout: 300.0   # 기동 부하로 odom TF가 늦어도 Nav2 전체가 안 멈추게
+      initial_transform_timeout: 300.0 # 기동 부하로 odom TF가 늦어도 Nav2 전체가 안 멈추게
       update_frequency: 10.0
       publish_frequency: 2.0
       global_frame: odom
@@ -198,28 +198,28 @@ local_costmap:
       rolling_window: true
       width: 3
       height: 3
-      resolution: 0.02   # 0.05 → 0.02 (사용자 2026-11-19) — 3 m 창 = 150×150칸. 저장 지도(0.05)는 static_layer가 늘려 씀
+      resolution: 0.02 # 0.05 → 0.02 (사용자 2026-11-19) — 3 m 창 = 150×150칸. 저장 지도(0.05)는 static_layer가 늘려 씀
       always_send_full_costmap: true
       footprint: "[[0.069, 0.151], [0.069, -0.151], [-0.245, -0.151], [-0.245, 0.151]]"
-      footprint_padding: 0.0    # 실제 몸 — 전역(0.02)보다 작게: 같거나 크면 전역이 2 cm 여유로 낸 경로를 RPP가 carrot 호 검사에서 "앞 충돌"로 멈추고
-                                #   전역은 길이 멀쩡하다 해 재계획도 안 함 (교착, nav_bench·drive_test 11-18). 마지막 안전은 collision_monitor 몸 +2 cm
-      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
-        map_topic: /map   # 11-18: 저장 지도(maze_map_1911/map.pgm, map_backend:=static_2d의 map_server) — 실기도 이 지도 (사용자). 예전: /arena/walls(plan.yaml 실측 벽)
+      footprint_padding:
+        0.0 # 실제 몸 — 전역(0.02)보다 작게: 같거나 크면 전역이 2 cm 여유로 낸 경로를 RPP가 carrot 호 검사에서 "앞 충돌"로 멈추고
+        #   전역은 길이 멀쩡하다 해 재계획도 안 함 (교착, nav_bench·drive_test 11-18). 마지막 안전은 collision_monitor 몸 +2 cm
+      # 11-20: static_layer(/map) 뺌 — local은 odom 기준이라 map→odom이 움직이면 도면 벽만 옮겨지고 카메라가 찍어 둔 벽은 그 자리에 남아
+      #   벽이 두 줄이 됨 (실기 11-19 bag 6개: map이 2~8° 돌아 S3·S6 상자가 도면에서 30~50 cm · 도킹 뒤 nav_start_occupied).
+      #   주변 주행 판단은 카메라(voxel)만 — 도면 벽은 전역 costmap(경로)과 collision_monitor(옆·뒤)가 맡음
+      plugins: ["voxel_layer", "inflation_layer"]
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true
         publish_voxel_map: false
         origin_z: 0.0
-        z_resolution: 0.02   # 0.05 → 0.02 (사용자 2026-11-19) — 16칸 × 0.02 = 0.32 m ≥ max_obstacle_height 0.3
-        z_voxels: 16         # VoxelLayer 최대 16
+        z_resolution: 0.02 # 0.05 → 0.02 (사용자 2026-11-19) — 16칸 × 0.02 = 0.32 m ≥ max_obstacle_height 0.3
+        z_voxels: 16 # VoxelLayer 최대 16
         max_obstacle_height: 0.3
         mark_threshold: 0
         observation_sources: pole_front_cam
         pole_front_cam:
-          topic: /pole_front_cam/depth/color/points_filtered   # perception body_filter가 자기 몸 점을 뺀 것
+          topic: /pole_front_cam/depth/color/points_filtered # perception body_filter가 자기 몸 점을 뺀 것
           data_type: "PointCloud2"
           min_obstacle_height: 0.06
           max_obstacle_height: 0.3
@@ -231,7 +231,7 @@ local_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.3    # 0.35 → 0.3 (사용자 2026-11-19) — ≥ 외접 0.288 + padding 0.0 (턱걸이)
+        inflation_radius: 0.3 # 0.35 → 0.3 (사용자 2026-11-19) — ≥ 외접 0.288 + padding 0.0 (턱걸이)
         cost_scaling_factor: 10.0
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -250,13 +250,13 @@ global_costmap:
       robot_base_frame: base_center
       robot_radius: 0.22
       resolution: 0.05
-      track_unknown_space: false   # /arena/walls는 벽·상자 말고 −1 — 빈칸으로 읽음
+      track_unknown_space: false # /arena/walls는 벽·상자 말고 −1 — 빈칸으로 읽음
       always_send_full_costmap: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
-        map_topic: /map   # 11-18: 저장 지도 (위 local과 같음)
+        map_topic: /map # 11-18: 저장 지도 (위 local과 같음)
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -274,8 +274,8 @@ global_costmap:
           raytrace_max_range: 3.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.45   # 바깥쪽은 통로 가운데로 끄는 비용
-        cost_scaling_factor: 6.0   # 11-18: 8 → 4 → 8 → 6 (사용자) — 4는 너무 가운데·집 앞 우회, 8(+multiplier 1)은 벽 끝에 붙어 꼬리 걸림 (sim M16)
+        inflation_radius: 0.45 # 바깥쪽은 통로 가운데로 끄는 비용
+        cost_scaling_factor: 6.0 # 11-18: 8 → 4 → 8 → 6 (사용자) — 4는 너무 가운데·집 앞 우회, 8(+multiplier 1)은 벽 끝에 붙어 꼬리 걸림 (sim M16)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # velocity_smoother — /cmd_vel_mux → /cmd_vel_smoothed. 한계 = 실기
@@ -297,12 +297,12 @@ docking_server:
     dock_plugins: ["bee_box"]
     bee_box:
       plugin: "opennav_docking::SimpleNonChargingDock"
-      docking_threshold: 0.01          # [m] 붙은 자세에서 이 안이면 도착 (skill_approach dock_box tol 1 cm와 같게)
-      staging_x_offset: -0.25          # [m] 대기 자리 = 붙은 자세에서 뒤로 (standoff 0.25 + gap 기준 · mission_manager exit과 비슷)
+      docking_threshold: 0.01 # [m] 붙은 자세에서 이 안이면 도착 (skill_approach dock_box tol 1 cm와 같게)
+      staging_x_offset: -0.25 # [m] 대기 자리 = 붙은 자세에서 뒤로 (standoff 0.25 + gap 기준 · mission_manager exit과 비슷)
       staging_yaw_offset: 0.0
       use_external_detection_pose: true
       external_detection_timeout: 1.0
-      external_detection_translation_x: 0.0   # /detected_dock_pose가 이미 '붙은 로봇 자세'라 보정 없음
+      external_detection_translation_x: 0.0 # /detected_dock_pose가 이미 '붙은 로봇 자세'라 보정 없음
       external_detection_translation_y: 0.0
       external_detection_rotation_roll: 0.0
       external_detection_rotation_pitch: 0.0
@@ -311,10 +311,10 @@ docking_server:
     controller:
       k_phi: 3.0
       k_delta: 2.0
-      v_linear_min: 0.03               # 실기 바퀴 데드밴드 위 (approach_min_speed)
-      v_linear_max: 0.06               # approach_v_max와 같게
+      v_linear_min: 0.03 # 실기 바퀴 데드밴드 위 (approach_min_speed)
+      v_linear_max: 0.06 # approach_v_max와 같게
       v_angular_max: 0.5
-      use_collision_detection: false   # 상자 바로 앞까지 붙어야 함 — 마지막 안전은 collision_monitor(카메라)
+      use_collision_detection: false # 상자 바로 앞까지 붙어야 함 — 마지막 안전은 collision_monitor(카메라)
       transform_tolerance: 0.2
 
 velocity_smoother:
@@ -346,7 +346,7 @@ collision_monitor:
     state_topic: collision_monitor_state
     transform_tolerance: 0.2
     source_timeout: 1.0
-    base_shift_correction: false   # true면 /cmd_vel이 0.15~0.54 s 늦어 diff_drive가 명령을 버렸음 (11-14)
+    base_shift_correction: false # true면 /cmd_vel이 0.15~0.54 s 늦어 diff_drive가 명령을 버렸음 (11-14)
     stop_pub_timeout: 2.0
     enable_stamped_cmd_vel: true
     polygons: ["Approach"]
@@ -388,4 +388,5 @@ lifecycle_manager_navigation:
   ros__parameters:
     autostart: true
     bond_timeout: 60.0
-    node_names: ["planner_server", "controller_server", "behavior_server", "bt_navigator"]
+    node_names:
+      ["planner_server", "controller_server", "behavior_server", "bt_navigator"]
