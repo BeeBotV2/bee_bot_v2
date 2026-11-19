@@ -1,7 +1,7 @@
 """Opt-in Jetson operation profile; all robot nodes remain under normal bringup.
 
 LAUNCH_FILE=low_memory.launch.py ./start.sh
-The profile uses the saved maze_map_1711 2D map. To create a map, override with
+The profile uses the saved maze_map_1911 2D map. To create a map, override with
 map:=slam map_backend:=nvblox.
 """
 from launch import LaunchDescription
@@ -14,7 +14,7 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     defaults = {
         'map': 'saved',
-        'map_name': 'maze_map_1711',
+        'map_name': 'maze_map_1911',
         'map_backend': 'static_2d',
         'navigation_throttle': 'true',
         'navigation_infer_hz': '0.0',      # 주행 중 인지 끔 (bringup 기본과 같음, 11-15) — 도착 1 m 전부터 켬
