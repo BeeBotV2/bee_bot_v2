@@ -9,6 +9,7 @@
   walls_in(/arena/walls, mission_manager — 도면의 경기장 벽)이 오면 /map = 그 격자 크기(경기장 전체)에 벽 + nvblox를 겹친 것:
     매핑 처음부터 Nav2가 벽을 알아 모르는 칸으로 벽을 뚫는 경로를 안 냄 · /map 크기가 고정이라 costmap이 매번 크기를 바꾸지 않음.
     벽 칸은 늘 점유(100), 나머지는 nvblox 값 (nvblox 격자가 경기장 밖으로 나간 부분은 버림)
+    매핑(save_yaml 있음)이면 walls_in 기본값이 ''(안 겹침) — /map · 저장 map.pgm = SLAM이 본 것만 (11-19)
   speckle_min_cells(0 = 끔, 시험 값 8): nvblox 점유 칸 덩어리(8방향 이웃)가 이보다 작으면 모름(-1)으로 — depth 잡음 점. 8~30 cm 높이 층에 이만큼 작은
     진짜 물체는 없음 (상자·퍽은 8 cm 아래) · 가까운 장애물은 local costmap(카메라)·collision_monitor가 따로 봄. 0 = 끔.
     11-15 실기 지도 20261115_110106: 0.55 m 문 가운데 2~3칸 점이 문을 둘로 갈라 (각 0.25 m < 로봇 내접 지름 0.26 m) 전역 경로가 없었음
@@ -61,7 +62,10 @@ class NvbloxMap(Node):
         self.create_subscription(OccupancyGrid, self.declare_parameter('grid_in', '/nvblox_node/static_occupancy_grid').value,
                                  self.on_grid, qos_profile_sensor_data)
         self.walls = None
-        self.create_subscription(OccupancyGrid, self.declare_parameter('walls_in', '/arena/walls').value, self.on_walls, latched)
+        # 매핑(save_yaml 있음)이면 도면 벽을 안 겹침 — map.pgm에 도면 벽이 구워져 SLAM이 본 벽과 섞임 (nvblox_map.cpp와 같음)
+        walls_in = self.declare_parameter('walls_in', '' if self.save_yaml else '/arena/walls').value
+        if walls_in:
+            self.create_subscription(OccupancyGrid, walls_in, self.on_walls, latched)
         self.create_timer(1.0 / rate, self.tick)
         self.create_timer(10.0, lambda: self.get_logger().info(
             f'격자 받음 {self.n_in} · /map 냄 {self.n_out} · 지운 잡음 점 {self.n_speckle}칸 (마지막 격자)' +

@@ -34,8 +34,11 @@ public:
     grid_sub_ = create_subscription<OccupancyGrid>(
       declare_parameter<std::string>("grid_in", "/nvblox_node/static_occupancy_grid"), rclcpp::SensorDataQoS(),
       [this](OccupancyGrid::SharedPtr m) { on_grid(std::move(m)); });
-    walls_sub_ = create_subscription<OccupancyGrid>(
-      declare_parameter<std::string>("walls_in", "/arena/walls"), latched, [this](OccupancyGrid::SharedPtr m) {
+    // 매핑(save_yaml 있음)이면 도면 벽을 안 겹침 — 겹치면 map.pgm에 도면 벽이 구워져 SLAM이 본 벽과 섞이고(이중벽),
+    //   저장 지도 주행 때 mission_manager /arena/walls가 또 겹침 (사용자 2026-11-19, 지도 20261119_140649)
+    const auto walls_in = declare_parameter<std::string>("walls_in", save_yaml_.empty() ? "/arena/walls" : "");
+    if (!walls_in.empty()) walls_sub_ = create_subscription<OccupancyGrid>(
+      walls_in, latched, [this](OccupancyGrid::SharedPtr m) {
         walls_ = std::move(m);
         fresh_ = true;
         RCLCPP_INFO(get_logger(), "경기장 벽 격자 받음 %ux%u — /map에 겹침", walls_->info.width, walls_->info.height);
