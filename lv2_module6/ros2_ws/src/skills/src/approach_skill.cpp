@@ -15,6 +15,9 @@
 //     상자 도킹은 odom 프레임에서: map은 cuVSLAM 보정으로 움직임 (11-12 Isaac 정답 대비 map→odom이 한 번에 21 cm · 5.5° 밀림,
 //     odom→base_footprint는 1 cm) → 목표를 map에 고정하면 붙은 뒤에 '지나침'으로 보고 후진. 측정(map)은 그 관측 시각의
 //     map→odom으로 odom에 옮김 (인지가 쓴 것과 같은 보정이라 상쇄) · 도면 힌트는 시작 때 한 번 옮김
+//   대기 자리(staging, 11-20 — Nav2 docking server와 같은 방식): 상자 붙기를 시작한 자리(Nav2가 도착한 곳 = costmap상 빈 칸)를 odom으로 기억 →
+//     exit은 그 자리로 되돌아감 (approach_exit_to_staging, 기본 true). 고정 거리 후진은 붙는 동안 옆으로 옮긴 만큼 다른 자리로 빠져
+//     다음 주행 출발 칸이 벽 안(205 nav_start_occupied, 실기 11-19)이 됐음. odom은 연속이라 map→odom 보정과 상관없이 같은 실제 자리
 //   goal.target "exit" (상자에서 빠져나오기, 11-13): 지금 방향 그대로 values[0] m(없으면 approach_exit_m) 똑바로 후진 — odom 기준,
 //     정책 보정 없음 · 뒤는 카메라가 못 보므로 느리게 (기준 제어 후진 상한 0.05 m/s)
 #include <algorithm>
@@ -49,6 +52,8 @@ public:
     res_w_ = declare_parameter<double>("residual_w", 0.1);
     min_speed_ = declare_parameter<double>("approach_min_speed", 0.03);  // [m/s] 실기 바퀴 데드밴드 위 (sim 모드 기준 제어)
     exit_v_ = declare_parameter<double>("approach_exit_v", 0.15);  // [m/s] exit 후진 상한 (11-18: 0.05면 0.5 m에 16~19 s)
+    exit_to_staging_ = declare_parameter<bool>("approach_exit_to_staging", true);  // exit = 붙기 시작한 자리(odom)로 (헤더 설명)
+    staging_max_m_ = declare_parameter<double>("approach_staging_max_m", 1.0);   // 대기 자리가 이보다 멀면 안 씀 (다른 상자 · 오래된 기억)
     exit_m_ = declare_parameter<double>("approach_exit_m", 0.165);  // exit 기본 후진 거리 [m] (= standoff 0.25 − gap 0.085)
     release_m_ = declare_parameter<double>("approach_release_m", 0.03);  // sim: 도착(tol_m×0.6) 뒤 이만큼 벗어나야 다시 위치 맞춤
     carrot_m_ = declare_parameter<double>("approach_carrot_m", 0.05);    // sim: 목표 직선 위 이만큼 앞 점을 향해 조향
@@ -139,6 +144,8 @@ private:
     done_ = done;
     box_mode_ = g.values.size() >= 2;
     if (box_mode_) set_docking(true);
+    have_staging_ = box_mode_;  // 상자 도킹: 지금 자리(odom — frame_)가 대기 자리
+    sx_ = x; sy_ = y; syaw_ = yaw;
     have_box_ = frozen_ = false;
     if (box_mode_) {
       gap_ = g.values[0];
@@ -168,9 +175,23 @@ private:
     if (!robot_pose(x, y, yaw)) { done(false, "approach_no_tf"); return; }
     const double d = g.values.empty() ? exit_m_ : g.values[0];
     if (!(d > 0.0) || d > 1.0) { done(false, "approach_bad_target"); return; }
-    gx_ = x - d * std::cos(yaw);
-    gy_ = y - d * std::sin(yaw);
-    gyaw_ = yaw;
+    exit_line_ = false;
+    const double back = -((sx_ - x) * std::cos(yaw) + (sy_ - y) * std::sin(yaw));  // 대기 자리가 뒤로 얼마
+    const double sd = std::hypot(sx_ - x, sy_ - y);
+    if (exit_to_staging_ && have_staging_ && sd <= staging_max_m_ && back > 0.02) {
+      // 대기 자리로: 목표 = 대기 자리 · 방향 = 대기 자리→지금 자리 직선 → tick_sim 후진 가지가 그 직선에 맞춰 물러남
+      exit_line_ = true;
+      gx_ = sx_;
+      gy_ = sy_;
+      gyaw_ = std::atan2(y - sy_, x - sx_);
+      RCLCPP_INFO(get_logger(), "exit — 붙기 시작한 자리로 (뒤 %.3f m · 옆 %.3f m · 요청 %.3f m 대신)", back,
+                  -(sx_ - x) * std::sin(yaw) + (sy_ - y) * std::cos(yaw), d);
+    } else {
+      gx_ = x - d * std::cos(yaw);
+      gy_ = y - d * std::sin(yaw);
+      gyaw_ = yaw;
+    }
+    have_staging_ = false;  // 한 번만 (다음 상자는 새로 기억)
     tol_m_ = 0.03;  // 11-18: 1 cm · 3° → 3 cm · 10° — 물러나기만 하면 됨, 정밀하게 맞추느라 후진 중 방향을 계속 고쳐 비틀댐 (sim)
     tol_yaw_ = 10.0 * M_PI / 180.0;
     hold_s_ = 0.2;
@@ -418,6 +439,11 @@ private:
       if (along > 0.003) v = std::max(v, min_speed_);
       w = std::clamp(3.0 * head_c, -w_max_, w_max_);
     }
+    if (exit_line_ && along > -0.01) {  // 대기 자리 깊이까지 물러남 — 옆·방향은 안 맞춤 (거기서 Nav2가 다시 출발)
+      RCLCPP_INFO(get_logger(), "exit 도착 — 대기 자리에서 앞 %.3f m · 옆 %.3f m", gx, gy);
+      end(true, "");
+      return;
+    }
     if (dist <= tol_m_ && std::abs(gyaw) < tol_yaw_) still_s_ += 0.05;
     else still_s_ = 0.0;
     if (still_s_ >= hold_s_) {
@@ -488,6 +514,8 @@ private:
   std::map<uint32_t, std::pair<perception::msg::TrackedObject, rclcpp::Time>> seen_;  // 추적 id → 마지막 온전한 상자 측정 (box_seed_s 동안)
   double exit_m_ = 0.165;
   double exit_v_ = 0.15;
+  bool exit_to_staging_ = true, have_staging_ = false, exit_line_ = false;
+  double staging_max_m_ = 1.0, sx_ = 0, sy_ = 0, syaw_ = 0;  // 대기 자리 (odom)
   std::string frame_ = "map";  // 목표·로봇 자세 프레임 — 상자 도킹은 odom
   ArmIO arm_;
   std::vector<double> look_q_;
