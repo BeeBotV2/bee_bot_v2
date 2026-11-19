@@ -136,7 +136,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   grid_step_ = declare_parameter<double>("grid_step", 0.060);
   standoff_ = declare_parameter<double>("standoff", 0.25);
   approach_gap_ = declare_parameter<double>("approach_gap", 0.085);
-  nav_turn_m_ = declare_parameter<double>("nav_turn_m", 0.55);
+  nav_turn_m_ = declare_parameter<double>("nav_turn_m", 0.50);
   approach_tries_ = static_cast<int>(declare_parameter<int64_t>("approach_tries", 3));
   retries_ = static_cast<int>(declare_parameter<int64_t>("retries", 2));
   match_radius_ = declare_parameter<double>("match_radius", 0.04);
