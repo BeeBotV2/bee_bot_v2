@@ -377,6 +377,11 @@ def generate_launch_description():
                               'cuvslam_map': LaunchConfiguration('cuvslam_map'),
                               'static_map_yaml': LaunchConfiguration('static_map_yaml')}.items())],
             condition=IfCondition(LaunchConfiguration('use_ros_system'))),
+        GroupAction([IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(PathJoinSubstitution(
+                [FindPackageShare('plan'), 'launch', 'wall_localization.launch.py'])),
+            launch_arguments={'start_pose': LaunchConfiguration('start_pose'),
+                              'apply_to_map': LaunchConfiguration('localization')}.items())]),
         *map_saver(),  # SLAM일 때 지도 저장 서버 (map_saver() 설명)
 
         node('perception', 'perception_node', overrides={

@@ -203,11 +203,10 @@ local_costmap:
       footprint: "[[0.069, 0.151], [0.069, -0.151], [-0.245, -0.151], [-0.245, 0.151]]"
       footprint_padding: 0.0    # 실제 몸 — 전역(0.02)보다 작게: 같거나 크면 전역이 2 cm 여유로 낸 경로를 RPP가 carrot 호 검사에서 "앞 충돌"로 멈추고
                                 #   전역은 길이 멀쩡하다 해 재계획도 안 함 (교착, nav_bench·drive_test 11-18). 마지막 안전은 collision_monitor 몸 +2 cm
-      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
-      static_layer:
-        plugin: "nav2_costmap_2d::StaticLayer"
-        map_subscribe_transient_local: true
-        map_topic: /map   # 11-18: 저장 지도(maze_map_1911/map.pgm, map_backend:=static_2d의 map_server) — 실기도 이 지도 (사용자). 예전: /arena/walls(plan.yaml 실측 벽)
+      # 11-20: static_layer(/map) 뺌 — local은 odom 기준이라 map→odom이 움직이면 도면 벽만 옮겨지고 카메라가 찍어 둔 벽은 그 자리에 남아
+      #   벽이 두 줄이 됨 (실기 11-19 bag 6개: map이 2~8° 돌아 S3·S6 상자가 도면에서 30~50 cm · 도킹 뒤 nav_start_occupied).
+      #   주변 주행 판단은 카메라(voxel)만 — 도면 벽은 전역 costmap(경로)과 collision_monitor(옆·뒤)가 맡음
+      plugins: ["voxel_layer", "inflation_layer"]
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: true

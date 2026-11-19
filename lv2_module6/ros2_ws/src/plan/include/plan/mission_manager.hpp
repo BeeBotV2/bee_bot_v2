@@ -9,7 +9,7 @@
 //         ✉️ photo_topic (사진 찍을 때만 잠깐 구독) · TF map → base_footprint
 //   출력: 🎬 /task/execute_plan (SubGoal[] + plan_id = PLAN_ID_BASE + n) → coordinator
 //         ✉️ /mission/state (plan/MissionState, latched) · /mission/markers (RViz)
-//         ✉️ /nvblox_node/static_occupancy_grid (nvblox 원본 격자 — 벽 정합, arena_corr_wall_fit)
+//         ✉️ /localization/wall_fit (wall_localization의 잔여 보정)
 //         ✉️ /arena/correction (std_msgs/String JSON {"dx", "dy", "dth", "n", "src" (none | boxes | walls), "boxes",
 //           "marks": {"S3": [x, y, 본 횟수]}},
 //           latched) — 도면 보정 · 상자별 인지 위치 (미션이 없어도
@@ -275,24 +275,11 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr corr_pub_;  // /arena/correction
   std::string acorr_used_;            // 마지막으로 알린 근거 상자 이름들
   std::string acorr_src_ = "none";    // 지금 보정의 근거: none | boxes | walls
-  // 벽 정합 (arena_corr_wall_fit) — nvblox 격자 ↔ 도면 벽. 맞으면 보정은 벽으로, 상자는 marks만 (fit_walls 설명)
   bool wall_fit_ = true, wall_ok_ = false;
-  double wall_gate_ = 0.3, wall_min_eig_ = 0.03;
-  int wall_min_cells_ = 60;
-  WallFit wall_;                      // 마지막으로 맞은 벽 정합
-  std::string wall_why_;              // 마지막 실패 이유 (바뀔 때만 로그)
-  nav_msgs::msg::OccupancyGrid::ConstSharedPtr grid_;
-  // 벽 정합 점 (odom) — 격자에 새로 생긴 겉면 칸만, 받은 때의 map→odom으로 odom에 둠. 맞출 때 지금 map→odom으로 map에 옮김:
-  //   로봇 위치를 옮겨도(map→odom 바뀜) 점이 같이 옮겨져 같은 보정을 또 내지 않음 (nvblox 격자는 map에 그대로 남아 되먹임 — 11-15)
-  struct WallPt { double x, y, t; };
-  std::vector<WallPt> wall_pts_;
-  std::set<long long> wall_prev_;     // 지난 격자의 겉면 칸 (map 칸 번호) — 새로 생긴 칸만 고름
-  double wall_keep_s_ = 120.0;        // [s] 이보다 오래된 점은 버림 (arena_corr_wall_keep_s)
-  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr grid_sub_;
-  rclcpp::TimerBase::SharedPtr wall_timer_;
-  void wall_tick();
+  double wall_rms_ = 0.0;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr wall_fit_sub_;
   // 보정 → 로봇 위치 (arena_corr_to_localization, 11-15): 근거가 충분한 보정(벽 정합 · 상자 loc_min_n개+)을 조각(loc_step)씩
-  //   /localization/map_correction [dx, dy, dth]으로 cuvslam_slam에 넘기고 그만큼 acorr_ · marks_ · wall_.c에서 뺌 —
+  //   /localization/map_correction [dx, dy, dth]으로 cuvslam_slam에 넘기고 그만큼 acorr_ · marks_에서 뺌 —
   //   지도를 옮기는 대신 로봇 위치를 고쳐 벽 · 문 · costmap · nvblox · 목표가 한 좌표로 맞음 (표준: 위치 추정을 고침)
   bool loc_on_ = false;
   int loc_min_n_ = 3;
