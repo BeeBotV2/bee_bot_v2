@@ -67,8 +67,10 @@ inline Pose2 apply_map_correction(const Pose2 & map_offset, const Pose2 & corr) 
 // map→odom 보정 거르기 — 설명은 scripts/cuvslam_slam.py MapGate (같은 동작)
 class MapGate {
 public:
-  MapGate(double jump_m = 0.30, double jump_deg = 15.0, double rate_m = 0.05, double rate_deg = 5.0, double settle_s = 0.0)
-  : jump_m_(jump_m), jump_rad_(jump_deg * M_PI / 180.0), rate_m_(rate_m), rate_rad_(rate_deg * M_PI / 180.0), settle_s_(settle_s) {}
+  MapGate(double jump_m = 0.30, double jump_deg = 15.0, double rate_m = 0.05, double rate_deg = 5.0, double settle_s = 0.0,
+          bool lock = true)
+  : jump_m_(jump_m), jump_rad_(jump_deg * M_PI / 180.0), rate_m_(rate_m), rate_rad_(rate_deg * M_PI / 180.0), settle_s_(settle_s),
+    lock_(lock) {}
 
   void reset() {
     held_.reset();
@@ -103,7 +105,7 @@ public:
       accepted = true;
       return *held_;
     }
-    if (locked || d > jump_m_ || r > jump_rad_) {
+    if (lock_ && (locked || d > jump_m_ || r > jump_rad_)) {
       locked = true;
       ++rejected;
       accepted = false;
@@ -140,6 +142,7 @@ public:
 
 private:
   double jump_m_, jump_rad_, rate_m_, rate_rad_, settle_s_;
+  bool lock_;  // false = 큰 점프도 잠그지 않고 rate로 따라감 (gate_lock, 매핑)
   std::optional<Pose2> held_;
   std::optional<double> t_, t0_;
 };

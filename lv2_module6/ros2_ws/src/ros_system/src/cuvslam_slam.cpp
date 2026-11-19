@@ -120,6 +120,8 @@ public:
     frame_skip_ = std::max<int64_t>(1, declare_parameter<int64_t>("frame_skip", 1));
     near_raw_ = ros_system::near_limit(min_depth_, depth_scale_);
     max_map_size_ = static_cast<uint32_t>(declare_parameter<int64_t>("max_map_size", 150));
+    max_lm_dist_ = static_cast<float>(declare_parameter<double>("max_landmarks_distance", 100.0));
+    throttle_ms_ = static_cast<uint32_t>(declare_parameter<int64_t>("throttling_time_ms", 0));
     lin_var_ = declare_parameter<double>("linear_variance", 0.0025);
     ang_var_ = declare_parameter<double>("angular_variance", 0.0025);
     // 영상을 GPU 장치 메모리로 넘길지 (메시지 → cudaMemcpy2D · 마스크 커널) — false면 CPU 버퍼 (cuVSLAM이 안에서 복사)
@@ -131,7 +133,8 @@ public:
     const double jm = declare_parameter<double>("gate_jump_m", 0.30), jd = declare_parameter<double>("gate_jump_deg", 15.0);
     const double rm = declare_parameter<double>("gate_rate_m", 0.05), rd = declare_parameter<double>("gate_rate_deg", 5.0);
     const double ss = declare_parameter<double>("gate_settle_s", 15.0);
-    if (declare_parameter<bool>("map_gate", true)) gate_.emplace(jm, jd, rm, rd, ss);
+    const bool lock = declare_parameter<bool>("gate_lock", true);
+    if (declare_parameter<bool>("map_gate", true)) gate_.emplace(jm, jd, rm, rd, ss, lock);
     // [rad/s] odom 회전 속도가 이보다 크면 map→odom을 그대로 둠 (회전 중 보정 멈춤, 11-16) · 0 = 안 멈춤
     hold_wz_ = declare_parameter<double>("gate_hold_wz", 0.2);
     // map 기준 (11-18): cuvslam(기본) = map→odom을 cuVSLAM 자세로 맞춤 · odom = EKF odom을 그대로 map에 두고 도면 보정(/localization/map_correction)만 얹음
@@ -325,6 +328,8 @@ private:
         cuvslam::Slam::Config sc;
         sc.planar_constraints = true;
         sc.max_map_size = max_map_size_;
+        sc.max_landmarks_distance = max_lm_dist_;
+        sc.throttling_time_ms = throttle_ms_;
         sc.enable_reading_internals = vis_;  // get_slam_landmarks · get_pose_graph
         slam_ = std::make_unique<cuvslam::Slam>(rig, odom_trk_->GetPrimaryCameras(), sc);
       }
@@ -748,6 +753,8 @@ private:
   int64_t frame_skip_ = 1, frame_n_ = 0, last_ns_ = 0;
   uint16_t near_raw_ = 0;
   uint32_t max_map_size_ = 150;
+  float max_lm_dist_ = 100.f;
+  uint32_t throttle_ms_ = 0;
   long ok_ = 0, lost_ = 0;
   std::optional<ros_system::MapGate> gate_;
   Eigen::Matrix4d base_from_cam_ = Eigen::Matrix4d::Identity();
