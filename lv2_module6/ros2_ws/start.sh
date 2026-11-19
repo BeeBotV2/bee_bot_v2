@@ -101,6 +101,10 @@ export RCUTILS_DEFAULT_LOGGER_DEFAULT_LEVEL="${RCUTILS_DEFAULT_LOGGER_DEFAULT_LE
 
 # map 기준 (cuvslam_slam) — 11-18 실기: cuVSLAM 기준이 map→odom을 0.5 m · 5°까지 끌고 가 S4 앞 벽 모서리에 2회 갇힘
 #   (상자 인지는 반대쪽 −0.33 · +0.30 · +8°를 가리킴) → 기본 odom (EKF odom + 도면 보정). cuVSLAM 기준: BEE_MAP_ANCHOR=cuvslam ./start.sh
+#   map:=slam(매핑)은 cuvslam (사용자 2026-11-19) — 도면 없이 매핑: 흐름은 cuVSLAM 루프 클로저로만 잡음 (odom이면 EKF 흐름이 그대로 지도에 남음)
+case " $* " in *" map:=slam "*) export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-cuvslam}"
+  # 매핑이면 cuVSLAM 랜드마크 · 루프 클로저를 /cuvslam/vis/*로 (PC mapping.sh rviz --real에서 봄) — 끄려면 BEE_CUVSLAM_VIS=0
+  export BEE_CUVSLAM_VIS="${BEE_CUVSLAM_VIS:-1}" ;; esac
 export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-odom}"
 
 # --- 아키텍처 확인: 다른 CPU용으로 빌드된 install/이면 노드가 Exec format error로 죽으므로 미리 멈춘다

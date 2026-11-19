@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -193,6 +194,12 @@ public:
       declare_parameter<std::string>("map_correction_topic", "/localization/map_correction"), 10,
       [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr m) {
         if (m->data.size() < 3) return;
+        // 매핑(map_save_dir)이면 도면 보정을 안 받음 — 도면(plan.yaml) 벽 정합이 쌓는 중인 지도를 도면 쪽으로 당겨
+        //   지도에 도면이 섞였음 (실기 지도 20261119_140649: 85번 · 한 번에 최대 0.8°). 매핑 흐름은 cuVSLAM으로만 (사용자 2026-11-19)
+        if (!save_dir_.empty()) {
+          if (n_corr_ignored_++ == 0) RCLCPP_WARN(get_logger(), "매핑 중 — 도면 보정(/localization/map_correction) 무시");
+          return;
+        }
         map_offset_ = ros_system::apply_map_correction(map_offset_, {m->data[0], m->data[1], m->data[2]});
         RCLCPP_INFO(get_logger(), "도면 보정 받음 → map 기준 옮김 (%+.3f, %+.3f, %+.2f°)", m->data[0], m->data[1],
                     m->data[2] * 180.0 / M_PI);
@@ -427,8 +434,9 @@ private:
       return;
     }
     if (vis_) {
-      last_vis_ = LastVis{c.header.stamp, ch, c.width, c.height, {}};
+      last_vis_ = LastVis{c.header.stamp, ch, c.width, c.height, {}, {}};
       copy_gray(c, ch, last_vis_->gray);
+      if (ch == 3) copy_rgb(c, last_vis_->rgb);
     }
     if (!est.world_from_rig) {
       ++lost_;
@@ -615,7 +623,17 @@ private:
     img.data.resize(static_cast<size_t>(img.step) * lv.h);
     for (size_t i = 0; i < lv.gray.size(); ++i) img.data[i * 3] = img.data[i * 3 + 1] = img.data[i * 3 + 2] = lv.gray[i];
     try {
-      for (const auto & o : odom_trk_->GetLastObservations(0))
+      const auto obs = odom_trk_->GetLastObservations(0);
+      if (!lv.rgb.empty()) {
+        if (lm_rgb_.size() > 500000) lm_rgb_.clear();  // 메모리 한도 (보기용)
+        for (const auto & o : obs) {
+          const int u = static_cast<int>(o.u), v = static_cast<int>(o.v);
+          if (u < 0 || v < 0 || u >= static_cast<int>(lv.w) || v >= static_cast<int>(lv.h)) continue;
+          const uint8_t * px = &lv.rgb[(static_cast<size_t>(v) * lv.w + u) * 3];
+          lm_rgb_[o.id] = (uint32_t{px[0]} << 16) | (uint32_t{px[1]} << 8) | px[2];
+        }
+      }
+      for (const auto & o : obs)
         for (int dy = -1; dy <= 1; ++dy)
           for (int dx = -1; dx <= 1; ++dx) {
             const int u = static_cast<int>(o.u) + dx, v = static_cast<int>(o.v) + dy;
@@ -631,15 +649,24 @@ private:
     std_msgs::msg::Header hdr;
     hdr.stamp = lv.stamp;
     hdr.frame_id = map_;
-    auto cloud = [&](const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pub, const std::vector<Eigen::Vector3d> & pts) {
+    // xyz + rgb (RViz Color Transformer RGB8) — 색 모르는 점은 회색
+    auto cloud = [&](const rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr & pub, const std::vector<Eigen::Vector3d> & pts,
+                     const std::vector<uint64_t> & ids) {
       if (pts.empty()) return;
       sensor_msgs::msg::PointCloud2 pc;
       pc.header = hdr;
       sensor_msgs::PointCloud2Modifier mod(pc);
-      mod.setPointCloud2FieldsByString(1, "xyz");
+      mod.setPointCloud2FieldsByString(2, "xyz", "rgb");
       mod.resize(pts.size());
       sensor_msgs::PointCloud2Iterator<float> x(pc, "x"), y(pc, "y"), z(pc, "z");
-      for (const auto & p : pts) {
+      sensor_msgs::PointCloud2Iterator<uint8_t> cr(pc, "r"), cg(pc, "g"), cb(pc, "b");
+      for (size_t i = 0; i < pts.size(); ++i, ++cr, ++cg, ++cb) {
+        const auto it = lm_rgb_.find(ids[i]);
+        const uint32_t col = it == lm_rgb_.end() ? 0x808080 : it->second;
+        *cr = static_cast<uint8_t>(col >> 16);
+        *cg = static_cast<uint8_t>(col >> 8);
+        *cb = static_cast<uint8_t>(col);
+        const auto & p = pts[i];
         const Eigen::Vector3d q = base_from_cam_.block<3, 3>(0, 0) * p + base_from_cam_.block<3, 1>(0, 3);
         *x = static_cast<float>(q.x());
         *y = static_cast<float>(q.y());
@@ -652,8 +679,12 @@ private:
     };
     try {
       std::vector<Eigen::Vector3d> lm;
-      for (const auto & l : odom_trk_->GetLastLandmarks()) lm.emplace_back(l.coords[0], l.coords[1], l.coords[2]);
-      cloud(vis_lm_, lm);
+      std::vector<uint64_t> ids;
+      for (const auto & l : odom_trk_->GetLastLandmarks()) {
+        lm.emplace_back(l.coords[0], l.coords[1], l.coords[2]);
+        ids.push_back(l.id);
+      }
+      cloud(vis_lm_, lm, ids);
     } catch (const std::exception &) {
     }
     if (!slam_) return;
@@ -662,8 +693,12 @@ private:
       slam_->EnableReadingData(layer, 100000);  // 파이썬 바인딩과 같게 — 읽을 때마다 켬
       if (const auto ls = slam_->ReadLandmarks(layer)) {
         std::vector<Eigen::Vector3d> pts;
-        for (const auto & l : ls->landmarks) pts.emplace_back(l.coords[0], l.coords[1], l.coords[2]);
-        cloud(pub, pts);
+        std::vector<uint64_t> ids;
+        for (const auto & l : ls->landmarks) {
+          pts.emplace_back(l.coords[0], l.coords[1], l.coords[2]);
+          ids.push_back(l.id);
+        }
+        cloud(pub, pts, ids);
       }
     }
     slam_->EnableReadingData(L::PoseGraph, 1000);
@@ -719,6 +754,7 @@ private:
   Pose2 map_offset_;
   double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0, odom_tol_ = 0.1;
   bool odom_anchor_ = false;
+  uint64_t n_corr_ignored_ = 0;
   std::optional<Pose2> last_base_, pending_initialpose_;
   std::optional<std::pair<int64_t, Pose2>> prev_;  // 직전 오도메트리 자세 — 추적을 잃으면 비움
   // 위치추정 콜백이 쓰는 것들은 slam_보다 먼저 선언 — 소멸 때 slam_(작업 스레드)이 먼저 없어지게
@@ -745,7 +781,22 @@ private:
     int ch;
     uint32_t w, h;
     std::vector<uint8_t> gray;  // 보기용 회색 (컬러면 G 채널) — GPU 버퍼는 CPU에서 못 읽어 메시지에서 따로 둠
+    std::vector<uint8_t> rgb;   // 랜드마크 색 (r g b 순서) — 컬러 입력일 때만
   };
+  static void copy_rgb(const Image & c, std::vector<uint8_t> & o) {
+    const bool bgr = c.encoding == "bgr8";
+    o.resize(static_cast<size_t>(c.width) * c.height * 3);
+    for (uint32_t y = 0; y < c.height; ++y)
+      for (uint32_t x = 0; x < c.width; ++x) {
+        const uint8_t * s = &c.data[y * c.step + x * 3];
+        uint8_t * d = &o[(static_cast<size_t>(y) * c.width + x) * 3];
+        d[0] = s[bgr ? 2 : 0];
+        d[1] = s[1];
+        d[2] = s[bgr ? 0 : 2];
+      }
+  }
+  // 랜드마크 id → 색 (0xRRGGBB) — 관측된 프레임의 그 픽셀. SLAM 지도 랜드마크도 같은 id면 이 색, 없으면 회색
+  std::unordered_map<uint64_t, uint32_t> lm_rgb_;
   static void copy_gray(const Image & c, int ch, std::vector<uint8_t> & g) {
     g.resize(static_cast<size_t>(c.width) * c.height);
     for (uint32_t y = 0; y < c.height; ++y)

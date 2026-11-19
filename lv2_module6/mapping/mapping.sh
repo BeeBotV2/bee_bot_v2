@@ -32,9 +32,11 @@ ARGS=()
 for a in "$@"; do [ "$a" = --real ] && REAL=true || ARGS+=("$a"); done
 CMD=${ARGS[0]:-map}
 BAG_DIR=$(realpath -m "${BEE_BAG_DIR:-$HOME/.ros/beebot_bags}")
-# SLAM 입력 (cuVSLAM · nvblox · EKF · 카메라 TF) — /tf는 안 넣음: 재생할 때 EKF · robot_state_publisher가 다시 냄 (replay.launch.py)
+# SLAM 입력 (cuVSLAM · nvblox · EKF · 카메라 TF) — 재생은 이것만 냄: /tf는 재생 때 EKF · robot_state_publisher가 다시 냄 (replay.launch.py)
 BAG_TOPICS="/pole_front_cam/color/image_raw /pole_front_cam/color/camera_info
   /pole_front_cam/aligned_depth_to_color/image_raw /pole_front_cam/aligned_depth_to_color/camera_info /odom /imu /joint_states"
+# 비교용 (map:=slam으로 띄우고 녹화할 때만 나옴) — 실시간 cuVSLAM · EKF 자세 · map→odom · 루프 클로저. 재생 때는 안 냄 (재생 SLAM과 충돌)
+BAG_EXTRA="/tf /tf_static /cuvslam/odom /cuvslam/map_to_odom /odometry/filtered /cuvslam/vis/pose_graph"
 
 # 다른 터미널(RViz · 텔레옵 · CLI)은 Isaac · 스택과 같은 Fast DDS 프로파일이어야 토픽이 보인다 (isaac_sim.sh · drive_test.py와 같은 기본)
 ros_env() {
@@ -68,6 +70,8 @@ isaac_up() {  # $1 = 지도 인자 (map:=slam … · map:=none) — 나머지는
   export BEE_CUVSLAM_VIS="${BEE_CUVSLAM_VIS:-1}"
   # map 기준 = EKF odom (start.sh와 같음) — cuvslam 기준이면 정지 중에도 map→odom이 초당 최대 5 cm(MapGate rate)씩 끌려가
   #   기체가 밀려 보이고 먼 벽이 이중으로 찍혔음 (Isaac 2026-11-19). cuVSLAM 기준으로 보려면 BEE_MAP_ANCHOR=cuvslam
+  #   매핑(map:=slam)은 cuvslam (사용자 2026-11-19, start.sh와 같음) — 도면 없이 매핑하므로 흐름은 cuVSLAM 루프 클로저로만 잡음
+  case " $1 " in *" map:=slam "*) export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-cuvslam}" ;; esac
   export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-odom}"
   # rig 수평 (cuvslam_slam BEE_CUVSLAM_LEVEL) — rig = 숙인 카메라면 planar_constraints 면이 바닥보다 기울어 지도 랜드마크가
   #   비스듬한 판으로 쌓였음 (11-15 · Isaac 2026-11-19 RViz). 끄려면 BEE_CUVSLAM_LEVEL=0
@@ -101,6 +105,9 @@ replay() {  # $1 = bag · $2 = 지도 이름 · $3 = localization true|false
     fastdds shm clean >/dev/null 2>&1
   fi
   ros2 daemon stop >/dev/null 2>&1
+  # 실시간 매핑(start.sh map:=slam)과 같은 cuvslam_slam 설정 — 랜드마크 보기 · rig 수평 · 매핑은 cuVSLAM 기준 / 위치추정은 odom (11-19)
+  export BEE_CUVSLAM_VIS="${BEE_CUVSLAM_VIS:-1}" BEE_CUVSLAM_LEVEL="${BEE_CUVSLAM_LEVEL:-1}"
+  [ "$3" = true ] && export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-odom}" || export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-cuvslam}"
   setsid ros2 launch "$HERE/replay.launch.py" map_dir:="$WS/map" map_name:="$2" localization:="$3" &
   LAUNCH=$!
   # SIGINT → cuVSLAM · nvblox 저장. bag play는 이 셸의 백그라운드라 SIGINT를 무시하므로 TERM
@@ -108,7 +115,8 @@ replay() {  # $1 = bag · $2 = 지도 이름 · $3 = localization true|false
   trap stop EXIT INT TERM HUP
   sleep "${BEE_REPLAY_WAIT:-8}"  # 노드가 뜨고 구독할 때까지 — 앞 프레임을 놓치면 출발 자리가 달라짐
   echo "[mapping] 재생: $1 → 지도 $WS/map/$2 ($( [ "$3" = true ] && echo 위치추정 || echo 매핑))"
-  ros2 bag play --clock 100 "$1" &
+  # shellcheck disable=SC2086 — 센서 토픽만 (BAG_EXTRA의 /tf · /cuvslam/odom 등은 재생 SLAM · EKF와 겹침)
+  ros2 bag play --clock 100 "$1" --topics $BAG_TOPICS &
   PLAY=$!
   # EKF가 odom을 내는지 — EKF는 /clock이 오기 전엔 구독도 안 하므로(Waiting for clock to start) 재생을 시작한 뒤에 봄.
   #   안 나오면 odom TF가 없어 지도가 끝까지 안 생긴다 (11-19: DDS가 EKF를 못 찾아 map→odom 0)
@@ -149,7 +157,7 @@ case "$CMD" in
     # shellcheck disable=SC2086 — 토픽은 공백으로 나눔
     # Isaac: 메시지 시각이 시뮬 시계라 bag 시각도 /clock으로 (아니면 재생 --clock이 녹화 때 PC 시각을 내 EKF · TF가 어긋남 — 11-19 lap1)
     $REAL && SIMT=() || SIMT=(--use-sim-time)
-    exec ros2 bag record "${SIMT[@]}" -s mcap --compression-mode file --compression-format zstd -o "$BAG_DIR/$NAME" --topics $BAG_TOPICS  # Lyrical: 토픽은 --topics 뒤 (위치 인자 안 받음)
+    exec ros2 bag record "${SIMT[@]}" -s mcap --compression-mode file --compression-format zstd -o "$BAG_DIR/$NAME" --topics $BAG_TOPICS $BAG_EXTRA  # Lyrical: 토픽은 --topics 뒤 (위치 인자 안 받음)
     ;;
   replay)
     BAG=$(realpath -m "${ARGS[1]:?bag 경로}")
