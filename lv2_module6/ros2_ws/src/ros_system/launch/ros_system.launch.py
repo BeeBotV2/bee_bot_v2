@@ -202,6 +202,7 @@ def generate_launch_description():
         flag('use_slam', 'true', 'SLAM(cuVSLAM + nvblox) — false면 map→odom·/map 없음 (테스트베드 faker map:=course는 map_server가 대신)'),
         flag('localization', 'true', 'true=위치추정 모드(운영, 저장 지도로), false=매핑 모드(지도를 새로 만듦)'),
         flag('map_backend', 'nvblox', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox)'),
+        flag('wall_fit', 'false', 'static_2d: also run nvblox (empty, live only, never saved) for mission_manager wall-fit correction — /map stays the saved 2D map'),
         flag('static_map_yaml', '', 'static_2d map YAML in the cuVSLAM map frame'),
         flag('nvblox_params_file', share('config', 'nvblox.yaml'), 'nvblox parameter file'),
         flag('nvblox_map', '~/.ros/nvblox.nvblx', 'nvblox 지도 파일 — 매핑이면 끌 때 여기에 저장, 위치추정이면 시작할 때 여기서 불러옴'),
@@ -399,8 +400,6 @@ def slam_nodes():
                      (config/nvblox.yaml). 매핑이면 끌 때 nvblox_map 파일에 저장
       nvblox_map     ~/static_occupancy_grid → /map (latched, 1 Hz) · 위치추정이면 시작할 때 저장 지도를 load_map"""
     on = IfCondition(LaunchConfiguration('use_slam'))
-    nvblox_on = IfCondition(PythonExpression(["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '",
-                                                 LaunchConfiguration('map_backend'), "' == 'nvblox'"]))
     static_on = IfCondition(PythonExpression(["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '",
                                                  LaunchConfiguration('map_backend'), "' == 'static_2d'"]))
     loc = ["'", LaunchConfiguration('localization'), "'.lower() == 'true'"]
@@ -424,6 +423,11 @@ def slam_nodes():
     separate = IfCondition(PythonExpression(["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '",
         LaunchConfiguration('map_backend'), "' == 'nvblox' and '", LaunchConfiguration('py_helpers_one_process'), "'.lower() != 'true'"]))
     slam_nvblox = ["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '", LaunchConfiguration('map_backend'), "' == 'nvblox'"]
+    # wall_fit:=true (static_2d, 11-18) — nvblox_node + depth gate only: live wall grid for mission_manager wall fit.
+    #   No nvblox_map relay (/map stays map_server) and no load — the fit must see this run's walls, not an old saved map
+    wall_fit = ["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '", LaunchConfiguration('map_backend'),
+                "' == 'static_2d' and '", LaunchConfiguration('wall_fit'), "'.lower() == 'true'"]
+    nvblox_any = ['((', *slam_nvblox, ') or (', *wall_fit, '))']
     gate_cpp = ["'", LaunchConfiguration('depth_gate_cpp'), "'.lower() == 'true'"]
     one_proc = ["'", LaunchConfiguration('py_helpers_one_process'), "'.lower() == 'true'"]
     # helpers_cpp:=true(기본, 11-16) — nvblox_map · rewind = C++ cpp_helpers (한 프로세스든 따로든 · 노드 이름 같음).
@@ -463,19 +467,20 @@ def slam_nodes():
         # 도면 벽(/arena/walls_only) → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor 두 번째 입력 (옆·뒤)
         Node(package='ros_system', executable='grid_obstacle_cloud', name='grid_obstacle_cloud', output='screen', condition=on),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_depth_gate', output='screen',
-             condition=IfCondition(PythonExpression([*slam_nvblox, ' and (not ', *one_proc, ' or ', *hcpp, ') and not ', *gate_cpp])),
+             condition=IfCondition(PythonExpression([*nvblox_any, ' and (not ', *one_proc, ' or ', *hcpp, ') and not ', *gate_cpp])),
              parameters=[gate_params('pole_front_cam')]),
         # C++판 (기본) — py_helpers 한 프로세스 여부와 상관없이 따로 (파이썬 py_helpers에는 nvblox_map · rewind만)
         Node(package='perception', executable='depth_gate', name='pole_depth_gate', output='screen',
-             condition=IfCondition(PythonExpression([*slam_nvblox, ' and ', *gate_cpp])), parameters=[gate_params('pole_front_cam')]),
+             condition=IfCondition(PythonExpression([*nvblox_any, ' and ', *gate_cpp])), parameters=[gate_params('pole_front_cam')]),
         # pole_back_cam (주행 전용, 11-15): 앞과 같은 depth gate 하나 더 (C++ · 파이썬판은 py_helpers에 안 넣고 따로) → nvblox camera_1
         Node(package='perception', executable='depth_gate', name='pole_back_depth_gate', output='screen',
-             condition=IfCondition(PythonExpression([*slam_nvblox, ' and ', *back, ' and ', *gate_cpp])),
+             condition=IfCondition(PythonExpression([*nvblox_any, ' and ', *back, ' and ', *gate_cpp])),
              parameters=[gate_params('pole_back_cam')]),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_back_depth_gate', output='screen',
-             condition=IfCondition(PythonExpression([*slam_nvblox, ' and ', *back, ' and not ', *gate_cpp])),
+             condition=IfCondition(PythonExpression([*nvblox_any, ' and ', *back, ' and not ', *gate_cpp])),
              parameters=[gate_params('pole_back_cam')]),
-        Node(package='nvblox_ros', executable='nvblox_node', name='nvblox_node', output='screen', condition=nvblox_on,
+        Node(package='nvblox_ros', executable='nvblox_node', name='nvblox_node', output='screen',
+             condition=IfCondition(PythonExpression(nvblox_any)),
              parameters=[LaunchConfiguration('nvblox_params_file'),
                          {'after_shutdown_map_save_path': ParameterValue(save_path, value_type=str),
                           'num_cameras': ParameterValue(PythonExpression(['2 if ', *back, ' else 1']), value_type=int)}],
@@ -502,8 +507,11 @@ def slam_nodes():
              **QUICK_STOP, parameters=[{'yaml_filename': LaunchConfiguration('static_map_yaml'), 'frame_id': 'map', 'topic_name': 'map'}]),
         # static_2d엔 nvblox가 없어 RL 주행 controller 입력(/nvblox_node/combined_esdf_pointcloud)이 끊김 → 바이패스.
         #   /map + body_filter 점구름으로 같은 형식의 ESDF slice를 낸다 (perception/include/perception/static_esdf_slice.hpp)
+        #   wall_fit:=true면 끔 — nvblox_node가 같은 토픽을 냄
         Node(package='perception', executable='static_esdf_slice', name='static_esdf_slice', output='screen',
-             condition=static_on, **QUICK_STOP),
+             condition=IfCondition(PythonExpression(["'", LaunchConfiguration('use_slam'), "'.lower() == 'true' and '",
+                                                     LaunchConfiguration('map_backend'), "' == 'static_2d' and '",
+                                                     LaunchConfiguration('wall_fit'), "'.lower() != 'true'"])), **QUICK_STOP),
         TimerAction(period=LIFECYCLE_DELAY_S, actions=[Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
             name='lifecycle_manager_map', output='screen', condition=static_on, **QUICK_STOP,
             parameters=[{'autostart': True, 'node_names': ['map_server']}])]),
