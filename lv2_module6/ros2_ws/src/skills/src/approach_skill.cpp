@@ -15,6 +15,9 @@
 //     상자 도킹은 odom 프레임에서: map은 cuVSLAM 보정으로 움직임 (11-12 Isaac 정답 대비 map→odom이 한 번에 21 cm · 5.5° 밀림,
 //     odom→base_footprint는 1 cm) → 목표를 map에 고정하면 붙은 뒤에 '지나침'으로 보고 후진. 측정(map)은 그 관측 시각의
 //     map→odom으로 odom에 옮김 (인지가 쓴 것과 같은 보정이라 상쇄) · 도면 힌트는 시작 때 한 번 옮김
+//   approach_dock_backend nav2 (11-20 시험, bringup use_docking:=true): 상자 붙기·빠지기를 Nav2 docking server에 맡김 —
+//     상자 측정·거르기는 그대로 하고, 그 결과(붙은 로봇 자세, odom)를 /detected_dock_pose로 계속 냄 + DockRobot(dock_pose 직접 ·
+//     대기 자리로 가기 안 함) · exit은 UndockRobot(서버가 기억한 도크에서 staging_x_offset만큼 후진). 학습 보정은 안 씀
 //   goal.target "exit" (상자에서 빠져나오기, 11-13): 지금 방향 그대로 values[0] m(없으면 approach_exit_m) 똑바로 후진 — odom 기준,
 //     정책 보정 없음 · 뒤는 카메라가 못 보므로 느리게 (기준 제어 후진 상한 0.05 m/s)
 #include <algorithm>
@@ -23,7 +26,11 @@
 #include <map>
 
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "ml/policy.hpp"
+#include "nav2_msgs/action/dock_robot.hpp"
+#include "nav2_msgs/action/undock_robot.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "ml/nav_obs.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
@@ -49,6 +56,8 @@ public:
     res_w_ = declare_parameter<double>("residual_w", 0.1);
     min_speed_ = declare_parameter<double>("approach_min_speed", 0.03);  // [m/s] 실기 바퀴 데드밴드 위 (sim 모드 기준 제어)
     exit_v_ = declare_parameter<double>("approach_exit_v", 0.15);  // [m/s] exit 후진 상한 (11-18: 0.05면 0.5 m에 16~19 s)
+    dock_backend_ = declare_parameter<std::string>("approach_dock_backend", "skill");  // skill | nav2 (헤더 설명)
+    dock_type_ = declare_parameter<std::string>("approach_dock_type", "bee_box");       // nav2_params docking_server dock_plugins 이름
     exit_m_ = declare_parameter<double>("approach_exit_m", 0.165);  // exit 기본 후진 거리 [m] (= standoff 0.25 − gap 0.085)
     release_m_ = declare_parameter<double>("approach_release_m", 0.03);  // sim: 도착(tol_m×0.6) 뒤 이만큼 벗어나야 다시 위치 맞춤
     carrot_m_ = declare_parameter<double>("approach_carrot_m", 0.05);    // sim: 목표 직선 위 이만큼 앞 점을 향해 조향
@@ -76,6 +85,9 @@ public:
       policies_[name] = std::move(p);
     }
     cmd_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_nav", rclcpp::QoS(10));
+    detect_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/detected_dock_pose", rclcpp::QoS(10));
+    dock_client_ = rclcpp_action::create_client<Dock>(this, "/dock_robot");
+    undock_client_ = rclcpp_action::create_client<Undock>(this, "/undock_robot");
     // 상자 도킹 사이클(붙기 시작 ~ exit 끝) 동안 true — ros_system grid_obstacle_cloud가 도면 벽 점구름을 끔 (11-20)
     dock_pub_ = create_publisher<std_msgs::msg::Bool>("/skills/docking", rclcpp::QoS(1).reliable().transient_local());
     set_docking(false);
@@ -93,12 +105,17 @@ protected:
     if (timer_) timer_->cancel();
     box_mode_ = false;
     arm_.stop();
+    if (dock_sent_) dock_client_->async_cancel_all_goals();
+    if (undock_sent_) undock_client_->async_cancel_all_goals();
+    dock_sent_ = undock_sent_ = false;
     halt();
     set_docking(false);
   }
 
 private:
   struct Policy { SkillModel model; ml::Policy net; };
+  using Dock = nav2_msgs::action::DockRobot;
+  using Undock = nav2_msgs::action::UndockRobot;
 
   void set_docking(bool on) {
     std_msgs::msg::Bool m;
@@ -155,14 +172,17 @@ private:
     }
     stage(name + (mode_ == "sim" && pol_->model.use ? " (기준 제어 + 학습 보정)" : " (기준 제어)") + " → (" +
           std::to_string(gx_).substr(0, 5) + ", " + std::to_string(gy_).substr(0, 5) + ")");
+    dock_sent_ = false;
     timer_ = create_wall_timer(std::chrono::milliseconds(50), [this]() {
       if (!box_ready()) return;
+      if (box_mode_ && dock_backend_ == "nav2") { tick_dock(); return; }
       mode_ == "sim" ? tick_sim() : tick_legacy();
     });
   }
 
   // 상자에서 빠져나오기 (헤더 설명): 목표 = 지금 자리에서 뒤로 d · 같은 방향 → tick_sim의 '지나침' 후진 가지로 똑바로 물러남
   void start_exit(const SkillGoal & g, Done done) {
+    if (dock_backend_ == "nav2" && nav2_docked_) { start_undock(done); return; }
     double x, y, yaw;
     frame_ = "odom";
     if (!robot_pose(x, y, yaw)) { done(false, "approach_no_tf"); return; }
@@ -181,6 +201,72 @@ private:
     done_ = done;
     stage("exit — 뒤로 " + std::to_string(d).substr(0, 5) + " m");
     timer_ = create_wall_timer(std::chrono::milliseconds(50), [this]() { tick_sim(); });
+  }
+
+  // Nav2 docking server로 붙기 (헤더 설명): 거른 상자 측정 → 붙은 로봇 자세(gx_, gy_, gyaw_ · odom)를 계속 /detected_dock_pose로 · 처음 한 번 DockRobot
+  void tick_dock() {
+    geometry_msgs::msg::PoseStamped p;
+    p.header.stamp = now();
+    p.header.frame_id = frame_;
+    p.pose.position.x = gx_;
+    p.pose.position.y = gy_;
+    p.pose.orientation.z = std::sin(gyaw_ / 2);
+    p.pose.orientation.w = std::cos(gyaw_ / 2);
+    detect_pub_->publish(p);
+    if (dock_sent_) return;
+    if (!dock_client_->action_server_is_ready()) {
+      RCLCPP_ERROR(get_logger(), "docking_server(/dock_robot) 없음 — bringup use_docking:=true · opennav_docking 설치 확인");
+      end(false, "approach_no_docking_server");
+      return;
+    }
+    dock_sent_ = true;
+    nav2_docked_ = false;
+    Dock::Goal goal;
+    goal.use_dock_id = false;
+    goal.dock_pose = p;
+    goal.dock_type = dock_type_;
+    goal.navigate_to_staging_pose = false;  // 이미 Nav2로 다가설 자리에 와 있음 (mission_manager go_near)
+    goal.max_staging_time = 30.0f;
+    rclcpp_action::Client<Dock>::SendGoalOptions opt;
+    opt.goal_response_callback = [this](const rclcpp_action::ClientGoalHandle<Dock>::SharedPtr & h) {
+      if (!h) { RCLCPP_WARN(get_logger(), "DockRobot 거절"); end(false, "approach_dock_rejected"); }
+    };
+    opt.result_callback = [this](const rclcpp_action::ClientGoalHandle<Dock>::WrappedResult & r) {
+      dock_sent_ = false;
+      const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result && r.result->success;
+      const int code = r.result ? static_cast<int>(r.result->error_code) : -1;
+      RCLCPP_INFO(get_logger(), "DockRobot %s (error_code %d)", ok ? "성공" : "실패", code);
+      nav2_docked_ = ok;
+      if (timer_ && !timer_->is_canceled()) end(ok, ok ? "" : "approach_dock_failed_" + std::to_string(code));
+    };
+    stage("Nav2 docking server로 붙기 → (" + std::to_string(gx_).substr(0, 5) + ", " + std::to_string(gy_).substr(0, 5) + ")");
+    dock_client_->async_send_goal(goal, opt);
+  }
+
+  // Nav2 docking server로 빠지기: UndockRobot — 서버가 기억한 도크에서 staging_x_offset만큼 후진
+  void start_undock(Done done) {
+    exit_ = true;
+    done_ = done;
+    nav2_docked_ = false;
+    if (!undock_client_->action_server_is_ready()) { set_docking(false); done(false, "approach_no_docking_server"); return; }
+    Undock::Goal goal;
+    goal.dock_type = dock_type_;
+    goal.max_undocking_time = 30.0f;
+    undock_sent_ = true;
+    rclcpp_action::Client<Undock>::SendGoalOptions opt;
+    opt.goal_response_callback = [this](const rclcpp_action::ClientGoalHandle<Undock>::SharedPtr & h) {
+      if (!h) { undock_sent_ = false; set_docking(false); done_(false, "approach_undock_rejected"); }
+    };
+    opt.result_callback = [this](const rclcpp_action::ClientGoalHandle<Undock>::WrappedResult & r) {
+      if (!undock_sent_) return;
+      undock_sent_ = false;
+      const bool ok = r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result && r.result->success;
+      RCLCPP_INFO(get_logger(), "UndockRobot %s (error_code %d)", ok ? "성공" : "실패", r.result ? static_cast<int>(r.result->error_code) : -1);
+      set_docking(false);
+      done_(ok, ok ? "" : "approach_undock_failed");
+    };
+    stage("Nav2 docking server로 빠지기 (대기 자리로)");
+    undock_client_->async_send_goal(goal, opt);
   }
 
   // 상자 측정 → 걸러서 목표 갱신 (헤더 설명)
@@ -335,7 +421,7 @@ private:
   }
 
   void end(bool ok, const std::string & why) {
-    timer_->cancel();
+    if (timer_) timer_->cancel();
     // 붙기 성공이면 exit까지 도킹 중 유지 · 붙기 실패나 exit 끝이면 해제
     if (exit_ || !ok) set_docking(false);
     box_mode_ = false;
@@ -506,6 +592,11 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr dock_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr detect_pub_;
+  rclcpp_action::Client<Dock>::SharedPtr dock_client_;
+  rclcpp_action::Client<Undock>::SharedPtr undock_client_;
+  std::string dock_backend_ = "skill", dock_type_ = "bee_box";
+  bool dock_sent_ = false, undock_sent_ = false, nav2_docked_ = false;
   bool docking_ = false;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;

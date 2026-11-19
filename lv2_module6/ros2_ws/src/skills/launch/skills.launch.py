@@ -40,6 +40,8 @@ def launch_setup(context):
     if float(LaunchConfiguration('grasp_min_effort').perform(context)) == 0.0:
         stand['stand_grip_current_a'] = 0.0
 
+    dock_backend = 'nav2' if LaunchConfiguration('use_docking').perform(context).lower() == 'true' else 'skill'
+
     def skill(cls, name, *extra):
         return ComposableNode(package='skills', plugin=f'skills::{cls}', name=name, parameters=[config, *extra])
 
@@ -64,7 +66,8 @@ def launch_setup(context):
                 # arm: target "look"이면 도착 nav_look_m 전부터 pose_look으로 (approach와 같은 느린 팔)
                 skill('NavigateSkill', 'skill_navigate', arm, {'arm_velocity_scale': 0.15}),
                 # arm: pose_look (상자 도킹 중 look 자세) · 주행 중이라 팔은 천천히 (arm.yaml 1.0을 덮음)
-                skill('ApproachSkill', 'skill_approach', arm, {'arm_velocity_scale': 0.15}),
+                # use_docking:=true면 붙기·빠지기를 Nav2 docking server에 맡김 (approach_dock_backend nav2)
+                skill('ApproachSkill', 'skill_approach', arm, {'arm_velocity_scale': 0.15, 'approach_dock_backend': dock_backend}),
             ]),
     ]
 
@@ -75,5 +78,7 @@ def generate_launch_description():
                               description='잡기 판정 (닫은 뒤 그리퍼 위치 + 전류). mock 그리퍼는 퍽 없이 끝까지 닫혀 false'),
         DeclareLaunchArgument('grasp_min_effort', default_value='0.25',
                               description='잡기 판정 전류 하한 [A] — Isaac은 그리퍼 전류를 안 내서 0 (위치만, opencr_bridge)'),
+        DeclareLaunchArgument('use_docking', default_value='false',
+                              description='상자 붙기·빠지기를 Nav2 docking server로 (skill_approach approach_dock_backend nav2)'),
         OpaqueFunction(function=launch_setup),
     ])

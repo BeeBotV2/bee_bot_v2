@@ -208,6 +208,7 @@ def generate_launch_description():
         flag('nvblox_map', '~/.ros/nvblox.nvblx', 'nvblox 지도 파일 — 매핑이면 끌 때 여기에 저장, 위치추정이면 시작할 때 여기서 불러옴'),
         flag('cuvslam_map', '', 'cuVSLAM 지도 폴더 — 매핑이면 끌 때 저장, 위치추정이면 그 지도 안에서 자리를 찾음 (비면 안 씀 · 켠 자리가 원점)'),
         flag('use_cmd_chain', 'true', '바퀴 명령 체인 (velocity_smoother · collision_monitor · lifecycle_manager_base) — use_nav2와 별개: 지도 없이(map:=none)도 수동 조작이 되려면 늘 필요'),
+        flag('use_docking', 'false', 'Nav2 docking server(opennav_docking)로 상자 붙기·빠지기 (11-20 시험용) — skill_approach가 DockRobot/UndockRobot을 부름. opennav_docking 패키지 필요'),
         flag('use_nav2', 'true', '진짜 Nav2 서버 (planner · controller · behavior · bt_navigator) — 바퀴 명령 체인(velocity_smoother · collision_monitor)은 use_cmd_chain'),
         flag('nav2_composition', 'true', 'Nav2 서버·관리자를 한 프로세스(nav2_container, 컴포넌트)로 — 메모리 절약 · false면 서버마다 프로세스 (예전)'),
         flag('py_helpers_one_process', 'true', 'python 보조 노드(pole_depth_gate · nvblox_map · rewind)를 한 프로세스(py_helpers)로 — 메모리 절약 · false면 따로 (예전)'),
@@ -339,7 +340,13 @@ def nav2_nodes():
                                                        LaunchConfiguration('nav2_container_params'), f"'.lower() {op} 'true'"])),
                parameters=p, **QUICK_STOP) for op, p in (('==', params), ('!=', []))],
         *[component(pkg, plugin, exe, r, x, on) for pkg, exe, plugin, r, x, on in servers if exe != standalone],
+        # Nav2 docking server (use_docking:=true, 11-20 시험) — 상자 = 충전 없는 도크. 인식 자세는 skill_approach가 /detected_dock_pose로 냄
+        #   제어는 fixed_frame(odom)에서 → map→odom 보정과 상관없음. 속도는 다른 서버처럼 /cmd_vel_nav → twist_mux → collision_monitor
+        Node(package='opennav_docking', executable='opennav_docking', name='docking_server', output='screen',
+             condition=when('use_nav2', 'use_docking'), parameters=params, remappings=[('cmd_vel', '/cmd_vel_nav')], **QUICK_STOP),
         TimerAction(period=LIFECYCLE_DELAY_S, actions=[
+            Node(package='nav2_lifecycle_manager', executable='lifecycle_manager', name='lifecycle_manager_docking', output='screen',
+                 condition=when('use_nav2', 'use_docking'), parameters=[{'autostart': True, 'node_names': ['docking_server']}], **QUICK_STOP),
             *[server(lm[0], lm[1], name, [], [], on) for name, on in managers],
             *[component(lm[0], lm[2], name, [], [], on) for name, on in managers],
         ]),

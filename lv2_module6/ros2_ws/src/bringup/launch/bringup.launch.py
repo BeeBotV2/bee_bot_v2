@@ -97,6 +97,7 @@ def container(name, nodes, condition):
 
 # ros_system에 그대로 넘기는 하드웨어·서버 인자 (기본값 = 실기). 테스트베드 faker가 대역에 맞게 덮어씀
 ROS_SYSTEM_ARGS = {
+    'use_docking': ('false', 'Nav2 docking server로 상자 붙기·빠지기 (11-20 시험) — opennav_docking 필요 · skills에도 전달'),
     'map_backend': ('static_2d', 'nvblox | static_2d (saved 2D map + cuVSLAM, no nvblox) — 11-18 기본 static_2d: map:=saved면 <map_dir>/<map_name>/map.yaml을 /map으로 (매핑 map:=slam은 nvblox)'),
     'nvblox_params_file': ('', 'optional nvblox parameter YAML; empty uses ros_system default'),
     'urdf': ('default', '로봇 모델 = lv2_module6/urdf/<이 이름>/urdf.xacro (폴더 하나 = 모델 하나, 메시는 그 폴더 meshes/)'),
@@ -396,7 +397,8 @@ def generate_launch_description():
         #   시작 자세(stow)는 skill_pose
         GroupAction([IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare('skills'), 'launch', 'skills.launch.py'])),
-            launch_arguments={'grasp_check': LaunchConfiguration('grasp_check')}.items())],
+            launch_arguments={'grasp_check': LaunchConfiguration('grasp_check'),
+                              'use_docking': LaunchConfiguration('use_docking')}.items())],
             condition=IfCondition(LaunchConfiguration('use_mission'))),
         # 주사위 미션 — /cmd/mission start로 시작 (abort로 멈춤). 출발 자세만 launch 인자로 덮어씀
         node('plan', 'mission_manager', condition=when('use_mission', 'use_mission_manager', composed=False,

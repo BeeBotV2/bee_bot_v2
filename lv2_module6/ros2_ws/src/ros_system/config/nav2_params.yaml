@@ -280,6 +280,43 @@ global_costmap:
 # ─────────────────────────────────────────────────────────────────────────────
 # velocity_smoother — /cmd_vel_mux → /cmd_vel_smoothed. 한계 = 실기
 # ─────────────────────────────────────────────────────────────────────────────
+docking_server:
+  # Nav2 docking server (use_docking:=true, 11-20 시험) — 상자 = 충전 없는 도크(SimpleNonChargingDock)
+  #   skill_approach가 DockRobot(dock_pose = 인지 상자에서 계산한 '붙은 로봇 자세', use_dock_id false, 대기 자리로 가기 안 함)을 부르고
+  #   같은 자세를 /detected_dock_pose(odom)로 계속 냄 → 서버가 odom(fixed_frame)에서 그 자세로 붙음 · UndockRobot은 대기 자리(staging_x_offset)로 후진
+  ros__parameters:
+    controller_frequency: 20.0
+    initial_perception_timeout: 5.0
+    dock_approach_timeout: 30.0
+    undock_linear_tolerance: 0.03
+    undock_angular_tolerance: 0.17
+    max_retries: 2
+    base_frame: "base_footprint"
+    fixed_frame: "odom"
+    dock_prestaging_tolerance: 0.6
+    dock_plugins: ["bee_box"]
+    bee_box:
+      plugin: "opennav_docking::SimpleNonChargingDock"
+      docking_threshold: 0.01          # [m] 붙은 자세에서 이 안이면 도착 (skill_approach dock_box tol 1 cm와 같게)
+      staging_x_offset: -0.25          # [m] 대기 자리 = 붙은 자세에서 뒤로 (standoff 0.25 + gap 기준 · mission_manager exit과 비슷)
+      staging_yaw_offset: 0.0
+      use_external_detection_pose: true
+      external_detection_timeout: 1.0
+      external_detection_translation_x: 0.0   # /detected_dock_pose가 이미 '붙은 로봇 자세'라 보정 없음
+      external_detection_translation_y: 0.0
+      external_detection_rotation_roll: 0.0
+      external_detection_rotation_pitch: 0.0
+      external_detection_rotation_yaw: 0.0
+      filter_coef: 0.3
+    controller:
+      k_phi: 3.0
+      k_delta: 2.0
+      v_linear_min: 0.03               # 실기 바퀴 데드밴드 위 (approach_min_speed)
+      v_linear_max: 0.06               # approach_v_max와 같게
+      v_angular_max: 0.5
+      use_collision_detection: false   # 상자 바로 앞까지 붙어야 함 — 마지막 안전은 collision_monitor(카메라)
+      transform_tolerance: 0.2
+
 velocity_smoother:
   ros__parameters:
     smoothing_frequency: 20.0
