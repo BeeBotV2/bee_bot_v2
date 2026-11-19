@@ -28,6 +28,7 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "perception/msg/tracked_object_array.hpp"
 #include "skills/arm_io.hpp"
 #include "skills/skill_node.hpp"
@@ -75,6 +76,9 @@ public:
       policies_[name] = std::move(p);
     }
     cmd_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_nav", rclcpp::QoS(10));
+    // 상자 도킹 사이클(붙기 시작 ~ exit 끝) 동안 true — ros_system grid_obstacle_cloud가 도면 벽 점구름을 끔 (11-20)
+    dock_pub_ = create_publisher<std_msgs::msg::Bool>("/skills/docking", rclcpp::QoS(1).reliable().transient_local());
+    set_docking(false);
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odom", 10,
       [this](nav_msgs::msg::Odometry::ConstSharedPtr m) { odom_ = m; });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("/imu", rclcpp::SensorDataQoS().keep_last(1),
@@ -90,10 +94,17 @@ protected:
     box_mode_ = false;
     arm_.stop();
     halt();
+    set_docking(false);
   }
 
 private:
   struct Policy { SkillModel model; ml::Policy net; };
+
+  void set_docking(bool on) {
+    std_msgs::msg::Bool m;
+    m.data = docking_ = on;
+    dock_pub_->publish(m);
+  }
 
   static double yaw_of(const geometry_msgs::msg::Quaternion & q) {
     return std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
@@ -127,6 +138,7 @@ private:
     started_ = progress_ = last_meas_ = now();
     done_ = done;
     box_mode_ = g.values.size() >= 2;
+    if (box_mode_) set_docking(true);
     have_box_ = frozen_ = false;
     if (box_mode_) {
       gap_ = g.values[0];
@@ -324,6 +336,8 @@ private:
 
   void end(bool ok, const std::string & why) {
     timer_->cancel();
+    // 붙기 성공이면 exit까지 도킹 중 유지 · 붙기 실패나 exit 끝이면 해제
+    if (exit_ || !ok) set_docking(false);
     box_mode_ = false;
     halt();
     done_(ok, why);
@@ -491,6 +505,8 @@ private:
   Done done_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr dock_pub_;
+  bool docking_ = false;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   nav_msgs::msg::Odometry::ConstSharedPtr odom_;

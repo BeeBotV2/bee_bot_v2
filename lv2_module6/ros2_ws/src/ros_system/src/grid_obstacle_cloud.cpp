@@ -8,6 +8,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 
@@ -26,6 +27,13 @@ public:
     margin_ = declare_parameter<double>("body_margin_m", 0.02);
     pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(declare_parameter<std::string>("output_topic", "/arena/walls_cloud"),
                                                             rclcpp::SensorDataQoS().keep_last(1));
+    // 상자 도킹 중(/skills/docking true — skill_approach가 붙기 시작 ~ 빠지기 끝)에는 빈 점구름 — 도킹은 odom 기준으로 상자만 보고 움직이고,
+    //   map 기준 도면 벽은 위치가 틀어지면 상자 앞 몇 cm 구간에 끼어들어 막음 (실기 11-16·11-19). 토픽은 계속 내서 collision_monitor 입력이 끊기지 않게
+    dock_sub_ = create_subscription<std_msgs::msg::Bool>("/skills/docking", rclcpp::QoS(1).reliable().transient_local(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr m) {
+        if (m->data != docking_) RCLCPP_INFO(get_logger(), "%s", m->data ? "상자 도킹 중 — 도면 벽 점구름 끔" : "도킹 끝 — 도면 벽 점구름 다시 켬");
+        docking_ = m->data;
+      });
     sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       declare_parameter<std::string>("grid_topic", "/arena/walls_only"), rclcpp::QoS(1).reliable().transient_local(),
       [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr m) { grid_ = m; });
@@ -34,6 +42,7 @@ public:
 
 private:
   void tick() {
+    if (docking_) { publish({}); return; }
     if (!grid_) return;
     geometry_msgs::msg::TransformStamped t;
     try {
@@ -69,6 +78,14 @@ private:
         pts.emplace_back(static_cast<float>(bx), static_cast<float>(by));
       }
     }
+    publish(pts);
+    if (dropped_) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "도면 벽 %zu칸이 몸 안 — 위치 오차로 보고 뺌 (안전 입력에서 제외)", dropped_);
+      dropped_ = 0;
+    }
+  }
+
+  void publish(const std::vector<std::pair<float, float>> & pts) {
     sensor_msgs::msg::PointCloud2 out;
     out.header.stamp = now();
     out.header.frame_id = base_;
@@ -78,10 +95,6 @@ private:
     sensor_msgs::PointCloud2Iterator<float> x(out, "x"), y(out, "y"), z(out, "z");
     for (const auto & p : pts) { *x = p.first; *y = p.second; *z = static_cast<float>(z_); ++x; ++y; ++z; }
     pub_->publish(out);
-    if (dropped_) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "도면 벽 %zu칸이 몸 안 — 위치 오차로 보고 뺌 (안전 입력에서 제외)", dropped_);
-      dropped_ = 0;
-    }
   }
 
   tf2_ros::Buffer buf_;
@@ -90,6 +103,8 @@ private:
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   nav_msgs::msg::OccupancyGrid::ConstSharedPtr grid_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dock_sub_;
+  bool docking_ = false;
   double front_, rear_, half_, margin_;
   size_t dropped_ = 0;
   double radius_ = 1.0, z_ = 0.15;
