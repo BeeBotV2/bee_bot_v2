@@ -64,6 +64,14 @@ isaac_up() {  # $1 = 지도 인자 (map:=slam … · map:=none) — 나머지는
   export ISAAC_ROS_ARGS="$1 use_pole_back_cam:=false operation:=MANUAL use_perception:=auto arena_map:=none ${ISAAC_EXTRA_ROS_ARGS:-}"
   export BEE_BACK_CAM=false  # camera_adapter도 앞 · 손 카메라만 (실기 start.sh 기본과 같게)
   export ISAAC_AUTOPLAY="${ISAAC_AUTOPLAY:-1}"
+  # cuVSLAM 랜드마크 · 특징점을 /cuvslam/vis/*로 (mapping.rviz에서 봄) — 끄려면 BEE_CUVSLAM_VIS=0
+  export BEE_CUVSLAM_VIS="${BEE_CUVSLAM_VIS:-1}"
+  # map 기준 = EKF odom (start.sh와 같음) — cuvslam 기준이면 정지 중에도 map→odom이 초당 최대 5 cm(MapGate rate)씩 끌려가
+  #   기체가 밀려 보이고 먼 벽이 이중으로 찍혔음 (Isaac 2026-11-19). cuVSLAM 기준으로 보려면 BEE_MAP_ANCHOR=cuvslam
+  export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-odom}"
+  # rig 수평 (cuvslam_slam BEE_CUVSLAM_LEVEL) — rig = 숙인 카메라면 planar_constraints 면이 바닥보다 기울어 지도 랜드마크가
+  #   비스듬한 판으로 쌓였음 (11-15 · Isaac 2026-11-19 RViz). 끄려면 BEE_CUVSLAM_LEVEL=0
+  export BEE_CUVSLAM_LEVEL="${BEE_CUVSLAM_LEVEL:-1}"
   echo "[mapping] 장면 scene_sim(퍽 · 신호등 없음) · ROS 인자: $ISAAC_ROS_ARGS"
   # cm_kick: controller_manager가 /robot_description을 못 받고 멈추면 다시 보냄 (isaac_mission.sh와 같음)
   STANDALONE=$(realpath "$HERE/../isaac/standalone")

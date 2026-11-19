@@ -40,13 +40,18 @@ nvblox_node:
       # 2D 격자로 자르는 높이 (map z = 바닥) — Nav2 costmap(min 0.03 · max 0.6) · 기존 SLAM Grid(0.03~0.6)와 같은 기준
       esdf_slice_height: 0.1
       # min 0.03 → 0.08: depth 오차(1~3 m에서 수 cm)로 바닥이 3 cm 위로 찍혀 앞이 트여 있어도 검은 부채꼴(가짜 장애물)이 생겼음 (실기 2026-11-09, RViz /map)
-      #   대신 높이 8 cm 미만의 낮은 물체는 지도에 안 남는다 — 낮은 물체를 잡아야 하면 0.05로
-      esdf_slice_min_height: 0.08
+      #   0.08 → 0.1 (사용자 2026-11-19): 높이 10 cm 미만의 낮은 물체는 지도에 안 남는다 — 낮은 물체를 잡아야 하면 0.05로
+      esdf_slice_min_height: 0.1
       esdf_slice_max_height: 0.2   # 11-18 사용자: 벽 정합 입력은 바닥 위 0.2 m까지만 (0.3 → 0.2)
       # pole_front_cam 바닥은 화면 맨 아래도 0.59 m — depth 잡음은 거리에 따라 커진다 (costmap raytrace는 3.0)
       # 4.5 → 2.5: 경기장(4.4 m 폭) 벽 너머·트랙 밖까지 '비어 있음'으로 칠해졌음 (실기 2026-11-11, /map). 멀수록 depth 잡음도 커짐
       #   대신 먼 벽은 가까이 가야 지도에 들어온다 — 너무 안 칠해지면 3.0으로 (nvblox 기본 7.0)
-      projective_integrator_max_integration_distance_m: 2.5
+      # 2.5 → 1.5 (사용자 2026-11-19): 먼 벽일수록 자세 각도 오차가 거리만큼 커져 이중벽이 찍힘 (1° → 2.5 m에서 4.4 cm, 1.5 m에서 2.6 cm)
+      #   D435 depth RMS도 1.5 m에서 약 9 mm (2.5 m 26 mm) — 대신 바깥 벽은 1.5 m 안으로 다가가야 지도에 들어감
+      projective_integrator_max_integration_distance_m: 1.5
+      # 4 → 1: nvblox.yaml과 같음 — 벽 뒤 TSDF 음수 띠가 /map 벽을 3~4칸 굵게 만들었음 (Isaac 2026-11-19). 구멍 나면 2.0 → 3.0
+      #   1 → 0.5 (시험, 사용자 2026-11-19 · nvblox.yaml과 같음) — 45° 벽이 끊기면 1.0으로
+      projective_integrator_truncation_distance_vox: 0.5
       workspace_bounds_type: "height_bounds"
       workspace_bounds_min_height_m: -0.1
       workspace_bounds_max_height_m: 0.8
