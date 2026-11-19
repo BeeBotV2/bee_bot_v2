@@ -119,7 +119,8 @@ class MapGate:
       작은 회전 차이가 큰 이동으로 보임 — 실기 11-15: 원점에서 4.7 m, EKF·cuVSLAM yaw 11° 차 → map→odom 이동 0.9 m로 보여
       초당 2 cm로만 따라가 map 위치가 수십 cm 늦게 붙음(보정 절반이 거름). 3~4°만 달라도 0.30 m '점프'로 잠길 수 있었음."""
 
-    def __init__(self, jump_m=0.30, jump_deg=15.0, rate_m=0.05, rate_deg=5.0, settle_s=0.0):
+    def __init__(self, jump_m=0.30, jump_deg=15.0, rate_m=0.05, rate_deg=5.0, settle_s=0.0, lock=True):
+        self.lock = lock   # False = 큰 점프도 잠그지 않고 ②로 따라감 (gate_lock, 매핑)
         self.jump_m, self.jump_rad = jump_m, math.radians(jump_deg)
         self.rate_m, self.rate_rad = rate_m, math.radians(rate_deg)
         self.settle_s = settle_s
@@ -168,7 +169,7 @@ class MapGate:
                 self.resettled = (d, math.degrees(r))
             self.held = tuple(cand)
             return self.held, True
-        if self.locked or d > self.jump_m or r > self.jump_rad:
+        if self.lock and (self.locked or d > self.jump_m or r > self.jump_rad):
             self.locked = True
             self.rejected += 1
             return self.held, False
@@ -227,6 +228,8 @@ class CuvslamSlam(Node):
         self.near_raw = max(math.ceil(self.min_depth * self.depth_scale) - 1, 0)  # depth 원값 < min_depth·scale ⇔ ≤ 이 값 (정수)
         # SLAM 지도 키프레임 수 상한 (cuVSLAM 기본 300) — 경기장이 작아 150이면 충분, 메모리 절약 (11-15)
         self.max_map_size = int(self.declare_parameter('max_map_size', 150).value)
+        self.max_lm_dist = float(self.declare_parameter('max_landmarks_distance', 100.0).value)  # [m] 이보다 먼 랜드마크는 지도에 안 넣음
+        self.throttle_ms = int(self.declare_parameter('throttling_time_ms', 0).value)  # [ms] 루프 클로저 사이 최소 간격
         # EKF에 주는 속도 분산 — 실측으로 맞출 값 (σ 0.05 m/s · 0.05 rad/s에서 시작)
         self.lin_var = float(self.declare_parameter('linear_variance', 0.0025).value)
         self.ang_var = float(self.declare_parameter('angular_variance', 0.0025).value)
@@ -236,7 +239,8 @@ class CuvslamSlam(Node):
                             float(self.declare_parameter('gate_rate_m', 0.05).value),
                             float(self.declare_parameter('gate_rate_deg', 5.0).value),
                             # [s] 첫 프레임 뒤 이만큼은 거르지 않음 — 출발 자리에 서서 bringup 중 (odom 시작 튐 흡수). 이 안에 주행 시작하지 말 것
-                            float(self.declare_parameter('gate_settle_s', 15.0).value)) \
+                            float(self.declare_parameter('gate_settle_s', 15.0).value),
+                            bool(self.declare_parameter('gate_lock', True).value)) \
             if bool(self.declare_parameter('map_gate', True).value) else None
         # [rad/s] odom 회전 속도가 이보다 크면 map→odom을 그대로 둠 (회전 중 보정 멈춤, 11-16) · 0 = 안 멈춤
         self.hold_wz = float(self.declare_parameter('gate_hold_wz', 0.2).value)
@@ -396,7 +400,8 @@ class CuvslamSlam(Node):
         rgbd.enable_depth_stereo_tracking = False
         odom_cfg = cuvslam.Tracker.OdometryConfig(odometry_mode=cuvslam.Tracker.OdometryMode.RGBD, async_sba=True,
                                                   rgbd_settings=rgbd)
-        slam_cfg = cuvslam.Tracker.SlamConfig(planar_constraints=True, max_map_size=self.max_map_size) \
+        slam_cfg = cuvslam.Tracker.SlamConfig(planar_constraints=True, max_map_size=self.max_map_size,
+                                              max_landmarks_distance=self.max_lm_dist, throttling_time_ms=self.throttle_ms) \
             if self.publish_map_tf else None
         if self.vis:
             odom_cfg.enable_observations_export = odom_cfg.enable_landmarks_export = True
