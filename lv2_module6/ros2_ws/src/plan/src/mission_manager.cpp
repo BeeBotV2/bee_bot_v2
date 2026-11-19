@@ -158,12 +158,6 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
   wall_fit_ = declare_parameter<bool>("arena_corr_wall_fit", wall_fit_);
   acorr_boxes_ = declare_parameter<bool>("arena_corr_boxes", acorr_boxes_);
-  wall_gate_ = declare_parameter<double>("arena_corr_wall_gate", wall_gate_);
-  wall_min_cells_ = static_cast<int>(declare_parameter<int64_t>("arena_corr_wall_min_cells", wall_min_cells_));
-  wall_min_eig_ = declare_parameter<double>("arena_corr_wall_min_eig", wall_min_eig_);
-  wall_keep_s_ = declare_parameter<double>("arena_corr_wall_keep_s", wall_keep_s_);
-  const double wall_period = declare_parameter<double>("arena_corr_wall_period", 2.0);
-  const auto wall_grid = declare_parameter<std::string>("arena_corr_wall_grid", "/nvblox_node/static_occupancy_grid");
   acorr_gate_ = declare_parameter<double>("arena_corr_gate", acorr_gate_);
   acorr_max_shift_ = declare_parameter<double>("arena_corr_max_shift", acorr_max_shift_);
   acorr_max_rot_ = declare_parameter<double>("arena_corr_max_rot", acorr_max_rot_);
@@ -269,13 +263,32 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   walls_only_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/arena/walls_only", latched);
   publish_walls();
   corr_pub_ = create_publisher<std_msgs::msg::String>("/arena/correction", latched);
-  if (wall_fit_) {  // nvblox 격자는 보통 토픽(주기 발행) — best effort로 받으면 reliable 발행도 받음
-    grid_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(wall_grid, rclcpp::SensorDataQoS().keep_last(1),
-      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr m) { grid_ = m; });
-    wall_timer_ = create_wall_timer(std::chrono::duration<double>(wall_period), [this]() { wall_tick(); });
+  if (wall_fit_) {
+    wall_fit_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+      "/localization/wall_fit", latched,
+      [this](const std_msgs::msg::Float64MultiArray & msg) {
+        const auto & d = msg.data;
+        if (d.size() != 8) return;
+        wall_ok_ = true;
+        wall_rms_ = d[4];
+        if (d[5] != 0.0 || d[6] != 0.0 || d[7] != 0.0) {
+          loc_last_ = wall_s();
+          const ArenaCorr step{d[5], d[6], d[7]};
+          for (auto & mk : marks_) {
+            if (!mk.hits) continue;
+            const auto q = unapply_corr(step, {mk.qx, mk.qy, 0.0});
+            mk.qx = q.x;
+            mk.qy = q.y;
+          }
+        }
+        const ArenaCorr residual{d[0], d[1], d[2], static_cast<int>(d[3])};
+        if (acorr_src_ != "walls" || corr_moved(residual, acorr_, loc_min_m_, loc_min_rad_) ||
+            d[5] != 0.0 || d[6] != 0.0 || d[7] != 0.0)
+          commit_corr(residual, "walls", "wall_localization");
+      });
   }
   loc_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/localization/map_correction", 10);
-  if (loc_on_) loc_timer_ = create_wall_timer(std::chrono::duration<double>(loc_period), [this]() { loc_tick(); });
+  if (loc_on_ && !wall_fit_) loc_timer_ = create_wall_timer(std::chrono::duration<double>(loc_period), [this]() { loc_tick(); });
   marks_.assign(start_boxes_.size() + loc_boxes_.size(), Mark{});  // 미션 전(arena_corr_idle)에도 보정
   publish_corr("");
   cmd_sub_ = create_subscription<std_msgs::msg::String>("/cmd/mission", rclcpp::QoS(10).reliable(),
@@ -370,14 +383,11 @@ void MissionManager::on_command(const std::string & cmd) {
   marks_.assign(start_boxes_.size() + loc_boxes_.size(), Mark{});
   acorr_seen_.clear();
   acorr_used_.clear();
-  acorr_src_ = "none";
-  wall_ok_ = false;
-  wall_ = {};
-  wall_why_.clear();
-  wall_pts_.clear();
-  wall_prev_.clear();
   acorr_sent_.clear();
-  if (acorr_.n) { acorr_ = {}; publish_walls(); }
+  if (!wall_ok_) {
+    acorr_src_ = "none";
+    if (acorr_.n) { acorr_ = {}; publish_walls(); }
+  }
   publish_corr("");  // active true
   acorr_walls_ = {};
   barcode_.clear();
@@ -1705,85 +1715,17 @@ void MissionManager::commit_corr(const ArenaCorr & c, const char * src, const st
   char line[256];
   std::snprintf(line, sizeof(line), "{\"t\": %.3f, \"phase\": \"%s\", \"src\": \"%s\", \"dx\": %.4f, \"dy\": %.4f, \"dth_deg\": %.2f, \"n\": %d, "
                 "\"wall_rms\": %.4f, \"boxes\": [", wall_s() - mission_t0_, phase_name(phase_), src, c.dx, c.dy, c.dth * 180 / M_PI, c.n,
-                wall_.rms);
+                wall_rms_);
   append_log("arena_correction.jsonl", line + acorr_used_ + "]}");
   // /arena/walls 다시 보내기는 크게 바뀔 때만 — 보낼 때마다 Nav2 costmap 정적 층이 다시 잡힘 (11-14: 주행 중 10번 → 벽에 부딪힘)
   if (acorr_walls_m_ > 0 && corr_moved(acorr_, acorr_walls_, acorr_walls_m_, acorr_walls_rad_)) { acorr_walls_ = acorr_; publish_walls(); }
 }
 
-// 벽 정합 — nvblox 2D 점유 격자(/map 말고 원본: /map에는 도면 벽이 겹쳐 있어 자기 자신에 맞춰짐)의 점유 칸을 도면 벽에 맞춤.
-//   앞뒤 카메라가 본 벽 전부가 근거라 상자 인지 없이 회전이 잡힘. 지난 결과(없으면 지금 보정)에서 시작
-void MissionManager::wall_tick() {
-  // arena_correction(상자)과 따로 — wall_fit만 켜도 벽으로 보정 (11-15)
-  if (!(active_ || acorr_idle_) || !grid_ || walls_.size() < 4) return;
-  const auto & g = *grid_;
-  std::vector<std::pair<double, double>> cells;
-  const double res = g.info.resolution;
-  const int w = static_cast<int>(g.info.width), h = static_cast<int>(g.info.height);
-  const auto at = [&g, w, h](int r, int k) { return r < 0 || k < 0 || r >= h || k >= w ? -1 : g.data[static_cast<size_t>(r) * w + k]; };
-  // 벽 겉면만 = 빈 칸(0)과 맞닿은 점유 칸 — nvblox 벽은 ~20 cm 두께로 뒤로 번져, 다 쓰면 한쪽 벽만 보일 때 그쪽으로 끌림
-  //   (11-15 지도 20261115_094059: 위 벽을 못 봐서 아래 벽 띠 가운데로 dy −0.35 m)
-  geometry_msgs::msg::TransformStamped mo;
-  try {
-    mo = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero);
-  } catch (const std::exception &) {
-    return;
-  }
-  const auto & q = mo.transform.rotation;
-  const double myaw = std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
-  const double mx = mo.transform.translation.x, my = mo.transform.translation.y, mc = std::cos(myaw), ms = std::sin(myaw);
-  // 새로 생긴 겉면 칸 → odom (받은 지금의 map→odom ≈ 쌓을 때의 것). 이미 있던 칸은 옛 map 좌표라 다시 안 넣음
-  const double t_now = wall_s();
-  std::set<long long> cur;
-  for (int r = 0; r < h; ++r)
-    for (int k = 0; k < w; ++k)
-      if (at(r, k) >= 50 && (at(r - 1, k) == 0 || at(r + 1, k) == 0 || at(r, k - 1) == 0 || at(r, k + 1) == 0)) {
-        const double px = g.info.origin.position.x + (k + 0.5) * res, py = g.info.origin.position.y + (r + 0.5) * res;
-        const long long key = static_cast<long long>(std::lround(px / res)) * 1000003LL + std::lround(py / res);
-        cur.insert(key);
-        if (wall_prev_.count(key)) continue;
-        const double dx = px - mx, dy = py - my;
-        wall_pts_.push_back({mc * dx + ms * dy, -ms * dx + mc * dy, t_now});
-      }
-  wall_prev_ = std::move(cur);
-  wall_pts_.erase(std::remove_if(wall_pts_.begin(), wall_pts_.end(), [&](const WallPt & p) { return t_now - p.t > wall_keep_s_; }),
-                  wall_pts_.end());
-  // 같은 odom 칸은 하나만 (오래 서 있으면 같은 벽이 쌓이지 않게 — 새 칸만 넣으니 대개 이미 하나)
-  std::set<long long> seen;
-  for (auto it = wall_pts_.rbegin(); it != wall_pts_.rend(); ++it) {
-    if (!seen.insert(static_cast<long long>(std::lround(it->x / res)) * 1000003LL + std::lround(it->y / res)).second) continue;
-    cells.push_back({mc * it->x - ms * it->y + mx, ms * it->x + mc * it->y + my});
-  }
-  std::vector<std::array<double, 4>> segs;
-  for (size_t i = 0; i + 3 < walls_.size(); i += 4) {
-    const auto a = arena_to_map({walls_[i], walls_[i + 1], 0}, start_), b = arena_to_map({walls_[i + 2], walls_[i + 3], 0}, start_);
-    segs.push_back({a.x, a.y, b.x, b.y});
-  }
-  const auto f = fit_walls(segs, cells, acorr_, wall_gate_, wall_min_cells_, wall_min_eig_, acorr_max_shift_,
-                           acorr_max_rot_);
-  if (!f.ok) {
-    if (f.why != wall_why_) RCLCPP_INFO(get_logger(), "벽 정합 안 됨 (%s · 맞은 칸 %d · 고유값 %.3f)%s", f.why.c_str(), f.inliers, f.min_eig,
-                                        wall_ok_ ? " — 지난 벽 보정 유지" : acorr_boxes_ ? " — 상자 보정" : " — 보정 없음");
-    wall_why_ = f.why;
-    return;
-  }
-  wall_why_.clear();
-  const bool first = !wall_ok_;
-  wall_ok_ = true;
-  wall_ = f;  // 격자 그대로의 차이 (다음 정합의 시작점)
-  // 벽 칸은 odom으로 쌓아 지금의 map→odom으로 되돌리므로(위) 로봇 위치를 옮기면 예전 벽도 따라옴 — f.c가 곧 남은 오차.
-  //   11-18: 예전엔 넘긴 몫(loc_sent_)을 한 번 더 빼서 남은 회전이 반대 부호 → 0으로 잘려 0.5°가 끝까지 남았음 (sim Y1: −2.5° 넣고 S4 4 cm)
-  //   바뀜 문턱도 loc_min(2 cm · 0.2°) — acorr_step(3 cm · 1°)이면 1° 아래 회전은 영영 안 고쳐짐 (4 m 앞 7 cm)
-  const ArenaCorr c = f.c;
-  if (first || corr_moved(c, acorr_, loc_min_m_, loc_min_rad_))
-    commit_corr(c, "walls", fmt("맞은 칸 %.0f · rms %.1f cm", f.inliers, f.rms * 100));
-}
-
 // 보정 → 로봇 위치 — 근거가 충분하면 보정 조각을 cuvslam_slam에 넘기고 (map' = 조각⁻¹ · map) 그만큼 이쪽 보정·관측에서 뺌.
 //   조각 = loc_step(5 cm · 1°)까지 · loc_period(2 s)마다 하나 — cuvslam MapGate(초당 5 cm · 5°)가 부드럽게 옮김, 잠금(0.30 m)에 안 걸림
 void MissionManager::loc_tick() {
-  if (!(acorr_on_ || wall_fit_) || !(active_ || acorr_idle_) || acorr_.n == 0) return;
-  if (!(acorr_src_ == "walls" || acorr_.n >= loc_min_n_)) return;   // 상자 하나 · 둘로는 위치를 안 옮김 (11-15: 상자 1개로 dy −0.2 m)
+  if (!acorr_on_ || !(active_ || acorr_idle_) || acorr_.n == 0) return;
+  if (acorr_.n < loc_min_n_) return;   // 상자 하나 · 둘로는 위치를 안 옮김 (11-15: 상자 1개로 dy −0.2 m)
   if (std::hypot(acorr_.dx, acorr_.dy) < loc_min_m_ && std::abs(acorr_.dth) < loc_min_rad_) return;
   const ArenaCorr st = corr_step(acorr_, loc_step_m_, loc_step_rad_);
   std_msgs::msg::Float64MultiArray req;

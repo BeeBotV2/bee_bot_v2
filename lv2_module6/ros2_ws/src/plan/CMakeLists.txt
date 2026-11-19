@@ -58,11 +58,11 @@ target_link_libraries(${PROJECT_NAME}_nodes PUBLIC rclcpp::rclcpp rclcpp_action:
   ${moveit_msgs_TARGETS} ${control_msgs_TARGETS} ${shape_msgs_TARGETS} ${visualization_msgs_TARGETS}
   ${perception_TARGETS} ${control_TARGETS} ${ml_TARGETS} ml::ml_onnx ${msgs_cpp} diagnostic_updater::diagnostic_updater ament_index_cpp::ament_index_cpp
   ${OpenCV_LIBS})
-foreach(node coordinator mission_manager)
+foreach(node coordinator mission_manager wall_localization)
   add_executable(${node} src/${node}_main.cpp)
   target_link_libraries(${node} ${PROJECT_NAME}_nodes)
 endforeach()
-install(TARGETS coordinator mission_manager DESTINATION lib/${PROJECT_NAME})
+install(TARGETS coordinator mission_manager wall_localization DESTINATION lib/${PROJECT_NAME})
 # 컴포넌트 (11-16 메모리) — 같은 클래스를 컨테이너 한 프로세스에 올림 (bringup core_composition). 실행 파일은 그대로
 find_package(rclcpp_components REQUIRED)
 set_target_properties(${PROJECT_NAME}_nodes PROPERTIES POSITION_INDEPENDENT_CODE ON)
