@@ -53,6 +53,7 @@
 #include "plan/msg/task_status.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
@@ -110,6 +111,8 @@ private:
   void go_observe();
   void barcode_phase();
   void barcode_done(bool ok, const std::string & why);  // 팔 stow로 → 다음 단계
+  void hires(bool on);              // 바코드 엿보기 동안만 손 카메라 컬러를 고해상도로 (끝나면 원래대로)
+  void peek_end(const std::string & why);  // 엿보기 끝 — 해상도 되돌리고 gaze 흐름으로
   void read_phase();
   void survey(size_t box);
   std::vector<std::string> goto_;  // start:GOTO 목록 (S1~S6 · L1~L3)
@@ -201,6 +204,17 @@ private:
   rclcpp::Time grip_front_at_{0, 0, RCL_ROS_TIME};  // grip_front_m_을 마지막으로 잰 시각
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr grip_depth_sub_;
   // 팔 과부하 대비 (11-14 실기: 신호를 기다리며 gaze로 2분 넘게 뻗고 있다가 joint2 과부하 → 팔이 처져 손 카메라가 바닥만 봄)
+  // 바코드 엿보기 (11-20): 팔은 접은 채 손목만 바코드로 + 손 카메라를 잠깐 1080p — 읽히면 바로 접음, 아니면 gaze 흐름
+  bool barcode_peek_ = true;
+  double barcode_peek_s_ = 4.0;              // [s] 고해상도 영상이 들어온 뒤 이만큼 안 읽히면 gaze로
+  double barcode_peek_switch_s_ = 5.0;       // [s] 도착 뒤 이만큼 고해상도 영상이 안 오면(전환 실패) 포기
+  double barcode_height_m_ = 0.15;           // [m] 바코드 중심 높이 — 인지 높이가 이상할 때
+  std::string peek_profile_ = "1920x1080x15", cam_profile_ = "640x360x15";
+  bool peek_sent_ = false, peek_done_ = false, hires_on_ = false;
+  rclcpp::Time peek_at_{0, 0, RCL_ROS_TIME}, hires_at_{0, 0, RCL_ROS_TIME}, cam_info_at_{0, 0, RCL_ROS_TIME};
+  uint32_t cam_width_ = 0;
+  rclcpp::AsyncParametersClient::SharedPtr cam_params_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr cam_info_sub_;
   bool barcode_gaze_after_signal_ = false;  // false면 위치 후보가 확인되는 즉시, 신호 관측과 병렬로 gaze
   rclcpp::Time gaze_free_{0, 0, RCL_ROS_TIME};  // 신호 대기가 끝나 gaze를 보내도 되는 때
   bool gaze_wait_noted_ = false;

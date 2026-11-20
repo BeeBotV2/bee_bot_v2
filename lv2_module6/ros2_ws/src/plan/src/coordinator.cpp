@@ -79,7 +79,7 @@ Coordinator::Coordinator(const rclcpp::NodeOptions & options)
   stand_box_max_m_ = declare_parameter<double>("stand_box_max_m", 0.50);
   place_spacing_ = declare_parameter<double>("place_spacing", 0.08);
   box_margin_m_ = declare_parameter<double>("box_margin_m", 0.03);
-  for (const auto & p : declare_parameter<std::vector<std::string>>("pose_names", {"stow", "carry_left", "carry_right", "gaze", "look"}))
+  for (const auto & p : declare_parameter<std::vector<std::string>>("pose_names", {"stow", "carry_left", "carry_right", "gaze", "look", "peek"}))
     pose_names_.insert(p);
   basket_.assign(static_cast<size_t>(declare_parameter<int>("basket_slots", 12)), PuckInfo{});
   {
@@ -325,7 +325,8 @@ bool Coordinator::validate(const SubGoalArray & plan, std::string & why) const {
   if (plan.goals.empty()) { why = "empty"; return false; }
   for (const auto & g : plan.goals) {
     if (!allowed.count(g.skill)) { why = "skill " + g.skill; return false; }
-    if (g.skill == "pose" && !pose_names_.count(g.target) && g.target.rfind("gaze@", 0) != 0) {
+    if (g.skill == "pose" && !pose_names_.count(g.target) && g.target.rfind("gaze@", 0) != 0 &&
+        g.target.rfind("peek@", 0) != 0) {
       why = "pose " + g.target;
       return false;
     }
