@@ -150,6 +150,12 @@ def main():
                 st['exit'] = 1
                 log.error(f'미션이 이미 {st["phase"]} — 끝나거나 abort한 뒤에 다시')
             return
+        if not st['running'] and st['phase'] in IDLE:   # start가 안 닿음 (DDS 연결 직후 유실 등) — 다시 보냄. 미션 중이면 mission_manager가 무시
+            wait['n'] += 1
+            cmd.publish(String(data=start))
+            if wait['n'] % 5 == 0:
+                log.warn(f'start를 다시 보냄 — 아직 {st["phase"]} (/cmd/mission 구독자 {cmd.get_subscription_count()})')
+            return
         if a.from_survey:
             return
         if st['phase'] == 'BARCODE':
