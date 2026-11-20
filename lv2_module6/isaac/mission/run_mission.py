@@ -145,12 +145,13 @@ def main():
             if st['phase'] in IDLE and cmd.get_subscription_count() > 0:
                 cmd.publish(String(data=start))
                 st['started'] = True
+                st['last0'] = st['last']   # 이 상태가 그대로면 start가 안 닿은 것
                 log.info(f'{start} · 신호 {" ".join(seq)} ({counts}) · 바코드 {code}')
             elif st['phase'] not in (None, *IDLE):
                 st['exit'] = 1
                 log.error(f'미션이 이미 {st["phase"]} — 끝나거나 abort한 뒤에 다시')
             return
-        if not st['running'] and st['phase'] in IDLE:   # start가 안 닿음 (DDS 연결 직후 유실 등) — 다시 보냄. 미션 중이면 mission_manager가 무시
+        if not st['running'] and st['last'] == st['last0']:   # 상태가 그대로 = start가 안 닿음 (DDS 연결 직후 유실 등) — 다시 보냄. 끝난 미션은 다시 안 띄움
             wait['n'] += 1
             cmd.publish(String(data=start))
             if wait['n'] % 5 == 0:
