@@ -7,7 +7,7 @@ Isaac Sim을 beebot 하드웨어로 두고, 실기와 같은 bringup 전체로 �
 | `make_map.py`      | 장면 USD 벽 · 기둥 → `map/<장면>/map.pgm` · `map.yaml` (Nav2 벽 지도)                                  |
 | `mission.rviz`     | RViz 화면: 지도 · costmap · Nav2 경로 · footprint · 미션 마커 · 점구름 · 검출 영상                     |
 | `run_mission.py`   | `/cmd/mission start` → BARCODE·READ 단계에 바코드·신호 넣기 → DONE/ERROR까지 단계 출력                 |
-| `run_from_survey.py` | `run_mission.py --from-survey`와 같음 — 신호등 · 바코드는 성공으로 치고 SURVEY(주행 · 퍽 집기)부터              |
+| `run_from_survey.py` | 신호등 · 바코드는 성공으로 치고 SURVEY(주행 · 퍽 집기)부터 — 기본 실기, Isaac은 `--sim`                  |
 | `rviz.sh`          | `mission.rviz`를 시뮬 시계로 띄움                                                                      |
 | `plan_to_map.py`   | `plan.yaml` 실측 벽(`arena_walls`) → 실기용 Nav2 지도. 출발 자리(start)가 원점                         |
 | `map_to_nvblox.py` | 2D 지도(`map.pgm` + `map.yaml`) → 실기 nvblox 지도 파일(`nvblox.nvblx`) — `map:=saved`로 바로 위치추정 |
@@ -18,7 +18,7 @@ Isaac Sim을 beebot 하드웨어로 두고, 실기와 같은 bringup 전체로 �
 ```bash
 isaac/standalone/isaac_sim.sh          # 터미널 1: Play까지 (자동 Play: ISAAC_AUTOPLAY=1)
 python3 isaac/mission/run_mission.py   # 터미널 2: ROS 노드가 다 뜬 뒤
-python3 isaac/mission/run_from_survey.py   # 또는: 신호등 · 바코드 건너뛰고 주행 · 퍽 집기부터
+python3 isaac/mission/run_from_survey.py --sim   # 또는: 신호등 · 바코드 건너뛰고 주행 · 퍽 집기부터 (실기는 --sim 없이)
 ```
 
 - 기본 신호 `RGYRGRYGRGYR`(R5 Y3 G4) · 바코드 `P2-01`(오름차순) → L1 Y · L2 G · L3 R.
