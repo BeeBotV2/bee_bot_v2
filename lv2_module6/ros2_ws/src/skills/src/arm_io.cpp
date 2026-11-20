@@ -54,6 +54,10 @@ ArmIO::ArmIO(rclcpp::Node & node)
   //   빼고 실패 arm_jam (pick은 다음 후보, coordinator는 단계를 한 번 더). 0 = 끔. 11-08 실기 pick 62판: 막힘 최솟값 +0.64 A ·
   //   정상 최댓값 +0.40 A (arm_safety_monitor 3.0 A는 막혀도 안 닿음 — 실측 최대 0.9~1.1 A)
   node.declare_parameter<double>("jam_current_a", 0.5);
+  // traj_step(MoveIt 계획을 거치지 않는 궤적) 보내기 전 자기 충돌 검사 — false면 끔 (예전처럼) · 매번 읽음
+  node.declare_parameter<bool>("traj_collision_check", true);
+  node.declare_parameter<double>("traj_check_step_rad", 0.05);  // [rad] 관절이 이만큼 넘게 움직인 샘플마다 검사 (끝 자세는 늘)
+  node.declare_parameter<double>("traj_check_timeout_s", 2.0);  // [s] 검사 전체 상한 — 넘으면 실패
   node.declare_parameter<bool>("sag_fade", true);  // pick·load 시작 fade_sag (false = 예전처럼 닿는 구간 시작에서 한 번에 0) · 매번 읽음
   grip_current_a_ = node.declare_parameter<double>("grip_current_a", 0.1);  // 닫을 때 쥐는 힘 상한 [A] — 실기 11/08: gap 26 mm와 같이 0.1 A (약 7 N)
   grasp_check_ = node.declare_parameter<bool>("grasp_check", true);
@@ -328,41 +332,72 @@ ArmIO::Step ArmIO::traj_step(std::function<std::vector<Q5>(const Q5 &)> make) {
   };
 }
 
-// 샘플마다 /check_state_validity — 로봇 링크끼리(붙인 물체 포함) 닿는 자세가 하나라도 있으면 실패. world(octomap·퍽·적재함)와 닿는 건
-//   무시 — 닿는 구간은 일부러 퍽·칸에 닿음. 서비스가 없거나 응답이 없으면 실패 (안전 쪽)
+// /check_state_validity로 자세를 하나씩 차례로 검사 — 로봇 링크끼리(붙인 물체 포함) 닿는 자세가 하나라도 있으면 실패. world(octomap·퍽·
+//   적재함)와 닿는 건 무시 — 닿는 구간은 일부러 퍽·칸에 닿음. 서비스가 없거나 시간 안에 답이 없으면 실패 (안전 쪽).
+//   샘플(0.02 s)을 한꺼번에 보내면 서비스 큐(깊이 10)를 넘은 요청이 버려져 답이 끝내 안 옴 → pick 닿는 구간에서 멈춤 (11-20 실기 2판째).
+//   그래서 관절이 traj_check_step_rad 넘게 움직인 샘플만 골라(끝 자세는 늘) 하나씩 보냄
 void ArmIO::check_self_collision(const std::vector<Q5> & samples, Cb done) {
-  if (samples.empty()) { done(true); return; }
+  if (samples.empty() || !node_.get_parameter("traj_collision_check").as_bool()) { done(true); return; }
   if (!validity_->service_is_ready()) {
     RCLCPP_ERROR(node_.get_logger(), "궤적 충돌 검사: /check_state_validity 없음 — 궤적 안 보냄");
     done(false);
     return;
   }
-  struct Pending { size_t left; bool failed = false; };
-  auto pend = std::make_shared<Pending>(Pending{samples.size()});
+  const double step = node_.get_parameter("traj_check_step_rad").as_double();
+  auto picks = std::make_shared<std::vector<size_t>>();
+  for (size_t k = 0; k < samples.size(); ++k) {
+    bool far = picks->empty() || k + 1 == samples.size();
+    for (int i = 0; i < 5 && !far; ++i) far = std::abs(samples[k][i] - samples[picks->back()][i]) > step;
+    if (far) picks->push_back(k);
+  }
+  struct State { size_t i = 0; bool over = false; rclcpp::TimerBase::SharedPtr timer; };
+  auto st = std::make_shared<State>();
   const uint64_t gen = gen_;
+  const auto finish = [this, st, gen, done](bool ok) {
+    if (st->over) return;
+    st->over = true;
+    // 타이머를 st에서 빼서 놓음 — 타이머 콜백이 st를 잡고 있어 그대로 두면 순환 참조 (실행 중인 콜백은 executor가 잡고 있어 안전)
+    if (auto t = std::move(st->timer)) t->cancel();
+    if (gen == gen_) done(ok);
+  };
+  const double limit = node_.get_parameter("traj_check_timeout_s").as_double();
+  st->timer = node_.create_wall_timer(std::chrono::duration<double>(limit), [this, st, picks, limit, finish]() {
+    if (st->over) return;
+    RCLCPP_ERROR(node_.get_logger(), "궤적 충돌 검사: %.1f s 안에 답 없음 (%zu/%zu) — 궤적 안 보냄", limit, st->i, picks->size());
+    validity_->prune_pending_requests();
+    finish(false);
+  });
   const auto self = [](uint32_t t) {
     return t == moveit_msgs::msg::ContactInformation::ROBOT_LINK || t == moveit_msgs::msg::ContactInformation::ROBOT_ATTACHED;
   };
-  for (size_t k = 0; k < samples.size(); ++k) {
+  auto next = std::make_shared<std::function<void()>>();
+  auto qs = std::make_shared<std::vector<Q5>>(samples);
+  // 자기 자신은 weak로 — 진행 중인 요청의 답 콜백만 강하게 잡음 (순환 참조로 남지 않게)
+  *next = [this, st, picks, qs, wnext = std::weak_ptr<std::function<void()>>(next), finish, self]() {
+    if (st->over) return;
+    auto next = wnext.lock();
+    if (!next) return;
+    if (st->i >= picks->size()) { finish(true); return; }
+    const size_t k = (*picks)[st->i];
     auto req = std::make_shared<GetStateValidity::Request>();
     req->group_name = "arm";
     req->robot_state.is_diff = true;
     req->robot_state.joint_state.name.assign(std::begin(ARM), std::end(ARM));
-    req->robot_state.joint_state.position.assign(samples[k].begin(), samples[k].end());
-    validity_->async_send_request(req, [this, pend, gen, k, n = samples.size(), done, self](rclcpp::Client<GetStateValidity>::SharedFuture f) {
-      if (pend->failed) return;
-      const auto res = f.get();
-      for (const auto & c : res->contacts) {
+    req->robot_state.joint_state.position.assign((*qs)[k].begin(), (*qs)[k].end());
+    validity_->async_send_request(req, [this, st, k, n = qs->size(), next, finish, self](rclcpp::Client<GetStateValidity>::SharedFuture f) {
+      if (st->over) return;
+      for (const auto & c : f.get()->contacts) {
         if (!self(c.body_type_1) || !self(c.body_type_2)) continue;
         RCLCPP_ERROR(node_.get_logger(), "궤적 충돌 검사: 샘플 %zu/%zu에서 %s - %s 닿음 — 궤적 안 보냄", k + 1, n,
                      c.contact_body_1.c_str(), c.contact_body_2.c_str());
-        pend->failed = true;
-        if (gen == gen_) done(false);
+        finish(false);
         return;
       }
-      if (--pend->left == 0 && gen == gen_) done(true);
+      ++st->i;
+      (*next)();
     });
-  }
+  };
+  (*next)();
 }
 
 ArmIO::Step ArmIO::delta_settle_step(double min_s, double max_s) {
