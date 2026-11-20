@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Isaac odom/nvblox RViz entry point, through tools/rviz/start.sh (including optional bag recording).
-#   ./odom_nvblox.sh                 # simulation time on by default; may start before Isaac Play
+#   ./odom_nvblox.sh                 # Isaac running (even before Play): its ROS env + sim time · no Isaac: this terminal + wall time (Jetson)
 #   ./odom_nvblox.sh 42              # first arg = ROS_DOMAIN_ID; remaining args go to rviz2
 #   (no domain arg: copy the ROS env of the running Isaac — isaac_sim.sh before Play, or its launch)
 #   RVIZ_USE_SIM_TIME=false ./odom_nvblox.sh  # wall time for a real-robot view
@@ -66,6 +66,10 @@ if [[ "$SIM" != true && "$SIM" != false ]]; then
   exit 2
 fi
 if [[ -z "${RVIZ_USE_SIM_TIME+x}" && "$ISAAC_FOUND" == true && "$MATCHING_LAUNCH" == false ]]; then
+  SIM=false
+fi
+# Isaac이 전혀 없으면(Play 전 isaac_sim.sh도 없음) 실기(Jetson) 보기 — 벽시계. 예전엔 sim time이라 /clock을 기다리며 아무것도 안 보였음
+if [[ -z "${RVIZ_USE_SIM_TIME+x}" && "$ISAAC_FOUND" == false ]] && ! pgrep -f "isaac/standalone/isaac_sim.sh" >/dev/null; then
   SIM=false
 fi
 
