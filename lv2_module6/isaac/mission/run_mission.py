@@ -64,6 +64,7 @@ def main():
     ap.add_argument('--scene', default=SCENE, help='퍽 개수를 읽을 장면 (기본 usda/maze_map_1711.usda)')
     ap.add_argument('--list', action='store_true', help='장면 퍽으로 풀리는 횟수 조합만 찍고 끝')
     ap.add_argument('--clear-basket', action='store_true', help='시작 전 /coordinator/basket_clear')
+    ap.add_argument('--real', action='store_true', help='실기 (drive_test --real과 같음): use_sim_time 끔 · Fast DDS 기본 fastdds.xml')
     a = ap.parse_args()
     pucks = scene_pucks(a.scene)
     ok = combos(pucks)
@@ -95,10 +96,10 @@ def main():
     start = f'start:FROM_SURVEY:{code}:{counts}' if a.from_survey else 'start'
 
     # Isaac 쪽(isaac_sim.sh)과 같은 Fast DDS 프로파일 — 터미널 값을 그대로, 없으면 isaac_sim.sh 기본(local_only)
-    os.environ.setdefault('FASTDDS_DEFAULT_PROFILES_FILE', os.path.join(os.path.dirname(SCENE), '..', '..', 'ros2_ws', 'fastdds_local_only.xml'))
+    os.environ.setdefault('FASTDDS_DEFAULT_PROFILES_FILE', os.path.join(os.path.dirname(SCENE), '..', '..', 'ros2_ws', 'fastdds.xml' if a.real else 'fastdds_local_only.xml'))
     os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'SUBNET'
     rclpy.init()
-    n = rclpy.create_node('run_mission', parameter_overrides=[rclpy.parameter.Parameter('use_sim_time', value=True)])
+    n = rclpy.create_node('run_mission', parameter_overrides=[rclpy.parameter.Parameter('use_sim_time', value=not a.real)])
     log = n.get_logger()
     latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     cmd = n.create_publisher(String, '/cmd/mission', 10)
