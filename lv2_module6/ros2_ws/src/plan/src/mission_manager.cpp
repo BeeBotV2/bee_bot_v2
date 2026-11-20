@@ -771,14 +771,14 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
       if (!ok2) RCLCPP_WARN(get_logger(), "시작 박스 %zu inspect 실패 (%s) — 본 것만", b + 1, why2.c_str());
       snap("box" + str(static_cast<int>(b) + 1));
       std::vector<int> found;
-      // 박스 윗면 위에서 tag를 읽은 퍽 전부 — 발제 자리(X±40, Y=0)에서 match_radius 안만 보면
-      //   퍽이 조금 비켜 있거나 위치 오차가 4 cm를 넘을 때 하나도 못 찾고 pick 없이 지나감 (실기 11-20 box4·box5)
+      // 박스 윗면 위에서 tag를 읽은 퍽 전부 (자리 제한 없음) — 예전엔 발제 자리(X±40, Y=0)에서 4 cm(match_radius) 안만 봐서
+      //   퍽이 비켜 있거나 위치 오차가 있으면 하나도 못 찾고 pick 없이 지나감 (실기 11-20 box4·box5). 집기는 원래 tag로 찾음
       int missing = static_cast<int>(puck_dx_.size());
       if (objects_) for (const auto & o : objects_->objects) {
         if (!is_puck(o) || detail(o, "tag").empty()) continue;
         const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
         const double dx = a.x - box.x, dy = a.y - box.y;
-        if (std::max(std::abs(dx), std::abs(dy)) > box.half + match_radius_) continue;
+        if (std::max(std::abs(dx), std::abs(dy)) > box.half + 0.05) continue;  // 윗면 + 위치 오차 여유 — 이웃 상자와는 0.5 m 넘게 떨어짐
         const int tag = std::stoi(detail(o, "tag"));
         if (puck_at_.count(tag)) continue;
         pucks_.push_back({tag, o.color, detail(o, "shape")});
