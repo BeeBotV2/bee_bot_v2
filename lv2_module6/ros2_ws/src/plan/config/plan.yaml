@@ -411,7 +411,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   11-20 절대값으로 다시 켬: wall_localization이 odom 좌표 depth 점(최근 arena_corr_wall_keep_s)을 벽에 맞춘 결과를 map→odom 목표로
     #   (/localization/map_to_odom) — 조각을 더하지 않아 잠금·지연에도 안 쌓임 (시뮬 11-20: 증분은 −1°를 98번). BEE_MAP_ANCHOR=odom일 때만 받음
     #   mission_manager는 arena_corr_wall_fit이 켜져 있으면 상자로는 안 옮김 (loc_tick 안 돎)
-    arena_corr_to_localization: true
+    arena_corr_to_localization: false # 11-20 sim bag: 4분에 map→odom yaw −6.7° · S4 상자 31 cm 어긋남 → 끔 (78597556 값)
     arena_corr_loc_min_n: 3 # 상자 근거 이만큼(또는 벽 정합)일 때만 — 상자 1~2개로는 안 옮김
     arena_corr_loc_step_m: 0.05 # [m] 한 번에 넘기는 조각 (MapGate 잠금 0.30 m보다 훨씬 작게)
     arena_corr_loc_step_rad: 0.0175 # [rad] (1°)
@@ -432,8 +432,8 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     # 테스트를 위해서 좀더 큰 변화 테스트 20261119 변경
     # 기록을 위해서 여기에 남김
     approach_gap:
-      0.144 # [m] 그다음 approach로 base_footprint ~ 박스 변을 이만큼까지 (로봇 앞면 0.069 → 7.5 cm)
-      #   11-20: 0.095 → 0.144 — 로봇 앞면 ~ 도킹 면 5~10 cm 가운데 (사용자). 팔 도달은 실기에서 확인 (Isaac: 0.10부터 먼 줄 양끝 못 닿음)
+      0.119 # [m] 그다음 approach로 base_footprint ~ 박스 변을 이만큼까지 (로봇 앞면 0.069 → 5 cm) — 11-20: 2.6 cm는 빠듯, 7.5 cm는 팔이 안 닿음
+      #   11-20: 0.144(앞면 7.5 cm)로 늘렸다가 되돌림 — 시뮬 접근·pick이 안 됨 (먼 퍽 0.287 m > 수직 pick 0.256 · pick_far 0.285)
       #   11-20: 0.085 → 0.095 (+1 cm) — 도킹 때 가끔 상자를 밀고 더 들어감(상자 위치 추정이 멀게 잡히면 마지막 10 cm는 odom만 보고 감) → 1 cm 여유
       #   Isaac 도달 지도(dice_reach.py): 0.08이면 3×3 칸 9개 다 닿음 · 0.10이면 먼 줄 양끝 못 닿음
     approach_tries: 3 # 접근 자리 실패 시 다른 변으로 몇 번까지
