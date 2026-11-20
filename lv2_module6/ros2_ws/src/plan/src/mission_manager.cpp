@@ -380,6 +380,9 @@ void MissionManager::on_command(const std::string & cmd) {
   pn_action_ = -1;
   pucks_.clear();
   puck_at_.clear();
+  puck_seen_.clear();
+  box_seen_.clear();
+  on_box_.clear();
   alloc_.clear();
   jobs_.clear();
   order_.clear();
@@ -845,6 +848,7 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
       if (d < best) { best = d; cx = o.pose.pose.position.x; cy = o.pose.pose.position.y; }
     }
     if (best < 0.5) RCLCPP_INFO(get_logger(), "시작 박스 %zu 기준 = 인지 상자 (도면에서 %.0f cm)", b + 1, 100 * std::hypot(cx - m0.x, cy - m0.y));
+    box_seen_[b] = {cx, cy};
     // 상자 한 번 보기 (look 자세 → 퍽이 모자라거나 태그를 못 읽으면 본 퍽을 담는 자세로 다시) — 퍽 자리마다 따로 보던 것 (11/07)
     const std::vector<SubGoal> goals = {
       SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")};
@@ -865,6 +869,8 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
         if (puck_at_.count(tag)) continue;
         pucks_.push_back({tag, o.color, detail(o, "shape")});
         puck_at_[tag] = {b, dx};
+        puck_seen_[tag] = {o.pose.pose.position.x, o.pose.pose.position.y};
+        on_box_.insert(tag);
         if (is_lying(o)) lying_.insert(tag);  // 실을 때 세워서 집음 (stand → stand_pick)
         found.push_back(tag);
         --missing;
@@ -888,19 +894,50 @@ void MissionManager::load(size_t b, std::vector<int> found, size_t k) {
   // 칸은 coordinator가 고르고 장부에 tag까지 적음 (pick 때 그 퍽의 tag·색·모양을 기억해 둠)
   grab(tag, [this, b, found, k, tag](bool ok, const std::string & why) {
     if (!ok) { result("puck " + str(tag) + ": load_pick_failed " + why + " (직접 운반)"); load(b, found, k + 1); return; }
+    on_box_.erase(tag);  // 손에 듦
     run_retry({SubGoal().set__skill("load").set__target("next")}, [this, b, found, k, tag](bool ok2, const std::string & why2) {
       if (ok2) { load(b, found, k + 1); return; }
       // 놓은 뒤 실패 — 퍽은 칸에 있음 (coordinator 장부 '확인 필요'). 상자에 되돌리지 않고 다음 퍽
       if (why2.rfind("load_released", 0) == 0) { result("puck " + str(tag) + ": " + why2 + " (칸에 둔 것으로 봄)"); load(b, found, k + 1); return; }
-      // 적재함에 못 실음 — 손에 든 퍽을 박스 제자리에 되돌려 두고 BUILD 때 직접 운반
-      const auto [bb, dx] = puck_at_[tag];
-      run({SubGoal().set__skill("place").set__target(point(start_boxes_[bb].x + dx, start_boxes_[bb].y, box_top_z_))},
-        [this, b, found, k, tag, why2](bool ok3, const std::string &) {
-          result("puck " + str(tag) + ": load_tray_failed " + why2 + (ok3 ? " (박스에 되돌림 · 직접 운반)" : " (되돌리기도 실패)"));
-          load(b, found, k + 1);
-        });
+      // 적재함에 못 실음 — 손에 든 퍽을 박스에 되돌려 두고 BUILD 때 직접 운반
+      put_back(b, tag, why2, [this, b, found, k]() { load(b, found, k + 1); });
     });
   });
+}
+
+// 놓을 자리: 상자 위에 다른 퍽이 없으면 상자 가운데 (다시 집기 좋은 곳 · 11-20 사용자) · 있으면 조사 때 본 자리.
+//   도면 박스 가운데 + x 오프셋으로 놓으면 도면과 실제 상자가 어긋난 만큼(11-20 실기 15.9 cm)·y 오프셋을 버린 만큼 비켜
+//   상자 밖에 떨어뜨림 (11-20 실기 박스 1 퍽 6: 본 자리 (-0.676, 0.030) → 놓은 자리 (-0.667, 0.102)) — 그래서 map 자리를 씀.
+//   놓은 뒤 그 자리를 inspect로 다시 봐서 상자 윗면 안에 새로 보인 퍽이 있어야 되돌림 성공
+void MissionManager::put_back(size_t b, int tag, const std::string & why, std::function<void()> next) {
+  const bool others = std::any_of(on_box_.begin(), on_box_.end(), [this, b, tag](int t) { return t != tag && puck_at_[t].first == b; });
+  const auto [bx, by] = box_seen_[b];
+  const auto [px, py] = others ? puck_seen_[tag] : std::make_pair(bx, by);
+  const std::string head = "puck " + str(tag) + ": load_tray_failed " + why;
+  note("퍽 " + str(tag) + " 상자 " + str(static_cast<int>(b) + 1) + "에 되돌림 (" + (others ? "본 자리" : "가운데") + ")");
+  run({SubGoal().set__skill("place").set__target(fmt("%.4f,%.4f,%.4f", px, py, box_top_z_))},
+    [this, b, tag, bx, by, px, py, head, next](bool ok, const std::string &) {
+      const rclcpp::Time t0 = now();
+      run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", px, py, box_top_z_ + puck_h_)).set__relation("box")},
+        [this, b, tag, bx, by, ok, head, next, t0](bool, const std::string &) {
+          // inspect 뒤에 본 퍽 중 상자 윗면 안 (가운데에서 half) — 그 tag이거나 tag를 못 읽은 것
+          const TrackedObject * hit = nullptr;
+          if (objects_) for (const auto & o : objects_->objects) {
+            const std::string t = detail(o, "tag");
+            if (!is_puck(o) || (!t.empty() && t != str(tag)) || rclcpp::Time(o.last_seen, RCL_ROS_TIME) < t0) continue;
+            if (std::hypot(o.pose.pose.position.x - bx, o.pose.pose.position.y - by) <= start_boxes_[b].half) { hit = &o; break; }
+          }
+          if (hit) {
+            puck_seen_[tag] = {hit->pose.pose.position.x, hit->pose.pose.position.y};
+            on_box_.insert(tag);
+            result(head + " (박스에 되돌림 확인 · 직접 운반)");
+          } else {
+            RCLCPP_WARN(get_logger(), "퍽 %d 되돌림 확인 실패 — 상자 %zu 윗면에서 안 보임 (place %s)", tag, b + 1, ok ? "성공" : "실패");
+            result(head + (ok ? " (되돌림 확인 실패 · 상자 위에 없음)" : " (되돌리기도 실패)"));
+          }
+          next();
+        });
+    });
 }
 
 void MissionManager::solve_allocation() {
@@ -1638,9 +1675,10 @@ void MissionManager::grab(int tag, Done done, int tries) {
 void MissionManager::locate(int tag, bool memory, std::function<void(const TrackedObject *)> cb) {
   const auto at = puck_at_.find(tag);
   if (at == puck_at_.end()) { cb(puck_for(objects_.get(), tag, nullptr, match_radius_)); return; }
+  // 조사 때 본 자리 (map) — 도면 박스 + x 오프셋은 도면과 실제 상자가 어긋난 만큼 비켜 match_radius(4 cm)로 못 짝지음
+  const auto seen = puck_seen_.find(tag);
   const Box & box = start_boxes_[at->second.first];
-  const double ax = box.x + at->second.second, ay = box.y;
-  const auto m = to_map(ax, ay);
+  const auto m = seen != puck_seen_.end() ? Pose2{seen->second.first, seen->second.second, 0.0} : to_map(box.x + at->second.second, box.y);
   const double spot[2] = {m.x, m.y};
   if (const auto * o = puck_for(objects_.get(), tag, spot, match_radius_)) { cb(o); return; }
   // 안 보인 지 2초 넘어 인지 목록에서 빠짐 — 처음엔 마지막으로 본 트랙 그대로 (coordinator가 기억한 자리로 pick, 적재 뒤 다시 보지 않음)
@@ -1651,7 +1689,7 @@ void MissionManager::locate(int tag, bool memory, std::function<void(const Track
   }
   // 그래도 못 집었으면 그 자리를 다시 봄
   note("퍽 " + str(tag) + " 다시 보기 (인지 목록에 없음)");
-  run({SubGoal().set__skill("inspect").set__target(point(ax, ay, box_top_z_ + puck_h_))},
+  run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", m.x, m.y, box_top_z_ + puck_h_))},
       [this, tag, mx = m.x, my = m.y, cb](bool, const std::string &) {
         const double spot2[2] = {mx, my};
         cb(puck_for(objects_.get(), tag, spot2, match_radius_));
