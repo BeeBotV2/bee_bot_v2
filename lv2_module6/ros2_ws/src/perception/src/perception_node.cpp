@@ -1431,9 +1431,16 @@ void PerceptionNode::read_barcodes() {
   for (const auto & [cam, s] : frames) {
     // pole 카메라는 계속 신호등 관측에 사용한다. barcode_pole_s 뒤에는 ZXing 디코딩을
     // 돌리지 않고 저비용 라벨 후보만 추적해, 목표 정렬 준비와 신호 확정을 병렬로 진행한다.
-    const auto hits = (cam == "pole_front_cam" && !pole_too)
-      ? barcode_->candidates(s.bgr) : barcode_->read(s.bgr);
+    // 손 카메라 고해상도(바코드 엿보기, mission_manager가 잠깐 1080p로 올림)는 가운데 절반만 읽음 — 손목으로 바코드를 화면 가운데에
+    //   맞춘 뒤라 충분 · 1080p 전체(약 4배)를 ZXing에 넣으면 같은 스레드의 신호등 인지가 밀림
+    //   ponytail: 가운데 고정 잘라내기 — 조준 오차가 ±17°를 넘으면 바코드 화면 위치를 투영해 자르기로
+    const bool crop = cam == "gripper_cam" && s.bgr.cols >= 1280;
+    const cv::Rect roi = crop ? cv::Rect(s.bgr.cols / 4, s.bgr.rows / 4, s.bgr.cols / 2, s.bgr.rows / 2)
+                              : cv::Rect(0, 0, s.bgr.cols, s.bgr.rows);
+    auto hits = (cam == "pole_front_cam" && !pole_too)
+      ? barcode_->candidates(s.bgr) : barcode_->read(crop ? s.bgr(roi).clone() : s.bgr);
     if (hits.empty()) continue;
+    for (auto & h : hits) for (auto & p : h.pts) { p.x += roi.x; p.y += roi.y; }
     const auto tf = lookup_tf(s.frame_id, s.stamp, true);
     std::vector<Det> dets;
     for (const auto & hit : hits) {
