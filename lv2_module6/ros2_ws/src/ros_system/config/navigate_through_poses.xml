@@ -20,6 +20,17 @@
         <PathHandlerSelector selected_path_handler="{selected_path_handler}" default_path_handler="PathHandler" topic_name="path_handler_selector"/>
         <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
         <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <!-- 11-20 (사용자): 카메라 장애물 흔적 정리 — 5 s마다 로봇 둘레 사각형 밖의 카메라 층만 비움 (저장 지도 static_layer는 그대로).
+             장애물 칸은 레이가 다시 지나가야만 지워져, 옆·뒤·벽 뒤로 번진 칸이 계속 남았음. reset_distance = 남길 사각형 한 변
+             (global 3.0 m = ±1.5 m · local 2.0 m = ±1.0 m — 앞 1 m 밖은 다음 프레임(10 Hz)에 다시 찍힘). 실패해도 주행은 계속 (ForceSuccess) -->
+        <RateController hz="0.2">
+          <ForceSuccess>
+            <Sequence name="ClearStaleObstacles">
+              <ClearCostmapExceptRegion name="ClearGlobalExceptRobot" service_name="global_costmap/clear_except_global_costmap" reset_distance="3.0" plugins="obstacle_layer"/>
+              <ClearCostmapExceptRegion name="ClearLocalExceptRobot" service_name="local_costmap/clear_except_local_costmap" reset_distance="2.0" plugins="voxel_layer"/>
+            </Sequence>
+          </ForceSuccess>
+        </RateController>
         <RateController hz="2.0">
           <RecoveryNode number_of_retries="1" name="ComputePath">
             <Fallback name="FallbackComputePath">
