@@ -87,6 +87,10 @@ ArenaCorr fit_arena_corr(std::vector<CorrPair> pairs, double min_sep, double max
 struct WallFit { ArenaCorr c; int inliers = 0; double rms = 0, min_eig = 0; bool ok = false; std::string why; };
 WallFit fit_walls(const std::vector<std::array<double, 4>> & segs, const std::vector<std::pair<double, double>> & pts,
                   const ArenaCorr & init, double gate, int min_cells, double min_eig, double max_shift, double max_rot);
+// 벽 위치 보정 한 번 (절대값, 11-20) — fit = odom 점으로 맞춘 보정 (= (map→odom)⁻¹, 지금 map→odom과 무관한 측정) ·
+//   sent = 지금까지 낸 목표 (같은 꼴). 차이 sent⁻¹·fit을 max_m · max_rad로 잘라 sent를 그만큼 옮기고 그 조각을 돌려줌.
+//   sent가 fit에 닿으면 조각 = 0 — 받는 쪽이 늦게 반영해도(MapGate 잠금 등) 같은 차이를 다시 더하지 않음 (예전 증분 방식은 쌓였음)
+ArenaCorr wall_target_step(const ArenaCorr & fit, ArenaCorr & sent, double max_m, double max_rad);
 // 인지 점 q에 맞는 도면 상자 — cands(보정한 map 점) 중 gate 안 가장 가까운 것, 두 번째가 그보다 0.25 m 넘게 멀 때만 (헷갈리면 −1)
 int match_landmark(double qx, double qy, const std::vector<std::pair<double, double>> & cands, double gate);
 

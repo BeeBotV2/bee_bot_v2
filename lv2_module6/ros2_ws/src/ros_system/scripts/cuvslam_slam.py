@@ -282,6 +282,11 @@ class CuvslamSlam(Node):
         from std_msgs.msg import Float64MultiArray
         self.create_subscription(Float64MultiArray, self.declare_parameter('map_correction_topic', '/localization/map_correction').value,
                                  self.on_map_correction, 10)
+        # 벽 위치 보정 목표 (wall_localization 11-20 절대값) — map→odom을 이 값으로 덮어씀 (cuvslam_slam.cpp와 같음 · map 기준 odom일 때만)
+        self.n_target_ignored = 0
+        self.create_subscription(Float64MultiArray, self.declare_parameter('map_to_odom_topic_in', '/localization/map_to_odom').value,
+                                 self.on_map_target, QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                                                durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.create_subscription(CameraInfo, self.declare_parameter('camera_info', '/pole_front_cam/color/camera_info').value,
                                  self.on_info, qos_profile_sensor_data)
         color = Subscriber(self, Image, self.declare_parameter('rgb', '/pole_front_cam/color/image_raw').value,
@@ -353,6 +358,18 @@ class CuvslamSlam(Node):
             self.get_logger().info('initialpose 대기 — 첫 추적 프레임 뒤 적용')
             return
         self.apply_initialpose(desired)
+
+    def on_map_target(self, m):
+        if len(m.data) < 3:
+            return
+        if self.save_dir or not self.odom_anchor:
+            if self.n_target_ignored == 0:
+                why = '매핑 중' if self.save_dir else 'map 기준이 odom이 아님 (BEE_MAP_ANCHOR=odom)'
+                self.get_logger().warning(f'벽 위치 목표(/localization/map_to_odom) 무시 — {why}')
+            self.n_target_ignored += 1
+            return
+        self.map_offset = (float(m.data[0]), float(m.data[1]), float(m.data[2]))
+        self.get_logger().info(f'벽 위치 목표 받음 → map→odom = ({m.data[0]:+.3f}, {m.data[1]:+.3f}, {math.degrees(m.data[2]):+.2f}°)')
 
     def on_map_correction(self, m):
         if len(m.data) < 3:
