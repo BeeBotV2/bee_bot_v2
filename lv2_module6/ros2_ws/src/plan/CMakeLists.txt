@@ -62,6 +62,7 @@ foreach(node coordinator mission_manager wall_localization)
   add_executable(${node} src/${node}_main.cpp)
   target_link_libraries(${node} ${PROJECT_NAME}_nodes)
 endforeach()
+target_link_libraries(wall_localization ${sensor_msgs_TARGETS})  # depth 점구름
 install(TARGETS coordinator mission_manager wall_localization DESTINATION lib/${PROJECT_NAME})
 # 컴포넌트 (11-16 메모리) — 같은 클래스를 컨테이너 한 프로세스에 올림 (bringup core_composition). 실행 파일은 그대로
 find_package(rclcpp_components REQUIRED)

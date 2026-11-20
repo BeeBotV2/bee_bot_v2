@@ -207,6 +207,22 @@ public:
         RCLCPP_INFO(get_logger(), "도면 보정 받음 → map 기준 옮김 (%+.3f, %+.3f, %+.2f°)", m->data[0], m->data[1],
                     m->data[2] * 180.0 / M_PI);
       });
+    // 벽 위치 보정 목표 (wall_localization 11-20 절대값): map→odom을 이 값으로 덮어씀 — 증분이 아니라 MapGate가 잠겨도 안 쌓임.
+    //   map 기준 odom일 때만 (map→odom = map_offset_). cuVSLAM 기준이면 map_offset_가 cuVSLAM 자세에 얹히므로 안 맞음 → 무시
+    target_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+      declare_parameter<std::string>("map_to_odom_topic_in", "/localization/map_to_odom"), rclcpp::QoS(1).transient_local(),
+      [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr m) {
+        if (m->data.size() < 3) return;
+        if (!save_dir_.empty() || !odom_anchor_) {
+          if (n_target_ignored_++ == 0)
+            RCLCPP_WARN(get_logger(), "벽 위치 목표(/localization/map_to_odom) 무시 — %s",
+                        save_dir_.empty() ? "map 기준이 odom이 아님 (BEE_MAP_ANCHOR=odom)" : "매핑 중");
+          return;
+        }
+        map_offset_ = {m->data[0], m->data[1], m->data[2]};
+        RCLCPP_INFO(get_logger(), "벽 위치 목표 받음 → map→odom = (%+.3f, %+.3f, %+.2f°)", m->data[0], m->data[1],
+                    m->data[2] * 180.0 / M_PI);
+      });
     const auto sensor = rclcpp::SensorDataQoS();
     info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
       declare_parameter<std::string>("camera_info", "/pole_front_cam/color/camera_info"), sensor,
@@ -761,7 +777,7 @@ private:
   Pose2 map_offset_;
   double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0, odom_tol_ = 0.1;
   bool odom_anchor_ = false;
-  uint64_t n_corr_ignored_ = 0;
+  uint64_t n_corr_ignored_ = 0, n_target_ignored_ = 0;
   std::optional<Pose2> last_base_, pending_initialpose_;
   std::optional<std::pair<int64_t, Pose2>> prev_;  // 직전 오도메트리 자세 — 추적을 잃으면 비움
   // 위치추정 콜백이 쓰는 것들은 slam_보다 먼저 선언 — 소멸 때 slam_(작업 스레드)이 먼저 없어지게
@@ -819,7 +835,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_sub_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr corr_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr corr_sub_, target_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr info_sub_;
   std::shared_ptr<message_filters::Subscriber<Image>> color_sub_, depth_sub_;
   std::shared_ptr<Sync> sync_;

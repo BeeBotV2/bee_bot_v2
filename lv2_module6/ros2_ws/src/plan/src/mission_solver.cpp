@@ -167,6 +167,12 @@ ArenaCorr compose_corr(const ArenaCorr & a, const ArenaCorr & b) {
   return {co * b.dx - si * b.dy + a.dx, si * b.dx + co * b.dy + a.dy, std::remainder(a.dth + b.dth, 2 * M_PI), a.n};
 }
 
+ArenaCorr wall_target_step(const ArenaCorr & fit, ArenaCorr & sent, double max_m, double max_rad) {
+  const ArenaCorr step = corr_step(corr_after_step(fit, sent), max_m, max_rad);  // corr_after_step(fit, sent) = sent⁻¹·fit
+  sent = compose_corr(sent, step);
+  return step;
+}
+
 ArenaCorr fit_arena_corr(std::vector<CorrPair> pairs, double min_sep, double max_shift, double max_rot, double outlier_m) {
   ArenaCorr c;
   while (!pairs.empty()) {
