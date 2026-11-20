@@ -835,10 +835,20 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
   note("시작 박스 " + str(static_cast<int>(b) + 1) + " 조사");
   go_near(box, box.x, box.y, [this, b, box](bool ok, const std::string & why) {
     if (!ok) { result("box " + str(static_cast<int>(b) + 1) + ": approach_failed " + why); survey(survey_k_ + 1); return; }
+    // 기준 = 붙은 상자: 도면 자리에서 0.5 m 안 인지 start_box 중 가장 가까운 것 (없으면 도면).
+    //   11-20 sim S4: 인지 상자가 도면에서 31 cm (map) → 도면 기준으로 세면 inspect는 0.35 원 안이라 ok, 조사는 윗면 밖이라 0개 → pick 없이 지나감
+    const auto m0 = to_map(box.x, box.y);
+    double cx = m0.x, cy = m0.y, best = 0.5;
+    if (objects_) for (const auto & o : objects_->objects) {
+      if (o.class_name != "start_box") continue;
+      const double d = std::hypot(o.pose.pose.position.x - m0.x, o.pose.pose.position.y - m0.y);
+      if (d < best) { best = d; cx = o.pose.pose.position.x; cy = o.pose.pose.position.y; }
+    }
+    if (best < 0.5) RCLCPP_INFO(get_logger(), "시작 박스 %zu 기준 = 인지 상자 (도면에서 %.0f cm)", b + 1, 100 * std::hypot(cx - m0.x, cy - m0.y));
     // 상자 한 번 보기 (look 자세 → 퍽이 모자라거나 태그를 못 읽으면 본 퍽을 담는 자세로 다시) — 퍽 자리마다 따로 보던 것 (11/07)
     const std::vector<SubGoal> goals = {
-      SubGoal().set__skill("inspect").set__target(point(box.x, box.y, box_top_z_ + puck_h_)).set__relation("box")};
-    run_retry(goals, [this, b, box](bool ok2, const std::string & why2) {
+      SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")};
+    run_retry(goals, [this, b, box, cx, cy](bool ok2, const std::string & why2) {
       if (!ok2) RCLCPP_WARN(get_logger(), "시작 박스 %zu inspect 실패 (%s) — 본 것만", b + 1, why2.c_str());
       snap("box" + str(static_cast<int>(b) + 1));
       std::vector<int> found;
@@ -847,9 +857,10 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
       int missing = static_cast<int>(puck_dx_.size());
       if (objects_) for (const auto & o : objects_->objects) {
         if (!is_puck(o) || detail(o, "tag").empty()) continue;
+        // 붙은 상자 윗면 안 (모서리까지 half·√2 + 3 cm) — 이웃 시작 박스는 0.734 m
+        if (std::hypot(o.pose.pose.position.x - cx, o.pose.pose.position.y - cy) > box.half * M_SQRT2 + 0.03) continue;
         const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
         const double dx = a.x - box.x, dy = a.y - box.y;
-        if (std::max(std::abs(dx), std::abs(dy)) > box.half + 0.05) continue;  // 윗면 + 위치 오차 여유 — 이웃 상자와는 0.5 m 넘게 떨어짐
         const int tag = std::stoi(detail(o, "tag"));
         if (puck_at_.count(tag)) continue;
         pucks_.push_back({tag, o.color, detail(o, "shape")});
