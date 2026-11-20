@@ -55,6 +55,8 @@ skill_inspect:
   ros__parameters:
     inspect_height_m: 0.15   # [m] 손끝을 퍽 윗면 위 이만큼 (16mm 태그 ≈ 50px — 한 칸 약 6px) · 시뮬 camera_look_down 0.08에서 100 %
     inspect_wait_s: 1.0      # [s] 그 자리에서 기다림 (perception 추론 4Hz × 몇 장)
+    inspect_box_radius_m: 0.35  # [m] 상자 보기: 상자 가운데(도면)에서 이 안 퍽만 셈 — 11-20: 0.16이면 도면·실제 상자가 몇 cm만 어긋나도
+                                #   보이는 퍽을 못 세고 '다시 담기'(팔 옆으로)만 반복 → inspect_partial. 이웃 시작 박스는 0.734 m라 0.35까지 안 섞임
 skill_pick:
   ros__parameters:
     max_grasp_tries: 2       # 파지 후보를 점수순으로 몇 개까지
