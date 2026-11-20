@@ -441,7 +441,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     plan_model: "" # 비면 share/ml/model/plan/plan_next.onnx (.policy 경로를 주면 MlpPolicy로)
     place_tol: 0.010 # [m] 놓은 뒤 확인 · 재검증 — 칸 중심에서 이 안이어야 성공
     place_search: 0.05 # [m] 놓은 뒤 확인 때 칸에서 이 안의 퍽만 그 퍽으로 봄
-    match_radius: 0.04 # [m] 조사 때 퍽 자리와 트랙을 짝짓는 거리
+    match_radius: 0.12 # [m] 조사 때 퍽 자리(박스 X±40)와 트랙을 짝짓는 거리 — 11-20 실기: 0.04면 비켜 놓인 퍽을 못 짝지어 pick 없이 지나감 → 박스 윗면 전체
     stand_check_s: 1.0 # [s] 누운 퍽 stand 뒤 인지가 섰는지 볼 때까지 기다림 → 섰으면 선 퍽을 pick (못 보면 stand_pick), 아직 누웠으면 stand 다시 (retries번)
     stand_find_m: 0.10 # [m] stand 뒤 look에서 누운 가운데 이 안의 퍽: 누움 → 다시 stand · 섬 → pick · 없음 → stand_lost (선 퍽은 약 45 mm 옆 · 실패하면 6~7 cm 튐) — 11-15
     verify_radius: 0.15 # [m] 재검증 때 장소 중심에서 이 안의 퍽만
