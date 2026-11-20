@@ -130,8 +130,18 @@ def main():
 
     n.create_subscription(MissionState, '/mission/state', on_state, latched)
 
+    wait = {'n': 0, 'sim0': None}
+
     def tick():
         if not st['started']:
+            wait['n'] += 1
+            if wait['n'] % 5 == 0:   # 시작 못 하고 있으면 5초마다 무엇을 기다리는지
+                sim = n.get_clock().now().nanoseconds
+                wait['sim0'] = sim if wait['sim0'] is None else wait['sim0']
+                why = ('/mission/state 안 옴 — mission_manager가 떠 있는지 · ROS_DOMAIN_ID · Fast DDS 프로파일' if st['phase'] is None
+                       else '/cmd/mission 구독자 0 — coordinator/mission_manager 확인' if cmd.get_subscription_count() == 0 else '')
+                clk = '/clock 멈춤 (Isaac Play 확인)' if sim == wait['sim0'] else f'시뮬 시각 {sim / 1e9:.1f}s'
+                log.warn(f'{wait["n"]}s 대기 · 단계 {st["phase"]} · {why} · {clk}')
             if st['phase'] in IDLE and cmd.get_subscription_count() > 0:
                 cmd.publish(String(data=start))
                 st['started'] = True
@@ -150,7 +160,7 @@ def main():
             m.header.stamp = n.get_clock().now().to_msg()
             sig.publish(m)
 
-    n.create_timer(1.0, tick)
+    n.create_timer(1.0, tick, clock=rclpy.clock.Clock())   # 벽시계 — /clock이 멈춰도 돌게
     log.info('/mission/state 기다리는 중 (mission_manager)')
     try:
         while rclpy.ok() and st['exit'] is None:
