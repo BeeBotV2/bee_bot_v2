@@ -295,7 +295,10 @@ WallFit fit_walls(const std::vector<std::array<double, 4>> & segs, const std::ve
     if (std::hypot(x[0], x[1]) < 1e-4 && std::abs(x[2]) < 1e-5) break;
   }
   f.c.n = f.inliers;
-  if (std::hypot(f.c.dx, f.c.dy) > max_shift || std::abs(f.c.dth) > max_rot) { f.why = "over_limit"; return f; }
+  // 한계는 시작값(지난 결과)에서 바뀐 양에만 — 절대값(11-20)에서 f.c는 stack을 켠 뒤 쌓인 odom drift 전체라, 크기로 자르면
+  //   0.8 m에 닿는 순간 정합이 영구히 멈췄음 (실기 nav_1120_141156: 회전 lever arm 포함 0.79 m → 142 s 동안 over_limit)
+  const ArenaCorr jump = corr_after_step(f.c, init);
+  if (std::hypot(jump.dx, jump.dy) > max_shift || std::abs(jump.dth) > max_rot) { f.why = "over_limit"; return f; }
   f.ok = true;
   return f;
 }

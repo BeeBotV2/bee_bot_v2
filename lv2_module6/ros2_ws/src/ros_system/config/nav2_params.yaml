@@ -212,10 +212,11 @@ local_costmap:
         enabled: true
         publish_voxel_map: false
         origin_z: 0.0
-        z_resolution: 0.02   # 0.05 → 0.02 (사용자 2026-11-19) — 16칸 × 0.02 = 0.32 m ≥ max_obstacle_height 0.3
+        z_resolution: 0.03   # 0.05 → 0.02 (11-19) → 0.03 (11-20): 16칸 × 0.03 = 0.48 m — 카메라(0.45 m)가 격자 안이어야 raytrace로 지움
+                             #   (0.02면 꼭대기 0.32 m라 "Sensor origin out of map bounds"로 지우기를 통째로 건너뜀 → 칠하기만 쌓임)
         z_voxels: 16         # VoxelLayer 최대 16
         max_obstacle_height: 0.3
-        mark_threshold: 2    # 0 → 2 (사용자 2026-11-20): 한 기둥에 높이 칸 3개(0.02 × 3 = 6 cm) 이상 차야 장애물 — 떠다니는 depth 잡음 점을 걸러 벽이 얇게
+        mark_threshold: 2    # 0 → 2 (사용자 2026-11-20): 한 기둥에 높이 칸 3개(0.03 × 3 = 9 cm) 이상 차야 장애물 — 떠다니는 depth 잡음 점을 걸러 벽이 얇게
         observation_sources: pole_front_cam
         pole_front_cam:
           topic: /pole_front_cam/depth/color/points_filtered   # perception body_filter가 자기 몸 점을 뺀 것

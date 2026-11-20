@@ -504,6 +504,19 @@ TEST(WallFit, OutliersAndPlanErrors) {
   EXPECT_NEAR(f.c.dy, truth.dy, 0.03);
 }
 
+TEST(WallFit, LimitIsOnChangeNotAbsoluteSize) {
+  // 절대값 보정은 쌓인 odom drift 전체 — 0.8 m · 0.35 rad를 넘어도 지난 결과에서 조금만 바뀌었으면 받음 (실기 11-20 over_limit 142 s)
+  const ArenaCorr truth{0.9, 0.3, 0.4, 0};  // |이동| 0.95 m · 23°
+  const auto f = fit_walls(kRoom, wall_cells(kRoom, truth, 0.05), {0.88, 0.31, 0.39, 0}, 0.35, 50, 0.01, 0.8, 0.35);
+  ASSERT_TRUE(f.ok) << f.why;
+  EXPECT_NEAR(f.c.dx, truth.dx, 0.005);
+  EXPECT_NEAR(f.c.dth, truth.dth, 0.002);
+  // 지난 결과에서 한계보다 많이 바뀌면 여전히 버림 (잘못 맞춘 튐 거르기)
+  const ArenaCorr small{0.12, -0.08, 0.06, 0};
+  EXPECT_EQ(fit_walls(kRoom, wall_cells(kRoom, small, 0.05), {}, 0.35, 50, 0.01, 0.05, 0.35).why, "over_limit");
+  EXPECT_EQ(fit_walls(kRoom, wall_cells(kRoom, small, 0.05), {}, 0.35, 50, 0.01, 0.8, 0.02).why, "over_limit");
+}
+
 TEST(WallFit, AbsoluteTargetDoesNotAccumulate) {
   // 같은 측정(fit)을 받는 쪽이 반영하든 말든 계속 받아도 sent는 fit에서 멈춤 — 11-20 시뮬: 증분 방식은 같은 −1°를 98번 더했음
   const ArenaCorr fit{0.12, -0.08, 0.06, 0};
