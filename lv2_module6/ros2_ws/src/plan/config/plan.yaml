@@ -389,9 +389,12 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     arena_corr_wall_fit: true # 기본 벽 정합 활성 — src/n/RMS 기록 및 목표 좌표에 사용. map→odom 이동은 아래 스위치가 별도 제어
     arena_corr_boxes: false # 11-18 사용자: 도면 상자 자리는 실제와 달라 추정값으로만 — 상자로 위치(map→odom) 보정 안 함 (실기 S3 보정 0.21 m가 S6에서 벽과 겹침). 11-16: 켬 (벽 정합이 한 번 맞기 전까지만 — 그 뒤엔 벽) — 상자마다 인지 위치(marks)는 계속 /arena/correction에
     arena_corr_wall_gate: 0.3 # [m] 도면 벽에서 이 안의 칸만 (그 밖 = 상자·사람·도면에 없는 것)
-    arena_corr_wall_min_cells: 60 # 맞은 칸(벽 겉면 — 빈 칸과 맞닿은 점유 칸)이 이보다 적으면 안 씀 (5 cm 칸 → 벽 3 m)
+    arena_corr_wall_min_cells: 60 # 맞은 칸(5 cm depth 점 칸)이 이보다 적으면 안 씀 (5 cm 칸 → 벽 3 m)
     arena_corr_wall_min_eig: 0.03 # x · y · 회전이 다 묶여야 (벽 한 줄만 보이면 그 벽을 따라가는 방향을 모름)
-    arena_corr_wall_period: 2.0 # [s] 다시 맞추는 주기 (nvblox 격자 2 Hz)
+    arena_corr_wall_period: 2.0 # [s] 다시 맞추는 주기
+    arena_corr_wall_keep_s: 25.0 # [s] 이만큼 최근에 본 depth 점 칸만 (odom이 서서히 틀어지니 짧게 · 11-20)
+    arena_corr_wall_z_min: 0.10 # [m] odom 높이 띠 — 상자(7 cm)·퍽은 빼고 벽만
+    arena_corr_wall_z_max: 0.30
     arena_corr_walls_m:
       0.0 # [m] /arena/walls(도면 벽)를 다시 보내는 최소 변화 — 보낼 때마다 Nav2 costmap이 다시 잡힘 · 0 = 안 보냄
       #   11-15: 0.15 → 0 — 전역 경로가 /arena/walls를 봄. 상자 하나(근거 1개)로 dy −0.2 m 보정이 벽까지 옮겨 문이 실제보다 위로 →
@@ -405,7 +408,10 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   11-16: 넘긴 몫(loc_sent_)을 벽 정합 차이에서 빼 같은 차이를 다시 넘기지 않게 고침
     #   11-19 실기 다시 끔 (bag nav_1119_172047): loc_sent_ 뒤에도 같은 방향(dθ −0.5~−1.5°)을 2 s마다 다시 넘겨 28 s 만에 map→odom +5.3°·19 cm 누적
     #   → 도면 벽(/arena/walls · walls_cloud)과 카메라가 본 실제 벽이 두 줄 → S4 접근 nav_no_progress 3번. 벽 정합은 기록·목표 계산만
-    arena_corr_to_localization: false # 11-20 사용자: 켰다가 다시 끔 — map→odom 고정 (BEE_MAP_ANCHOR=odom이면 EKF odom만 · 벽 정합은 기록·목표 계산만)
+    #   11-20 절대값으로 다시 켬: wall_localization이 odom 좌표 depth 점(최근 arena_corr_wall_keep_s)을 벽에 맞춘 결과를 map→odom 목표로
+    #   (/localization/map_to_odom) — 조각을 더하지 않아 잠금·지연에도 안 쌓임 (시뮬 11-20: 증분은 −1°를 98번). BEE_MAP_ANCHOR=odom일 때만 받음
+    #   mission_manager는 arena_corr_wall_fit이 켜져 있으면 상자로는 안 옮김 (loc_tick 안 돎)
+    arena_corr_to_localization: true
     arena_corr_loc_min_n: 3 # 상자 근거 이만큼(또는 벽 정합)일 때만 — 상자 1~2개로는 안 옮김
     arena_corr_loc_step_m: 0.05 # [m] 한 번에 넘기는 조각 (MapGate 잠금 0.30 m보다 훨씬 작게)
     arena_corr_loc_step_rad: 0.0175 # [rad] (1°)

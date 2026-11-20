@@ -504,6 +504,23 @@ TEST(WallFit, OutliersAndPlanErrors) {
   EXPECT_NEAR(f.c.dy, truth.dy, 0.03);
 }
 
+TEST(WallFit, AbsoluteTargetDoesNotAccumulate) {
+  // 같은 측정(fit)을 받는 쪽이 반영하든 말든 계속 받아도 sent는 fit에서 멈춤 — 11-20 시뮬: 증분 방식은 같은 −1°를 98번 더했음
+  const ArenaCorr fit{0.12, -0.08, 0.06, 0};
+  ArenaCorr sent;
+  for (int i = 0; i < 100; ++i) wall_target_step(fit, sent, 0.05, 0.0175);
+  EXPECT_NEAR(sent.dx, fit.dx, 1e-9);
+  EXPECT_NEAR(sent.dy, fit.dy, 1e-9);
+  EXPECT_NEAR(sent.dth, fit.dth, 1e-9);
+  const auto step = wall_target_step(fit, sent, 0.05, 0.0175);
+  EXPECT_NEAR(std::hypot(step.dx, step.dy) + std::abs(step.dth), 0.0, 1e-9);
+  // 한 번에 max만큼만
+  ArenaCorr s2;
+  const auto first = wall_target_step(fit, s2, 0.05, 0.0175);
+  EXPECT_LE(std::hypot(first.dx, first.dy), 0.05 + 1e-9);
+  EXPECT_LE(std::abs(first.dth), 0.0175 + 1e-9);
+}
+
 TEST(WallFit, OneWallIsDegenerate) {
   // 벽 한 줄만 보이면 벽을 따라가는 방향을 모름 → ok 아님 (보정을 안 바꿈)
   const std::vector<std::array<double, 4>> one{{0, 0, 4, 0}};
