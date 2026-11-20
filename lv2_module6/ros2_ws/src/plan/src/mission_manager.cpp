@@ -136,6 +136,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   grid_step_ = declare_parameter<double>("grid_step", 0.060);
   standoff_ = declare_parameter<double>("standoff", 0.25);
   approach_gap_ = declare_parameter<double>("approach_gap", 0.085);
+  pick_reach_m_ = declare_parameter<double>("pick_reach_m", pick_reach_m_);
+  creep_min_gap_ = declare_parameter<double>("creep_min_gap", creep_min_gap_);
   nav_turn_m_ = declare_parameter<double>("nav_turn_m", 0.10);
   approach_tries_ = static_cast<int>(declare_parameter<int64_t>("approach_tries", 3));
   retries_ = static_cast<int>(declare_parameter<int64_t>("retries", 2));
@@ -1150,7 +1152,7 @@ void MissionManager::place_check(size_t i, int tries) {
         place_check(i, tries + 1);
       };
       if (lying) stand_up(best->id, best->pose.pose.position.x, best->pose.pose.position.y, 0, again);  // 칸에서 누움 → 세워서 다시 집기
-      else run({SubGoal().set__skill("pick").set__target(std::to_string(best->id))}, again);
+      else pick_near(best->id, again);
     });
   });
 }
@@ -1594,7 +1596,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
       //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
       //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
-      if (ok) { back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
+      if (ok) { creep_used_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남
@@ -1664,7 +1666,7 @@ void MissionManager::grab(int tag, Done done, int tries) {
     }
     lying_.erase(tag);
     attempt_ = tries;
-    run({SubGoal().set__skill("pick").set__target(std::to_string(o->id))}, [this, tag, done, tries](bool ok, const std::string & why) {
+    pick_near(o->id, [this, tag, done, tries](bool ok, const std::string & why) {
       if (ok || tries >= retries_ || interrupted(why)) { done(ok, why); return; }
       RCLCPP_WARN(get_logger(), "퍽 %d pick 실패 (%s) — 다시 찾아서 (%d/%d)", tag, why.c_str(), tries + 1, retries_);
       grab(tag, done, tries + 1);  // 트랙 id가 바뀌었을 수 있음 — 다시 찾음
@@ -1718,9 +1720,38 @@ void MissionManager::stand_up(uint32_t id, double mx, double my, int tries, Done
       }
       // 섰음: 선 퍽을 일반 pick (인지 위치 · 손 카메라 · pick 정책). 선 퍽은 누운 가운데에서 약 45 mm 옆에 섬
       //   (11-15 실기: 세운 그 자리에서 같은 손목으로 바로 내려가는 stand_pick은 세우며 밀린 만큼 빗나감)
-      run({SubGoal().set__skill("pick").set__target(std::to_string(o->id))}, done);
+      pick_near(o->id, done);
     });
   });
+}
+
+// 팔이 닿게 조금 전진 (11-20 사용자: 도킹 뒤 퍽이 멀면 계산해서 조금씩 다가간 뒤 멈추고 pick)
+//   박스에 붙은 뒤(back_ 있음)에만 · 퍽(인지, map)이 로봇 중심에서 pick_reach_m 밖이면 그 안에 들 만큼만 곧게 전진 —
+//   상자 앞 gap이 creep_min_gap 아래로는 안 감 (approach_gap − creep_min_gap가 이 도킹의 전진 한도) · 움직이며 계산하지 않고
+//   한 번 가고 멈춘 뒤 pick (pick은 손 카메라로 다시 잼 · 그래도 못 닿으면 coordinator가 pick_far). 전진한 만큼 물러나는 거리에 더함
+void MissionManager::pick_near(uint32_t id, Done done) {
+  const auto pick = [this, id, done]() { run({SubGoal().set__skill("pick").set__target(std::to_string(id))}, done); };
+  const TrackedObject * o = nullptr;
+  if (objects_) for (const auto & t : objects_->objects) if (t.id == id) o = &t;
+  const double room = approach_gap_ - creep_min_gap_ - creep_used_;
+  Pose2 r;
+  if (back_.empty() || !o || room < 0.01 || !robot_map(r)) { pick(); return; }
+  const double c = std::cos(r.yaw), s = std::sin(r.yaw);
+  const double dx = o->pose.pose.position.x - r.x, dy = o->pose.pose.position.y - r.y;
+  const double fwd = dx * c + dy * s, lat = -dx * s + dy * c;
+  if (std::hypot(fwd, lat) <= pick_reach_m_ || std::abs(lat) >= pick_reach_m_) { pick(); return; }  // 이미 닿음 · 옆이라 앞으로 가도 안 닿음
+  const double step = std::min(fwd - std::sqrt(pick_reach_m_ * pick_reach_m_ - lat * lat), room);
+  if (step < 0.01) { pick(); return; }
+  note(fmt("퍽이 %.3f m — 팔이 닿게 %.0f mm 전진", std::hypot(fwd, lat), step * 1000));
+  run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x + step * c, r.y + step * s, r.yaw)).set__relation("drive_straight")},
+      [this, step, pick, done](bool ok, const std::string & why) {
+        if (!ok && interrupted(why)) { done(false, why); return; }
+        // 실패해도 일부 움직였을 수 있음 — 물러날 때 모자라지 않게 다 더함 (더 물러나는 쪽이 안전)
+        creep_used_ += step;
+        if (!back_.empty()) back_ = fmt("%.3f", std::stod(back_) + step);
+        if (!ok) RCLCPP_WARN(get_logger(), "전진 실패 (%s) — 그 자리에서 pick", why.c_str());
+        pick();
+      });
 }
 
 // ---------- 좌표
@@ -1735,16 +1766,23 @@ std::string MissionManager::point(double ax, double ay, double z) const {
   return fmt("%.4f,%.4f,%.4f", m.x, m.y, z);
 }
 
-bool MissionManager::robot_arena(Pose2 & p) const {
+bool MissionManager::robot_map(Pose2 & p) const {
   try {
     const auto t = tf_buffer_->lookupTransform("map", "base_footprint", tf2::TimePointZero);
     const auto & r = t.transform.rotation;
-    const double yaw = std::atan2(2 * (r.w * r.z + r.x * r.y), 1 - 2 * (r.y * r.y + r.z * r.z));
-    p = to_arena(t.transform.translation.x, t.transform.translation.y, yaw);
+    p = {t.transform.translation.x, t.transform.translation.y,
+         std::atan2(2 * (r.w * r.z + r.x * r.y), 1 - 2 * (r.y * r.y + r.z * r.z))};
     return true;
   } catch (const std::exception &) {
     return false;
   }
+}
+
+bool MissionManager::robot_arena(Pose2 & p) const {
+  Pose2 m;
+  if (!robot_map(m)) return false;
+  p = to_arena(m.x, m.y, m.yaw);
+  return true;
 }
 
 // ---------- 도면 보정 — 인지 상자(윗면 가운데, map) ↔ 도면 상자 짝으로 arena → map 변환을 고침

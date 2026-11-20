@@ -134,6 +134,7 @@ private:
   void stand_up(uint32_t id, double mx, double my, int tries, Done done);
   // 그 퍽(tag)을 손에 — 집기 직전에 locate로 트랙을 다시 찾고, 누웠으면 stand_up · 아니면 pick. pick이 실패하면 다시 찾아서 (retries번)
   void grab(int tag, Done done, int tries = 0);
+  void pick_near(uint32_t id, Done done);  // 박스에 붙은 뒤 퍽이 수직 pick 한계 밖이면 그만큼만 전진 → pick
   // 퍽(tag) 트랙을 지금 찾음 — 목록에 없으면 조사한 자리(puck_at_)를 inspect로 다시 보고 한 번 더 찾음 (그래도 없으면 nullptr)
   //   memory: 목록에 없을 때 먼저 마지막으로 본 트랙(last_seen_)을 줌 — 첫 시도만 (그 pick이 실패하면 다시 봄)
   void locate(int tag, bool memory, std::function<void(const TrackedObject *)> cb);
@@ -142,6 +143,7 @@ private:
   Pose2 to_arena(double mx, double my, double myaw = 0.0) const;
   std::string point(double ax, double ay, double z) const;  // arena 점 → "x,y,z" (map)
   bool robot_arena(Pose2 & p) const;
+  bool robot_map(Pose2 & p) const;
   void publish_state();
   void publish_markers();
   void write_log(const std::string & name, const std::string & json) const;
@@ -337,6 +339,7 @@ private:
   double stand_find_m_ = 0.10;                   // stand 뒤 선 퍽을 찾는 반경 → pick (못 찾으면 stand_pick)
   int placed_ = 0, photo_n_ = 0;
   int home_tries_ = 0;  // 출발 구역 복귀 Nav2 실패 횟수 — return_home_tries까지 다시 (11-18: 한 번 실패로 미션 ERROR 끝나던 것)
+  double pick_reach_m_ = 0.25, creep_min_gap_ = 0.095, creep_used_ = 0.0;  // pick_near: 수직 pick 한계 · 상자 앞 최소 gap · 이번 도킹에서 전진한 거리
   std::string back_;   // 박스에 붙어 있을 때 물러날 standoff 자세 "x,y,yaw" (map) — 다음 go_near가 먼저 씀
   std::string run_dir_;
   perception::msg::TrackedObjectArray::ConstSharedPtr objects_;
