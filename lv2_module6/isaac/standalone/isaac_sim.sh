@@ -42,6 +42,12 @@ export FASTDDS_DEFAULT_PROFILES_FILE="${FASTDDS_DEFAULT_PROFILES_FILE:-$HERE/../
 # localhost 참가자 몇 개에만 discovery를 보내 노드 일부가 서로 안 보였다 (11-12: camera_adapter · coordinator가 안 보여
 # camera_info·depth 없음 → nvblox 격자 0 · /coordinator/basket_clear 응답 없음)
 export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+# map 기준 · cuVSLAM 옵션은 실기 ros2_ws/start.sh 기본과 같게 (11-20) — 매핑(map:=slam)은 cuVSLAM 기준 · rig 수평 · 보기 끔,
+#   그 밖은 odom 기준 (벽 위치 목표 /localization/map_to_odom을 받으려면 odom이어야 함). 터미널 값이 있으면 그것
+case " ${ISAAC_ROS_ARGS:-} " in *" map:=slam "*) export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-cuvslam}"
+  export BEE_CUVSLAM_VIS="${BEE_CUVSLAM_VIS:-0}"
+  export BEE_CUVSLAM_LEVEL="${BEE_CUVSLAM_LEVEL:-1}" ;; esac
+export BEE_MAP_ANCHOR="${BEE_MAP_ANCHOR:-odom}"
 source /opt/ros/lyrical/setup.bash   # Isaac도 이 환경(ROS_DISTRO=lyrical, ROS_DOMAIN_ID)을 물려받는다 — 카메라 토픽은 Isaac 안 bridge가 냄
 # 이 터미널에 Isaac venv가 켜져 있으면(isaacsim 별칭 등) ROS 노드의 `#!/usr/bin/env python3`가 그 venv python(numpy 2)으로 떠
 # perception_node가 cv_bridge에서 segfault(exit −11)로 죽었음 (11/07). Isaac은 아래에서 venv를 따로 켜므로 여기선 끔
