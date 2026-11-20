@@ -192,6 +192,18 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   barcode_min_gap_m_ = declare_parameter<double>("barcode_min_gap_m", 0.13);
   barcode_gaze_after_signal_ = declare_parameter<bool>("barcode_gaze_after_signal", barcode_gaze_after_signal_);
   arm_sag_rad_ = declare_parameter<double>("arm_sag_rad", arm_sag_rad_);
+  barcode_peek_ = declare_parameter<bool>("barcode_peek", barcode_peek_);
+  barcode_peek_s_ = declare_parameter<double>("barcode_peek_s", barcode_peek_s_);
+  barcode_peek_switch_s_ = declare_parameter<double>("barcode_peek_switch_s", barcode_peek_switch_s_);
+  barcode_height_m_ = declare_parameter<double>("barcode_height_m", barcode_height_m_);
+  peek_profile_ = declare_parameter<std::string>("barcode_peek_profile", peek_profile_);
+  cam_profile_ = declare_parameter<std::string>("barcode_cam_profile", cam_profile_);
+  {
+    const auto cam = declare_parameter<std::string>("barcode_peek_cam", "/gripper_cam");  // realsense2_camera 노드 (이름 = 토픽 앞부분)
+    cam_params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, cam);
+    cam_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(cam + "/color/camera_info", rclcpp::SensorDataQoS(),
+      [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr m) { cam_width_ = m->width; cam_info_at_ = now(); });
+  }
   motor_error_stop_ = declare_parameter<bool>("motor_error_stop", motor_error_stop_);
   joint_sub_ = create_subscription<sensor_msgs::msg::JointState>("/joint_states", rclcpp::SensorDataQoS(),
     [this](sensor_msgs::msg::JointState::ConstSharedPtr m) {
@@ -498,6 +510,9 @@ void MissionManager::barcode_phase() {
   read_started_ = phase_started_;
   signal_window_ = true;
   gaze_sent_ = false;
+  peek_sent_ = false;
+  peek_done_ = !barcode_peek_;
+  peek_at_ = hires_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   returning_ = false;
   light_warned_ = false;
   hold_noted_ = false;
@@ -562,6 +577,7 @@ void MissionManager::barcode_phase() {
         }
       }
       std::optional<double> candidate_yaw;
+      double candidate_range = 0.0, candidate_z = barcode_height_m_;
       Pose2 base_arena;
       if (objects_ && robot_arena(base_arena)) {
         for (const auto & o : objects_->objects) {
@@ -573,11 +589,38 @@ void MissionManager::barcode_phase() {
           const double relative = std::atan2(std::sin(yaw), std::cos(yaw));
           if (range >= 0.20 && range <= 4.0 && std::abs(relative) <= 0.65) {
             candidate_yaw = relative;
+            candidate_range = range;
+            const double z = o.pose.pose.position.z;  // map 높이 (바닥 = 0) — 이상하면 barcode_height_m
+            if (z > 0.03 && z < 0.8) candidate_z = z;
             break;
           }
         }
       }
-      if (!gaze_sent_ && candidate_yaw && !barcode_arm_pose_.empty() && t > barcode_pole_s_ && !arm_wait) {
+      // ⓪ 엿보기 — 팔은 접은 채 손목만 바코드 쪽으로(joint1 방위 · joint4 높이) + 손 카메라를 잠깐 고해상도로
+      //    뻗지 않으니 신호를 기다리지 않음(과부하 없음) · 다가가지 않으니 신호등이 pole 시야에 남음
+      if (!peek_done_ && !peek_sent_ && candidate_yaw && t > barcode_pole_s_) {
+        peek_sent_ = true;
+        hires(true);  // 팔이 움직이는 동안 카메라 전환(1~2 s)을 같이
+        // 손 카메라 ≈ 앞 0.16 m · 높이 0.32 m (pose_peek, URDF) → 바코드 중심을 보는 아래쪽 각도
+        const double down = std::atan2(0.32 - candidate_z, std::max(0.10, candidate_range - 0.16));
+        note("바코드 엿보기 " + fmt("%+.2f rad · 아래 %.0f° · %.2f m", *candidate_yaw, down * 180.0 / M_PI, candidate_range) +
+             " — 팔 접은 채 손목만 · 손 카메라 " + peek_profile_);  // fmt 버퍼 96 B — 한글은 밖에서 붙임
+        run({SubGoal().set__skill("pose").set__target(fmt("peek@%.3f,%.3f", *candidate_yaw, down))},
+          [this](bool ok, const std::string & why) {
+            if (phase_ != Phase::BARCODE || !barcode_.empty() || peek_done_) return;
+            if (ok) { peek_at_ = now(); return; }
+            peek_end("자세 실패 " + why);
+          });
+      }
+      if (peek_sent_ && !peek_done_ && peek_at_.nanoseconds() > 0) {
+        const bool hi = cam_width_ >= 1280 && cam_info_at_ > peek_at_;  // 도착 뒤 고해상도 영상이 실제로 들어옴
+        if (hi && hires_at_.nanoseconds() == 0) hires_at_ = now();
+        if (hires_at_.nanoseconds() > 0 && (now() - hires_at_).seconds() > barcode_peek_s_)
+          peek_end(fmt("%.0f s 동안 안 읽힘", barcode_peek_s_));
+        else if (hires_at_.nanoseconds() == 0 && (now() - peek_at_).seconds() > barcode_peek_switch_s_)
+          peek_end(fmt("고해상도 영상이 안 옴 (지금 폭 %.0f px)", static_cast<double>(cam_width_)));
+      }
+      if (!gaze_sent_ && peek_done_ && candidate_yaw && !barcode_arm_pose_.empty() && t > barcode_pole_s_ && !arm_wait) {
         gaze_sent_ = true;
         const std::string target = barcode_arm_pose_ == "gaze"
           ? "gaze@" + fmt("%.3f", *candidate_yaw) : barcode_arm_pose_;
@@ -633,9 +676,11 @@ void MissionManager::barcode_phase() {
       return;
     }
     timer_->cancel();
-    RCLCPP_INFO(get_logger(), "바코드 %s (%.1f s · %s)", barcode_.c_str(), t, gaze_sent_ ? "손 카메라" : "팔 안 움직임");
+    RCLCPP_INFO(get_logger(), "바코드 %s (%.1f s · %s)", barcode_.c_str(), t,
+                gaze_sent_ ? "손 카메라 gaze" : peek_sent_ ? "손 카메라 엿보기" : "팔 안 움직임");
     snap("barcode");
     if (!observe_move_) { barcode_done(true, ""); return; }  // 이미 관측 자리 — 팔을 뻗었으면 접음
+    hires(false);
     const auto p = to_map(start_.x, start_.y, M_PI);  // 관측 = 출발 자리에서 −X(π)를 봄 — 팔부터 접고 이동
     run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", p.x, p.y, p.yaw))},
       [this](bool ok, const std::string & why) { finish(ok, "observe_nav_failed:" + why); });
@@ -644,11 +689,37 @@ void MissionManager::barcode_phase() {
 
 bool MissionManager::observe_still() const {
   // 관측 중 팔·바퀴가 멈춰 있음 — pole 3초(팔 stow) 또는 gaze 도착 뒤 · 다가가기·복귀 중 아님
-  return !moving_ && !returning_ && (!gaze_sent_ || gaze_at_.nanoseconds() > 0);
+  return !moving_ && !returning_ && (!gaze_sent_ || gaze_at_.nanoseconds() > 0) &&
+         (!peek_sent_ || gaze_sent_ || peek_at_.nanoseconds() > 0);
+}
+
+void MissionManager::hires(bool on) {
+  if (on == hires_on_) return;
+  hires_on_ = on;
+  const auto & prof = on ? peek_profile_ : cam_profile_;
+  if (!cam_params_->service_is_ready()) {
+    RCLCPP_WARN(get_logger(), "손 카메라 파라미터 서비스 없음 — 해상도 %s 못 바꿈", prof.c_str());
+    return;
+  }
+  const auto t0 = now();
+  cam_params_->set_parameters({rclcpp::Parameter("rgb_camera.color_profile", prof)},
+    [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
+      const auto r = f.get();
+      const bool ok = !r.empty() && r[0].successful;
+      if (ok) RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s (%.2f s)", prof.c_str(), (now() - t0).seconds());
+      else RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s 실패: %s", prof.c_str(), r.empty() ? "응답 없음" : r[0].reason.c_str());
+    });
+}
+
+void MissionManager::peek_end(const std::string & why) {
+  peek_done_ = true;
+  hires(false);
+  note("엿보기로 못 읽음 (" + why + ") — gaze로");
 }
 
 void MissionManager::barcode_done(bool ok, const std::string & why) {
-  if (!gaze_sent_) { ok ? finish(true, "") : finish(false, why); return; }  // 팔을 안 움직였음
+  hires(false);
+  if (!gaze_sent_ && !peek_sent_) { ok ? finish(true, "") : finish(false, why); return; }  // 팔을 안 움직였음
   // 뻗던·다가가던 중이면 이 계획이 진행 중 goal을 취소함 · 팔 접고 → 다가갔으면 원래 자리로 똑바로 후진
   std::vector<SubGoal> back{stow()};
   if (advanced_m_ > 0.0 || moving_) {
@@ -659,7 +730,7 @@ void MissionManager::barcode_done(bool ok, const std::string & why) {
   returning_ = true;
   run(back, [this, ok, why](bool sok, const std::string & swhy) {  // 실패해도 접고(·돌아오고) 끝냄
     returning_ = false;
-    gaze_sent_ = false;  // 팔 접음 (abort 때 다시 접을 필요 없음)
+    gaze_sent_ = peek_sent_ = false;  // 팔 접음 (abort 때 다시 접을 필요 없음)
     if (!ok) { finish(false, why); return; }
     // 바코드는 읽었음 — 후진 복귀가 조금 덜 맞아도(approach_blocked 등) 미션은 계속 (다음 이동은 Nav2) · 팔 접기 실패만 멈춤
     if (!sok) RCLCPP_WARN(get_logger(), "바코드 뒤 복귀 덜 됨 (%s) — 계속", swhy.c_str());
@@ -1181,7 +1252,8 @@ void MissionManager::stop(const std::string & why) {
   error_ = why;
   if (timer_) timer_->cancel();
   // 관측 중 팔을 뻗은 채 멈추면 다음 시작·주행 때 부딪힘 → 접기(stow)만 새 goal로 보냄 (결과는 안 기다림)
-  const bool fold = gaze_sent_ && !interrupted(why.rfind("interrupted: ", 0) == 0 ? why.substr(13) : why);
+  hires(false);
+  const bool fold = (gaze_sent_ || peek_sent_) && !interrupted(why.rfind("interrupted: ", 0) == 0 ? why.substr(13) : why);
   if (goal) execute_client_->async_cancel_goal(goal);
   else if (execute_client_ && !fold) execute_client_->async_cancel_all_goals();  // fold면 새 goal이 진행 중 계획을 preempt
   if (fold) {
@@ -1190,7 +1262,7 @@ void MissionManager::stop(const std::string & why) {
     stow_goal.goals.push_back(stow());
     stow_goal.goals.back().step = 1;
     execute_client_->async_send_goal(stow_goal);
-    gaze_sent_ = false;
+    gaze_sent_ = peek_sent_ = false;
     RCLCPP_WARN(get_logger(), "정지 — 뻗은 팔 접기(stow)만 보냄");
   }
   write_log("error.json", "{\"why\": " + q(why) + ", \"results\": [" + [&] {

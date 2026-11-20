@@ -4,8 +4,10 @@
 //     못 가면 initial_pose_retries번만 다시 보내고 지금 자세로 멈춤 (걸린 채 계속 밀면 과부하). initial_pose_enabled는 실행 중에도 바꿈
 //   스캔 자세(scan)는 없앰 (11-09) — 팔을 왼쪽 뒤로 뻗은 채 주행·회전해 관성으로 밀리고 무게중심이 쏠림. 관측·주행은 stow
 //   작업 중인지는 /task/status (RUNNING) 와 이 노드의 goal로 봄. 자세 값: skills/params/basket.yaml (isaac-lab slot_table)
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <utility>
 
@@ -23,8 +25,11 @@ class PoseSkill : public SkillNode {
 public:
   explicit PoseSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_pose", options), arm_(*this) {
-    for (const char * n : {"stow", "carry_left", "carry_right", "look", "gaze"})  // look = inspect 상자 보기 1차 자세 (skill_inspect도 같은 pose_look) · gaze = 손 카메라로 정면을 가까이 봄 (바코드 등)
+    for (const char * n : {"stow", "carry_left", "carry_right", "look", "gaze", "peek"})  // look = inspect 상자 보기 1차 자세 (skill_inspect도 같은 pose_look) · gaze = 손 카메라로 정면을 가까이 봄 (바코드 등) · peek = 팔은 접은 채 손목만 들어 손 카메라로 멀리 봄
       poses_[n] = declare_parameter<std::vector<double>>(std::string("pose_") + n, std::vector<double>{});
+    peek_j4_level_ = declare_parameter<double>("peek_j4_level", peek_j4_level_);
+    peek_j4_min_ = declare_parameter<double>("peek_j4_min", peek_j4_min_);
+    peek_j4_max_ = declare_parameter<double>("peek_j4_max", peek_j4_max_);
     initial_enabled_ = declare_parameter<bool>("initial_pose_enabled", true);
     initial_joints_ = declare_parameter<std::vector<std::string>>("initial_pose_joints", {"joint1", "joint2", "joint3", "joint4", "joint5"});
     initial_pose_ = declare_parameter<std::vector<double>>("initial_pose", {0.0, -1.9024, 1.344, 0.9023, 0.0});
@@ -82,6 +87,20 @@ public:
           done(false, "gaze_target_invalid");
           return;
         }
+      } else if (g.target.rfind("peek@", 0) == 0 && poses_.count("peek")) {
+        // peek@<yaw>,<down> — 접은 팔(pose_peek)에서 joint1 = 방위 yaw [rad], joint4 = 손 카메라가 아래로 down [rad] 보게
+        //   stow 계열(j2·j3 고정)에서 손 카메라 pitch = peek_j4_level − j4 (URDF FK, 11-20) → j4 = level + down
+        double yaw = 0.0, down = 0.0;
+        char tail = 0;
+        if (std::sscanf(g.target.c_str() + 5, "%lf,%lf%c", &yaw, &down, &tail) != 2 || !std::isfinite(yaw) || !std::isfinite(down) ||
+            std::abs(yaw) > 0.65) {
+          done(false, "peek_target_invalid");
+          return;
+        }
+        q = poses_.at("peek");
+        if (q.size() != 5) { done(false, "pose_unknown"); return; }
+        q[0] = yaw;
+        q[3] = std::clamp(peek_j4_level_ + down, peek_j4_min_, peek_j4_max_);
       } else {
         done(false, "pose_unknown");
         return;
@@ -191,6 +210,9 @@ private:
 
   ArmIO arm_;
   std::map<std::string, std::vector<double>> poses_;
+  double peek_j4_level_ = 0.1954;  // [rad] pose_peek에서 손 카메라가 수평을 보는 joint4
+  double peek_j4_min_ = 0.0;       // [rad] 위로 최대 약 11°
+  double peek_j4_max_ = 0.9023;    // [rad] = stow (아래 약 41°)
   std::vector<std::string> initial_joints_;
   std::vector<double> initial_pose_;
   double initial_tol_ = 0.05, initial_move_s_ = 3.0, initial_gripper_ = 0.0;

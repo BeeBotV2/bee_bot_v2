@@ -16,7 +16,7 @@ coordinator:
       unload: 90.0
       stand: 90.0
       stand_pick: 90.0
-    pose_names: [stow, carry_left, carry_right, gaze, look] # look = inspect 상자 보기 1차 자세 (TUI 팔 9) · pose 단계 검증 (값은 skill_pose — skills/params/basket.yaml · arm.yaml) · scan 자세는 없앰 (11-09)
+    pose_names: [stow, carry_left, carry_right, gaze, look, peek] # look = inspect 상자 보기 1차 자세 (TUI 팔 9) · pose 단계 검증 (값은 skill_pose — skills/params/basket.yaml · arm.yaml) · scan 자세는 없앰 (11-09)
     # 적재함 장부 (이 노드만 씀): 파일에 저장해 다시 떠도 이어 감 · load next가 쓰는 칸 (팔이 잘 못 닿는 칸은 실기에서 확인 후 뺌)
     basket_slots: 12
     #   사람이 적재함을 손으로 비웠으면: ros2 service call /coordinator/basket_clear std_srvs/srv/Trigger
@@ -460,6 +460,14 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     barcode_pole_s: 3.0 # [s] pole_front_cam이 신호를 우선 관측할 시간 — 이후에는 바코드 막대 후보만 계속 추적
     barcode_arm_pose: gaze # 후보 위치로 수평 방향을 맞춰 gripper_cam으로 읽고 stow로 돌아옴 ("" = 팔 이동 안 함)
     barcode_gaze_after_signal: false # 후보 위치가 잡히면 신호 확정과 병렬로 target-aligned gaze. true면 신호부터 확정
+    barcode_peek: true # 바코드 후보가 잡히면 먼저 "엿보기": 팔은 stow로 접은 채 손목(joint4)·방위(joint1)만 바코드로 + 손 카메라 컬러를 잠깐 고해상도로 (11-20)
+    #   뻗지 않아 joint2 과부하 없음 · 다가가지 않아 신호등이 pole 시야에 남음 · 신호 확정을 안 기다림. 못 읽으면 해상도 되돌리고 아래 gaze 흐름 그대로
+    barcode_peek_s: 4.0 # [s] 고해상도 영상이 들어온 뒤 이만큼 안 읽히면 gaze로 (15 fps면 약 60장 — perception이 처리하는 만큼)
+    barcode_peek_switch_s: 5.0 # [s] 손목 도착 뒤 이만큼 고해상도 영상이 안 오면(파라미터 서비스 없음·전환 실패) gaze로
+    barcode_peek_profile: "1920x1080x15" # 엿보기 동안만 쓰는 손 카메라 컬러 프로파일 (D435 1080p · realsense-ros 4.57 실행 중 변경)
+    barcode_cam_profile: "640x360x15" # 엿보기 뒤 되돌릴 프로파일 — bringup gripper_cam_profile과 같게
+    barcode_peek_cam: /gripper_cam # 손 카메라 realsense2_camera 노드 이름
+    barcode_height_m: 0.15 # [m] 바코드 중심 높이 — 인지한 높이가 0.03~0.8 m 밖일 때만 씀 (11-12 gaze 화면 가운데 기준 추정)
     arm_sag_rad: 0.25 # [rad] gaze 유지 중 관절이 도착 값에서 이만큼 넘게 벗어나면 팔 처짐으로 보고 정지 (0 = 끔)
     motor_error_stop: true # OpenCR 모터 에러(과부하 등) 진단이 뜨면 미션 바로 정지 (motor_error: … — ~/reboot_motors 뒤 다시)
     signal_timeout_s: 150.0 # [s] 관측(BARCODE) 시작부터 신호 확정까지 — 바코드와 같이 봄 (한 사이클 약 27초 · 12개 한 번이면 확정)
