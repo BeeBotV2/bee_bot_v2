@@ -88,7 +88,8 @@ public:
     detect_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/detected_dock_pose", rclcpp::QoS(10));
     dock_client_ = rclcpp_action::create_client<Dock>(this, "/dock_robot");
     undock_client_ = rclcpp_action::create_client<Undock>(this, "/undock_robot");
-    // 상자 도킹 사이클(붙기 시작 ~ exit 끝) 동안 true — ros_system grid_obstacle_cloud가 도면 벽 점구름을 끔 (11-20)
+    // 상자에 붙는 동안(앞으로 가는 동안)만 true — ros_system grid_obstacle_cloud가 도면 벽 점구름을 끔 (11-20)
+    //   붙기가 끝나면(성공·실패 모두) 바로 false: exit 후진 중엔 뒤를 보는 입력이 도면 벽뿐이고, exit이 안 오면 켜진 채 남음
     dock_pub_ = create_publisher<std_msgs::msg::Bool>("/skills/docking", rclcpp::QoS(1).reliable().transient_local());
     set_docking(false);
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odom", 10,
@@ -422,8 +423,7 @@ private:
 
   void end(bool ok, const std::string & why) {
     if (timer_) timer_->cancel();
-    // 붙기 성공이면 exit까지 도킹 중 유지 · 붙기 실패나 exit 끝이면 해제
-    if (exit_ || !ok) set_docking(false);
+    set_docking(false);
     box_mode_ = false;
     halt();
     done_(ok, why);
