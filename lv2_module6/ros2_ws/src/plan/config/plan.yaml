@@ -48,8 +48,13 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   1·2·6·4·5·3 + L3·L2·L1 = 26.6 m (기존 1→6 + L1→L3 = 33.6 m · −21 %). 비우면 번호 순서
     #   11-14: 진입 면(start_box_sides 첫 면)까지 넣어 재계산 — 출발 → 적재 6 → 놓기 L1·L2·L3 → 재확인 L3·L2·L1 → 복귀
     #     4·5·3·6·2·1 + L1·L2·L3 = 29.7 m (위 1·2·6·4·5·3 + L3·L2·L1은 같은 계산으로 32.1 m · 상자 3을 +y 좁은 틈으로 붙음)
-    survey_order: [4, 5, 3, 6, 2, 1]
-    build_location_order: [1, 2, 3]
+    #   11-20: verify_in_place(11-15)로 재확인 구간이 없어져 다시 계산 — 출발 → 적재 6 → 놓기 3(그 자리에서 재검증) → 복귀.
+    #     Nav2 planner_server(SmacPlanner2D · 아래 global costmap 값 · maze_map_1711)로 구간마다 실제 경로를 내고, 상자 = 진입 면 ·
+    #     S2 물러남 · 장소 = 직선 거리로 가까운 면(location_side_nearest)을 미션처럼 반영해 720 × 6 순서 비교 (정적 지도 기준)
+    #     1·2·4·5·6·3 + L3·L2·L1 = 26.7 m (이전 4·5·3·6·2·1 + L1·L2·L3 = 31.3 m · −15 %) — L3에서 끝나면 복귀가 왼쪽 통로를
+    #     다시 내려옴. 1·2 먼저 · 3 마지막 · L1 마지막이면 2~4위도 0.1 m 안 (A* 로봇 반경 0.16~0.21에서도 같은 경향)
+    survey_order: [1, 2, 4, 5, 6, 3]
+    build_location_order: [3, 2, 1]
     # 경기장 벽 선분 [x0, y0, x1, y1, …] (arena, m) — documents/mission/dice-map.png (tools/cli/ros/docker/assets/course/dice_maze/walls.json 벽판 20개)
     #   ① 벽에 막힌 다가설 자리(벽에서 wall_clearance 안)는 고르지 않음 ② /arena/walls → nvblox_map이 /map에 겹쳐 Nav2가 처음부터 벽을 앎
     #   (발제: 기존 벽·기둥·박스 위치 유지 — 경기장 고정). 비우면 둘 다 안 함
