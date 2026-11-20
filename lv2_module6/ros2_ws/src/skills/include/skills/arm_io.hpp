@@ -17,6 +17,7 @@
 #include "ml/msg/skill_context.hpp"
 #include "moveit_msgs/action/execute_trajectory.hpp"
 #include "moveit_msgs/srv/get_motion_plan.hpp"
+#include "moveit_msgs/srv/get_state_validity.hpp"
 #include "perception/msg/hand_target.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -120,6 +121,7 @@ public:
 private:
   using ExecuteTrajectory = moveit_msgs::action::ExecuteTrajectory;
   using GetMotionPlan = moveit_msgs::srv::GetMotionPlan;
+  using GetStateValidity = moveit_msgs::srv::GetStateValidity;
   using Gripper = control_msgs::action::ParallelGripperCommand;
   rclcpp::Node & node_;
   int arm_plan_tries_ = 3;
@@ -132,6 +134,7 @@ private:
   uint32_t run_ = 0;
   std::shared_ptr<ArmStateCache> state_cache_;
   rclcpp::Client<GetMotionPlan>::SharedPtr plan_;
+  rclcpp::Client<GetStateValidity>::SharedPtr validity_;
   rclcpp_action::Client<ExecuteTrajectory>::SharedPtr exec_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr reset_sag_, fade_sag_;
@@ -141,6 +144,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_, settle_timer_;
   bool settle_ = false;  // reset_sag 뒤 아직 안 기다림
   void execute(const moveit_msgs::msg::RobotTrajectory & traj, Cb done);
+  void check_self_collision(const std::vector<Q5> & samples, Cb done);
   void settle(std::function<void()> go);
 };
 

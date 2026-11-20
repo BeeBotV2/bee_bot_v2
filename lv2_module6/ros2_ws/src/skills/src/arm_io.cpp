@@ -66,6 +66,7 @@ ArmIO::ArmIO(rclcpp::Node & node)
   // sim: 닿는 구간은 시뮬과 같은 기준 동작 + 학습 보정 (2026-11-03 배포 결정) · moveit: 예전처럼 MoveIt만
   contact_mode_ = node.declare_parameter<std::string>("contact_mode", "sim");
   plan_ = node.create_client<GetMotionPlan>("/plan_kinematic_path");
+  validity_ = node.create_client<GetStateValidity>("/check_state_validity");
   exec_ = rclcpp_action::create_client<ExecuteTrajectory>(&node, "/execute_trajectory");
   gripper_ = rclcpp_action::create_client<Gripper>(&node, "/gripper_controller/gripper_cmd");
   reset_sag_ = node.create_client<std_srvs::srv::Trigger>("/rl_arm_correction/reset_sag");
@@ -80,7 +81,9 @@ ArmIO::ArmIO(rclcpp::Node & node)
     });
 }
 
-bool ArmIO::moveit_ready() const { return plan_->service_is_ready() && exec_->action_server_is_ready(); }
+bool ArmIO::moveit_ready() const {
+  return plan_->service_is_ready() && exec_->action_server_is_ready() && validity_->service_is_ready();
+}
 bool ArmIO::gripper_ready() const { return gripper_->action_server_is_ready(); }
 
 void ArmIO::stop() {
@@ -316,8 +319,50 @@ ArmIO::Step ArmIO::traj_step(std::function<std::vector<Q5>(const Q5 &)> make) {
     };
     jt.points.push_back(point(now, 0.0));
     for (size_t k = 0; k < samples.size(); ++k) jt.points.push_back(point(samples[k], (k + 1) * TRAJ_DT));
-    execute(traj, cb);
+    // traj_step은 MoveIt 계획을 거치지 않음 — 보내기 전에 샘플마다 자기 충돌만 검사 (11-20 실기: load 실패 뒤 place가 적재함 쪽에서
+    //   상자로 되돌리며 joint5 −3.10 해로 가 gripper_cam_link가 shoulder_link를 갈며 감 · MoveIt은 다음 계획에서야 알아챔)
+    check_self_collision(samples, [this, traj, cb](bool ok) {
+      if (!ok) { cb(false); return; }
+      execute(traj, cb);
+    });
   };
+}
+
+// 샘플마다 /check_state_validity — 로봇 링크끼리(붙인 물체 포함) 닿는 자세가 하나라도 있으면 실패. world(octomap·퍽·적재함)와 닿는 건
+//   무시 — 닿는 구간은 일부러 퍽·칸에 닿음. 서비스가 없거나 응답이 없으면 실패 (안전 쪽)
+void ArmIO::check_self_collision(const std::vector<Q5> & samples, Cb done) {
+  if (samples.empty()) { done(true); return; }
+  if (!validity_->service_is_ready()) {
+    RCLCPP_ERROR(node_.get_logger(), "궤적 충돌 검사: /check_state_validity 없음 — 궤적 안 보냄");
+    done(false);
+    return;
+  }
+  struct Pending { size_t left; bool failed = false; };
+  auto pend = std::make_shared<Pending>(Pending{samples.size()});
+  const uint64_t gen = gen_;
+  const auto self = [](uint32_t t) {
+    return t == moveit_msgs::msg::ContactInformation::ROBOT_LINK || t == moveit_msgs::msg::ContactInformation::ROBOT_ATTACHED;
+  };
+  for (size_t k = 0; k < samples.size(); ++k) {
+    auto req = std::make_shared<GetStateValidity::Request>();
+    req->group_name = "arm";
+    req->robot_state.is_diff = true;
+    req->robot_state.joint_state.name.assign(std::begin(ARM), std::end(ARM));
+    req->robot_state.joint_state.position.assign(samples[k].begin(), samples[k].end());
+    validity_->async_send_request(req, [this, pend, gen, k, n = samples.size(), done, self](rclcpp::Client<GetStateValidity>::SharedFuture f) {
+      if (pend->failed) return;
+      const auto res = f.get();
+      for (const auto & c : res->contacts) {
+        if (!self(c.body_type_1) || !self(c.body_type_2)) continue;
+        RCLCPP_ERROR(node_.get_logger(), "궤적 충돌 검사: 샘플 %zu/%zu에서 %s - %s 닿음 — 궤적 안 보냄", k + 1, n,
+                     c.contact_body_1.c_str(), c.contact_body_2.c_str());
+        pend->failed = true;
+        if (gen == gen_) done(false);
+        return;
+      }
+      if (--pend->left == 0 && gen == gen_) done(true);
+    });
+  }
 }
 
 ArmIO::Step ArmIO::delta_settle_step(double min_s, double max_s) {
@@ -493,7 +538,15 @@ bool ArmIO::ik_ee_yaw(const geometry_msgs::msg::PoseStamped & ee, double psi, co
   const tf2::Transform t(tf2::Quaternion(r.x, r.y, r.z, r.w), tf2::Vector3(tr.x, tr.y, tr.z));
   const tf2::Vector3 p = t * tf2::Vector3(ee.pose.position.x, ee.pose.position.y, ee.pose.position.z);
   const double base_yaw = std::atan2(2 * (r.w * r.z + r.x * r.y), 1 - 2 * (r.y * r.y + r.z * r.z));
-  return stand::ik_down_sym({p.x(), p.y(), p.z()}, psi + base_yaw - M_PI / 2, near, out);
+  // 손가락은 좌우 대칭이라 닫는 축 ±π 두 해 — near(지금 자세)에 가까운 해 대신 |joint5|가 작은 해 (손 카메라가 몸 반대쪽).
+  //   적재함 쪽(joint5 ≈ ±π)에서 near로 고르면 앞쪽 자세에서도 손목이 반 바퀴 뒤집혀 카메라가 shoulder_link에 닿음 (11-20 실기 place)
+  const stand::V3 at{p.x(), p.y(), p.z()};
+  const double close_yaw = psi + base_yaw - M_PI / 2;
+  Q5 a{}, b{};
+  const bool ok_a = stand::ik_down(at, close_yaw, near, a), ok_b = stand::ik_down(at, close_yaw + M_PI, near, b);
+  if (!ok_a && !ok_b) return false;
+  out = !ok_b || (ok_a && std::abs(a[4]) <= std::abs(b[4])) ? a : b;
+  return true;
 }
 
 double ArmIO::jam_mean(double window_s) const {

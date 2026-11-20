@@ -264,6 +264,10 @@ private:
   std::string order_;                   // L1·L2·L3 그룹 ("YRG")
   std::vector<Puck> pucks_;             // 조사한 퍽 (tag·color·shape)
   std::map<int, std::pair<size_t, double>> puck_at_;  // tag → (시작 박스, x 오프셋) — 적재함에 못 실은 퍽을 집으러 갈 곳
+  std::map<int, std::pair<double, double>> puck_seen_;  // tag → 조사 때 본 자리 (map) — 적재함에 못 실은 퍽을 되돌려 놓을 곳
+  std::map<size_t, std::pair<double, double>> box_seen_;  // 시작 박스 → 조사 때 기준으로 쓴 가운데 (map, 인지 상자 · 없으면 도면)
+  std::set<int> on_box_;                                  // 지금 시작 박스 위에 있는 퍽 tag (집으면 빠지고, 되돌려 놓은 게 확인되면 다시)
+  void put_back(size_t b, int tag, const std::string & why, std::function<void()> next);  // 못 실은 퍽을 상자에 되돌리고 inspect로 확인
   plan::msg::BasketState::ConstSharedPtr basket_;  // 적재함 장부 — coordinator가 씀 (/coordinator/basket), 여기선 읽기만
   int basket_slot_of(int tag) const;   // 그 tag가 실린 칸 (없으면 −1)
   bool basket_has_room() const;        // 빈 칸이 있나 (장부를 아직 못 받았으면 있다고 봄)
