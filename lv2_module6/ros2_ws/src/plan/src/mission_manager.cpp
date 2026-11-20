@@ -771,24 +771,24 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
       if (!ok2) RCLCPP_WARN(get_logger(), "시작 박스 %zu inspect 실패 (%s) — 본 것만", b + 1, why2.c_str());
       snap("box" + str(static_cast<int>(b) + 1));
       std::vector<int> found;
-      for (double dx : puck_dx_) {  // 그 자리(map)에서 match_radius 안 퍽 중 tag를 읽은 것
-        const auto m = to_map(box.x + dx, box.y);
-        const TrackedObject * best = nullptr;
-        double best_d = match_radius_;
-        if (objects_) for (const auto & o : objects_->objects) {
-          if (!is_puck(o) || detail(o, "tag").empty()) continue;
-          const double d = std::hypot(o.pose.pose.position.x - m.x, o.pose.pose.position.y - m.y);
-          if (d < best_d) { best_d = d; best = &o; }
-        }
-        if (!best) { result("box " + str(static_cast<int>(b) + 1) + fmt(" (%+.2f): tag_unread", dx)); continue; }
-        const int tag = std::stoi(detail(*best, "tag"));
+      // 박스 윗면 위에서 tag를 읽은 퍽 전부 (자리 제한 없음) — 예전엔 발제 자리(X±40, Y=0)에서 4 cm(match_radius) 안만 봐서
+      //   퍽이 비켜 있거나 위치 오차가 있으면 하나도 못 찾고 pick 없이 지나감 (실기 11-20 box4·box5). 집기는 원래 tag로 찾음
+      int missing = static_cast<int>(puck_dx_.size());
+      if (objects_) for (const auto & o : objects_->objects) {
+        if (!is_puck(o) || detail(o, "tag").empty()) continue;
+        const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
+        const double dx = a.x - box.x, dy = a.y - box.y;
+        if (std::max(std::abs(dx), std::abs(dy)) > box.half + 0.05) continue;  // 윗면 + 위치 오차 여유 — 이웃 상자와는 0.5 m 넘게 떨어짐
+        const int tag = std::stoi(detail(o, "tag"));
         if (puck_at_.count(tag)) continue;
-        pucks_.push_back({tag, best->color, detail(*best, "shape")});
+        pucks_.push_back({tag, o.color, detail(o, "shape")});
         puck_at_[tag] = {b, dx};
-        if (is_lying(*best)) lying_.insert(tag);  // 실을 때 세워서 집음 (stand → stand_pick)
+        if (is_lying(o)) lying_.insert(tag);  // 실을 때 세워서 집음 (stand → stand_pick)
         found.push_back(tag);
-        RCLCPP_INFO(get_logger(), "퍽 %d: %s %s (박스 %zu)", tag, best->color.c_str(), detail(*best, "shape").c_str(), b + 1);
+        --missing;
+        RCLCPP_INFO(get_logger(), "퍽 %d: %s %s (박스 %zu, %+.3f %+.3f)", tag, o.color.c_str(), detail(o, "shape").c_str(), b + 1, dx, dy);
       }
+      for (; missing > 0; --missing) result("box " + str(static_cast<int>(b) + 1) + ": tag_unread");
       publish_state();
       // 선 퍽 먼저 싣고 누운 퍽은 나중에 (세우다 옆 퍽을 칠 수 있음 · 11-15 사용자)
       std::stable_partition(found.begin(), found.end(), [this](int tag) { return !lying_.count(tag); });
