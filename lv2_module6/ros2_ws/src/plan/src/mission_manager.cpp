@@ -215,6 +215,10 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   scan_from_light_ = declare_parameter<bool>("barcode_scan_from_light", scan_from_light_);
   scan_offsets_ = declare_parameter<std::vector<double>>("barcode_scan_offsets", scan_offsets_);
   scan_range_m_ = declare_parameter<double>("barcode_scan_range_m", scan_range_m_);
+  cand_z_lo_ = declare_parameter<double>("barcode_cand_z_min", cand_z_lo_);
+  cand_z_hi_ = declare_parameter<double>("barcode_cand_z_max", cand_z_hi_);
+  cand_offsets_ = declare_parameter<std::vector<double>>("barcode_cand_offsets", cand_offsets_);
+  if (cand_offsets_.empty()) cand_offsets_ = {0.0};
   peek_dirs_ = static_cast<size_t>(std::max<int64_t>(1, declare_parameter<int64_t>("barcode_peek_dirs", 2)));
   hires_settle_s_ = declare_parameter<double>("barcode_hires_settle_s", hires_settle_s_);
   barcode_peek_s_ = declare_parameter<double>("barcode_peek_s", barcode_peek_s_);
@@ -558,6 +562,8 @@ void MissionManager::barcode_phase() {
   occl_wait_ = false;
   light_seen_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   scan_k_ = 0;
+  cand_k_ = 0;
+  gaze_seen_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   peek_at_ = hires_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   returning_ = false;
   light_warned_ = false;
@@ -645,6 +651,8 @@ void MissionManager::barcode_phase() {
           const auto target = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
           const double dx = target.x - base_arena.x, dy = target.y - base_arena.y;
           const double range = std::hypot(dx, dy);
+          // 11-22: perception이 작은 흰 라벨도 후보로 냄(막대 확인 없이) → 바닥 밝은 점·벽 아래 띠(높이 ≈ 0)는 높이로 거름
+          if (o.pose.pose.position.z < cand_z_lo_ || o.pose.pose.position.z > cand_z_hi_) continue;
           const double yaw = std::atan2(dy, dx) - base_arena.yaw;
           const double relative = std::atan2(std::sin(yaw), std::cos(yaw));
           // 신호등을 봤으면 그 왼쪽 부채꼴(신호등 −0.05 ~ 마지막 scan + 0.15 rad)의 바코드만
@@ -750,12 +758,14 @@ void MissionManager::barcode_phase() {
       }
       if (!gaze_sent_ && peek_done_ && candidate_yaw && !barcode_arm_pose_.empty() && t > barcode_pole_s_ && !arm_wait && !arm_hold) {
         gaze_sent_ = true;
-        const std::string target = barcode_arm_pose_ == "gaze"
-          ? "gaze@" + fmt("%.3f", *candidate_yaw) : barcode_arm_pose_;
-        note("바코드 후보 방향 " + fmt("%+.2f rad", *candidate_yaw) + "으로 gaze — 신호등 관측 계속");
+        // 후보를 봤으면 그 방향과 둘레(barcode_cand_offsets) — 11-22 실기 시험: gaze에서 읽히는 폭이 약 0.1 rad
+        const double yaw = *candidate_yaw + (scan_ ? 0.0 : cand_offsets_[std::min(cand_k_, cand_offsets_.size() - 1)]);
+        const std::string target = barcode_arm_pose_ == "gaze" ? "gaze@" + fmt("%.3f", yaw) : barcode_arm_pose_;
+        hires(true);  // 11-22: 0.7 m 엿보기는 흐려 못 읽고 gaze + 1080p는 바로 읽힘 → 손 카메라 1080p는 gaze에서
+        note("바코드 후보 방향 " + fmt("%+.2f rad", yaw) + "으로 gaze — 손 카메라 " + peek_profile_ + " · 신호등 관측 계속");
         run({SubGoal().set__skill("pose").set__target(target)}, [this](bool ok, const std::string & why) {
           if (phase_ != Phase::BARCODE || !barcode_.empty()) return;
-          if (ok) { gaze_at_ = now(); gaze_joints_ = joints_now_; snap("barcode_gaze"); return; }  // 도착 — 그대로 계속 봄 (관절 값 기억: 처짐 감시)
+          if (ok) { gaze_at_ = gaze_seen_ = now(); gaze_joints_ = joints_now_; snap("barcode_gaze"); return; }  // 도착 — 그대로 계속 봄 (관절 값 기억: 처짐 감시)
           timer_->cancel();
           barcode_done(false, "barcode_pose_failed:" + why);
         });
@@ -772,7 +782,17 @@ void MissionManager::barcode_phase() {
       const bool room = fresh && grip_front_m_ > barcode_min_gap_m_ + barcode_advance_step_m_ * 0.5 &&
                         advanced_m_ + barcode_advance_step_m_ <= barcode_advance_max_m_ + 1e-6;
       // 신호등 왼쪽 scan 중이면 다가가기 전에 다음 방향으로 (팔만 돌림 — 신호등은 pole 시야에 남음)
-      if (waited && !moving_ && scan_ && scan_k_ + 1 < scan_offsets_.size()) {
+      // 후보 둘레 다음 방향 (팔만 돌림 — 신호를 기다리는 중에도)
+      const bool looked = gaze_seen_.nanoseconds() > 0 && gaze_at_.nanoseconds() > 0 &&
+                          (now() - gaze_seen_).seconds() > barcode_gaze_wait_s_;
+      if (looked && !moving_ && !scan_ && advanced_m_ == 0.0 && cand_k_ + 1 < cand_offsets_.size()) {
+        ++cand_k_;
+        gaze_sent_ = false;
+        gaze_at_ = gaze_seen_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        note(fmt("바코드 안 읽힘 — 후보 둘레 %+.2f rad로 (%.0f/%.0f)", cand_offsets_[cand_k_], cand_k_ + 1.0, static_cast<double>(cand_offsets_.size())));
+        return;
+      }
+      if (looked && !moving_ && scan_ && scan_k_ + 1 < scan_offsets_.size()) {
         ++scan_k_;
         gaze_sent_ = false;
         gaze_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);

@@ -262,7 +262,11 @@ private:
   size_t scan_k_ = 0;
   std::vector<double> scan_offsets_{0.45, 0.60, 0.30, 0.15};  // [rad] 신호등 방위에서 왼쪽으로 차례로 (적은 순서)
   double scan_range_m_ = 0.70;
-  size_t peek_dirs_ = 2;  // 엿보기로 볼 scan 방향 수 (나머지는 gaze로)  // [m] 훑을 때 아래 각도 계산에 쓰는 거리
+  size_t peek_dirs_ = 2;
+  double cand_z_lo_ = 0.08, cand_z_hi_ = 0.45;  // 바코드 후보로 받는 map 높이 [m]
+  size_t cand_k_ = 0;  // 후보 방향 둘레 gaze 순번 (barcode_cand_offsets)
+  std::vector<double> cand_offsets_{0.0, 0.08, -0.08};
+  rclcpp::Time gaze_seen_{0, 0, RCL_ROS_TIME};  // gaze 도착 시각 (신호 기다림으로 안 미룸 — 팔만 돌리는 다음 방향용)  // 엿보기로 볼 scan 방향 수 (나머지는 gaze로)  // [m] 훑을 때 아래 각도 계산에 쓰는 거리
   std::optional<std::array<double, 3>> cand_;  // 이번 관측에서 마지막으로 본 바코드 후보 (arena x, y, map z) — 안 보여도 gaze에 씀
   rclcpp::Time peek_at_{0, 0, RCL_ROS_TIME}, hires_at_{0, 0, RCL_ROS_TIME}, cam_info_at_{0, 0, RCL_ROS_TIME};
   uint32_t cam_width_ = 0;
