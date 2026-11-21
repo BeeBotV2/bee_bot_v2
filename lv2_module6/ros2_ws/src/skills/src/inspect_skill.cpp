@@ -1,14 +1,13 @@
 // skill_inspect — /skills/inspect: gripper_cam으로 보기 (학습 정책 없음). 읽었는지(details tag)는 coordinator · mission_manager도 /tracked_objects로 봄
-//   점 보기 (target 비움): goal.pose(map) 점 위 inspect_height_m에 손끝을 두고 inspect_wait_s 기다림 (camera_look_down).
-//     퍽 윗면 16mm AprilTag는 gripper_cam이 위에서 봐야 읽힘. values[0] = 손 방향 yaw (로봇 → 점) — 없으면 자유
-//   상자 보기 (target "box"): goal.pose = 상자 위 퍽 윗면 높이의 상자 가운데 (map), values[0] = 기대 퍽 수 (없으면 2)
+//   보기 자세는 look 하나 (11-21 사용자: pick 테스트에서 검증한 look으로 통일). 예전 점 보기(점 위 15 cm에 손을 수직 아래로)는 뺌 —
+//     11-21 Isaac 전체 미션: 선반 앞 도킹에서 칸까지 수평 0.235~0.27 m라 손을 수직으로 못 둠 (8 cm 높이 한계 0.23 m) → 12번 모두 실패
+//   goal.pose = 볼 점 (상자 가운데 · 칸 · 퍽, 퍽 윗면 높이, map), values[0] = 기대 퍽 수 (없으면 2) · target은 안 씀
 //     ⓪ 지금 자세에서 이미 기대 수만큼 보이고 태그·자세도 다 알면 끝 (팔 안 움직임)
 //     ① pose_look 관절 자세(arm.yaml — skill_pose "look"과 같은 값)로 → inspect_look_wait_s 기다림
 //     ② 상자 가운데에서 inspect_box_radius_m 안 퍽 트랙이 기대 수 이상이고 모두 태그·자세를 알면 끝
 //     ③ 아니면 본 퍽(모자라거나 태그·자세 모르는 퍽이 있으면 상자 가운데도)을 한 장에 담는 자세(look_plan)로 → 기다림 → 다시 셈. 모자라면 inspect_partial
 //     11/07 Isaac 전체 스택 퍽 40개: 1차 자세만 85 % · 다시 담으면 92 % (isaac/scripts/demo/inspect_test.py center)
 #include <cmath>
-#include <limits>
 #include <mutex>
 
 #include "perception/msg/tracked_object_array.hpp"
@@ -24,8 +23,6 @@ class InspectSkill : public SkillNode {
 public:
   explicit InspectSkill(const rclcpp::NodeOptions & options)
   : SkillNode("skill_inspect", options), arm_(*this) {
-    height_m_ = declare_parameter<double>("inspect_height_m", 0.15);  // [m] 손끝을 퍽 윗면 위 이만큼 (16mm 태그 ≈ 50px)
-    wait_s_ = declare_parameter<double>("inspect_wait_s", 1.0);       // [s] perception 추론 4Hz × 몇 장
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     look_wait_s_ = declare_parameter<double>("inspect_look_wait_s", 1.5);  // [s] 상자 보기 자세마다 (궤적 끝 · 처짐 보정 수렴 + 추론)
     box_radius_m_ = declare_parameter<double>("inspect_box_radius_m", 0.16);  // [m] 상자 가운데에서 이 안 퍽만 셈 (반 변 0.1025 + 여유)
@@ -33,8 +30,7 @@ public:
       [this](perception::msg::TrackedObjectArray::ConstSharedPtr m) { std::lock_guard<std::mutex> lk(mu_); objects_ = m; });
     serve("inspect", [this](const SkillGoal & g, Done done) {
       when_ready([this]() { return arm_.moveit_ready(); }, "arm_unavailable", done, [this, g, done]() {
-        if (g.target == "box") look_box(g, done);
-        else look_point(g, done);
+        look_box(g, done);
       });
     });
   }
@@ -43,30 +39,6 @@ protected:
   void stop() override { arm_.stop(); }
 
 private:
-  void look_point(const SkillGoal & g, Done done) {
-    auto at = g.pose;
-    if (at.header.frame_id.empty()) at.header.frame_id = "map";
-    at.header.stamp = now();
-    at.pose.position.z += height_m_;
-    at.pose.orientation = geometry_msgs::msg::Quaternion();
-    const double yaw = g.values.empty() ? std::numeric_limits<double>::quiet_NaN() : g.values[0];
-    stage("위에서 내려다보기");
-    const auto look = [this, done](bool ok) {
-      if (!ok) { done(false, "inspect_failed"); return; }
-      stage("기다림");
-      arm_.wait_step(wait_s_)([done](bool) { done(true, ""); });
-    };
-    // 손을 아래로 향한 채 높이 못 가는 자리가 많음 — 해석 IK로 낮춰 가며 (시뮬 camera_look_down 0.08). 다 안 되면 MoveIt
-    ArmIO::Q5 now, q;
-    if (arm_.arm_now(now))
-      for (const double drop : {0.0, height_m_ - 0.10, height_m_ - 0.08}) {
-        auto p = at;
-        p.pose.position.z -= drop;
-        if (arm_.ik_ee(p, now, q)) { arm_.move_joints(std::vector<double>(q.begin(), q.end()), look); return; }
-      }
-    arm_.move_arm(at, look, yaw);
-  }
-
   // c 좌표계(보통 map) → base_footprint
   bool to_base(const geometry_msgs::msg::PoseStamped & c, tf2::Transform & t) {
     geometry_msgs::msg::TransformStamped tf;
@@ -155,7 +127,7 @@ private:
   }
 
   ArmIO arm_;
-  double height_m_, wait_s_, look_wait_s_, box_radius_m_;
+  double look_wait_s_, box_radius_m_;
   std::vector<double> look_q_;
   std::mutex mu_;
   perception::msg::TrackedObjectArray::ConstSharedPtr objects_;
