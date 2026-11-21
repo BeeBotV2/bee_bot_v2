@@ -346,6 +346,7 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions & options) : rclcpp::No
   //   YOLO와 같은 스레드를 막음 (젯슨 11/12 실측). 읽거나 abort면 그만 · barcode_always: true면 예전처럼 항상
   barcode_window_s_ = pd("barcode_window_s", 180.0);
   barcode_always_ = pb("barcode_always", false);
+  barcode_grip_crop_ = pb("barcode_grip_crop", barcode_grip_crop_);
   barcode_pole_s_ = pd("barcode_pole_s", 3.0);  // 창을 연 뒤 pole_front_cam은 이만큼만 (그 뒤는 손 카메라만 — pole은 신호등 YOLO에 양보)
 
   // ---- 모델
@@ -1435,7 +1436,9 @@ void PerceptionNode::read_barcodes() {
     // 손 카메라 고해상도(바코드 엿보기, mission_manager가 잠깐 1080p로 올림)는 가운데 절반만 읽음 — 손목으로 바코드를 화면 가운데에
     //   맞춘 뒤라 충분 · 1080p 전체(약 4배)를 ZXing에 넣으면 같은 스레드의 신호등 인지가 밀림
     //   ponytail: 가운데 고정 잘라내기 — 조준 오차가 ±17°를 넘으면 바코드 화면 위치를 투영해 자르기로
-    const bool crop = cam == "gripper_cam" && s.bgr.cols >= 1280;
+    // 11-21 실기 22:23: 엿보기 1080p 사진 5장 중 3장에 바코드가 또렷한데(폭 약 180 px) 가운데 절반 밖(신호등 왼쪽 위)이라 못 읽음
+    //   → 기본은 전체를 읽음 (엿보기 동안만 · 1080p ZXing이 무거우면 barcode_grip_crop: true)
+    const bool crop = barcode_grip_crop_ && cam == "gripper_cam" && s.bgr.cols >= 1280;
     const cv::Rect roi = crop ? cv::Rect(s.bgr.cols / 4, s.bgr.rows / 4, s.bgr.cols / 2, s.bgr.rows / 2)
                               : cv::Rect(0, 0, s.bgr.cols, s.bgr.rows);
     auto hits = (cam == "pole_front_cam" && !pole_too)

@@ -496,7 +496,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     barcode_scan_from_light: true # 바코드는 신호등 왼쪽 (11-21 사용자) — 신호등을 봤으면 그 왼쪽 부채꼴의 바코드만 후보, 못 보면 아래 방향으로 차례로 gaze
     barcode_scan_offsets: [0.15, 0.30, 0.45, 0.60] # [rad] 신호등 방위에서 왼쪽으로 (각 방향 barcode_gaze_wait_s) — 다 보고도 안 읽히면 기존 다가가기
     barcode_occlude_rad: 0.35 # [rad] 신호 확정 전에는 신호등 방위에서 이 안쪽으로 팔(엿보기·gaze)을 안 보냄 — 손이 pole_front_cam ~ 신호등 시선을 가림 (11-21 실기)
-    barcode_occlude_lost_s: 2.0 # [s] 팔을 둔 동안 신호등이 이만큼 안 보이면 가렸다고 보고 팔 접고 신호 먼저
+    barcode_occlude_lost_s: 5.0 # [s] 팔을 둔 동안 신호등이 이만큼 안 보이면 가렸다고 보고 팔 접고 신호 먼저 — 11-21: 2 → 5 (12번 점멸 뒤 3 s 전부 꺼짐을 가림으로 오판)
     barcode_peek: true # 바코드 후보가 잡히면 먼저 "엿보기": 팔은 stow로 접은 채 손목(joint4)·방위(joint1)만 바코드로 + 손 카메라 컬러를 잠깐 고해상도로 (11-20)
     #   뻗지 않아 joint2 과부하 없음 · 다가가지 않아 신호등이 pole 시야에 남음 · 신호 확정을 안 기다림. 못 읽으면 해상도 되돌리고 아래 gaze 흐름 그대로
     barcode_peek_s: 4.0 # [s] 고해상도 영상이 들어온 뒤 이만큼 안 읽히면 gaze로 (15 fps면 약 60장 — perception이 처리하는 만큼)

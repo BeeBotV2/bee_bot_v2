@@ -140,6 +140,7 @@ private:
   double barcode_pole_s_ = 3.0;
   std::atomic<double> barcode_from_{0.0};  // 바코드 찾기 창을 연 시각 (wall_s)
   bool barcode_always_ = false;
+  bool barcode_grip_crop_ = false;  // 손 카메라 고해상도에서 가운데 절반만 읽기 (기본 끔 — 11-21 실기: 바코드가 그 밖에 찍혀 못 읽음)
   rclcpp::Publisher<TrackedObjectArray>::SharedPtr pub_;
   std::map<std::string, rclcpp::Publisher<TrackedObjectArray>::SharedPtr> det_pubs_;
   std::map<std::string, rclcpp::Publisher<Image>::SharedPtr> debug_pubs_;
