@@ -57,6 +57,10 @@ ArmIO::ArmIO(rclcpp::Node & node)
   //   빼고 실패 arm_jam (pick은 다음 후보, coordinator는 단계를 한 번 더). 0 = 끔. 11-08 실기 pick 62판: 막힘 최솟값 +0.64 A ·
   //   정상 최댓값 +0.40 A (arm_safety_monitor 3.0 A는 막혀도 안 닿음 — 실측 최대 0.9~1.1 A)
   node.declare_parameter<double>("jam_current_a", 0.5);
+  // 막힘은 전류에 더해 joint2·3이 목표를 이만큼 [rad] 넘게 못 따라갈 때만 — 전류만 오르고 위치는 따라오면 바닥·칸에 닿은 것 (막힘 아님).
+  //   0 = 전류만 (예전). 11-21 실기 load: 막힘 4건 joint3 18~44 mrad · 성공 20건 ≤ 11 mrad · 바닥 막힘 판정 1건 0.2 mrad (오판)
+  //   추종 값이 없으면(/rl_arm_correction/debug 0.5 s 넘게 끊김) 전류만으로 판정
+  node.declare_parameter<double>("jam_lag_rad", 0.0);
   // traj_step(MoveIt 계획을 거치지 않는 궤적) 보내기 전 자기 충돌 검사 — false면 끔 (예전처럼) · 매번 읽음
   node.declare_parameter<bool>("traj_collision_check", true);
   node.declare_parameter<double>("traj_check_step_rad", 0.05);  // [rad] 관절이 이만큼 넘게 움직인 샘플마다 검사 (끝 자세는 늘)
@@ -720,6 +724,15 @@ double ArmIO::jam_mean(double window_s) const {
   return state_cache_->jam_mean(window_s);
 }
 
+bool ArmIO::jam_lagging(double & lag) const {
+  const double lim = node_.get_parameter("jam_lag_rad").as_double();
+  std::array<double, 5> l{};
+  lag = std::numeric_limits<double>::quiet_NaN();
+  if (lim <= 0.0 || !state_cache_->lag(node_.now().seconds(), 0.5, l)) return true;  // 꺼짐 · 값 없음 → 전류만
+  lag = std::max(std::abs(l[1]), std::abs(l[2]));
+  return lag > lim;
+}
+
 ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5 &, Q5 &)> plan, bool close,
                                 double open_m, bool lift_on_empty) {
   return [this, policy, plan, close, open_m, lift_on_empty](Cb cb) {
@@ -749,9 +762,15 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
     const Step jam_check = [this, base, base_a, name = policy.name](Cb c) {
       const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
       if (lim <= 0.0 || d <= lim) { c(true); return; }
+      double lag;
+      if (!jam_lagging(lag)) {  // 전류만 오름 — 바닥에 닿은 것으로 보고 그대로 놓기·쥐기
+        RCLCPP_WARN(node_.get_logger(), "%s: 바닥 전류 %+.2f A (> %.2f)지만 joint2·3 추종 %.1f mrad — 막힘 아님, 계속", name.c_str(), d, lim, 1000 * lag);
+        c(true);
+        return;
+      }
       jam_ = true;
       const std::string note = jam_note(*base_a);
-      RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (바닥) — joint2+3 전류 %+.2f A (> %.2f) · 쥐지·놓지 않고 위로 · %s", name.c_str(), d, lim, note.c_str());
+      RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (바닥) — joint2+3 전류 %+.2f A (> %.2f) · 추종 %.1f mrad · 쥐지·놓지 않고 위로 · %s", name.c_str(), d, lim, 1000 * lag, note.c_str());
       if (auto * s = dynamic_cast<SkillNode *>(&node_)) s->detail("막힘 바닥 " + name + " Δ" + std::to_string(d).substr(0, 5) + " A · " + note);
       c(false);  // 위로 빼기는 끝 callback에서
     };
@@ -762,10 +781,12 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
         if (gen != gen_) { jam_timer_->cancel(); return; }
         const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
         if (lim <= 0.0 || d <= lim) return;
+        double lag;
+        if (!jam_lagging(lag)) return;  // 전류만 오르고 위치는 따라옴 — 계속 내려감 (끝에서 바닥 판정)
         jam_timer_->cancel();
         jam_ = true;
         const std::string note = jam_note(*base_a);
-        RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (내려가는 중) — joint2+3 전류 %+.2f A (> %.2f) · 멈추고 위로 · %s", name.c_str(), d, lim, note.c_str());
+        RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (내려가는 중) — joint2+3 전류 %+.2f A (> %.2f) · 추종 %.1f mrad · 멈추고 위로 · %s", name.c_str(), d, lim, 1000 * lag, note.c_str());
         if (auto * s = dynamic_cast<SkillNode *>(&node_)) s->detail("막힘 내려가는 중 " + name + " Δ" + std::to_string(d).substr(0, 5) + " A · " + note);
         exec_->async_cancel_all_goals();
       });

@@ -51,6 +51,10 @@ void ArmStateCache::on_debug(const ml::msg::ArmCorrectionDebug & msg) {
   std::array<double, 5> delta{};
   std::copy_n(msg.delta.begin(), delta.size(), delta.begin());
   std::lock_guard<std::mutex> lock(mutex_);
+  if (msg.ref.size() >= 5 && msg.q.size() >= 5) {
+    for (size_t i = 0; i < lag_.size(); ++i) lag_[i] = msg.ref[i] + delta[i] - msg.q[i];
+    lag_t_ = now;
+  }
   delta_hist_.emplace_back(now, delta);
   while (!delta_hist_.empty() && delta_hist_.front().first < now - 1.0) delta_hist_.pop_front();
 }
@@ -83,6 +87,13 @@ double ArmStateCache::jam_mean(double window_s) const {
     if (time >= t0) { sum += effort; ++n; }
   }
   return n ? sum / n : 0.0;
+}
+
+bool ArmStateCache::lag(double now, double fresh_s, std::array<double, 5> & out) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (lag_t_ < 0.0 || lag_t_ < now - fresh_s) return false;
+  out = lag_;
+  return true;
 }
 
 bool ArmStateCache::delta_stable(double now, double fresh_s, double window_s,

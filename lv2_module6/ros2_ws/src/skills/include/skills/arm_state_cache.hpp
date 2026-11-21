@@ -27,6 +27,8 @@ public:
   bool joint(const std::string & joint, double & position, double & effort) const;
   double jam_mean(double window_s) const;
   bool delta_stable(double now, double fresh_s, double window_s, double max_spread, size_t min_samples) const;
+  // 관절이 목표를 못 따라간 양 = JTC 목표 + 정책 Δ − 실제 (/rl_arm_correction/debug) · fresh_s보다 오래됐으면 false
+  bool lag(double now, double fresh_s, std::array<double, 5> & out) const;
   tf2_ros::Buffer & tf() const { return *tf_buffer_; }
 
 private:
@@ -38,6 +40,8 @@ private:
   std::map<std::string, double> pos_, effort_;
   std::deque<std::pair<double, double>> jam_hist_;
   std::deque<std::pair<double, std::array<double, 5>>> delta_hist_;
+  std::array<double, 5> lag_{};
+  double lag_t_ = -1.0;
   rclcpp::Clock::SharedPtr clock_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
