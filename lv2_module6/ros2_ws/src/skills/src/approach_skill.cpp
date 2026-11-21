@@ -15,7 +15,8 @@
 //     상자 도킹은 odom 프레임에서: map은 cuVSLAM 보정으로 움직임 (11-12 Isaac 정답 대비 map→odom이 한 번에 21 cm · 5.5° 밀림,
 //     odom→base_footprint는 1 cm) → 목표를 map에 고정하면 붙은 뒤에 '지나침'으로 보고 후진. 측정(map)은 그 관측 시각의
 //     map→odom으로 odom에 옮김 (인지가 쓴 것과 같은 보정이라 상쇄) · 도면 힌트는 시작 때 한 번 옮김
-//   goal.target "exit" (상자에서 빠져나오기, 11-13): 지금 방향 그대로 values[0] m(없으면 approach_exit_m) 똑바로 후진 — odom 기준,
+//   goal.target "exit" (상자에서 빠져나오기, 11-13): values[0] m(없으면 approach_exit_m) 똑바로 후진 — odom 기준 · 방금 도킹한 자리(0.4 m 안)면
+//     도킹한 면 방향으로 먼저 돈 뒤 그 축으로 (11-22), 아니면 지금 방향 그대로 ·
 //     정책 보정 없음 · 뒤는 카메라가 못 보므로 느리게 (기준 제어 후진 상한 0.05 m/s)
 #include <algorithm>
 #include <cmath>
@@ -172,9 +173,16 @@ private:
     if (!robot_pose(x, y, yaw)) { done(false, "approach_no_tf"); return; }
     const double d = g.values.empty() ? exit_m_ : g.values[0];
     if (!(d > 0.0) || d > 1.0) { done(false, "approach_bad_target"); return; }
-    gx_ = x - d * std::cos(yaw);
-    gy_ = y - d * std::sin(yaw);
-    gyaw_ = yaw;
+    // 11-22 실기 S1: 집기 전 drive_straight로 몸이 돌아간 채(남은 0.376 rad로 멈춤) '지금 방향'으로 후진 → 비스듬히 빠져 옆 벽에 부딪침
+    //   → 방금 도킹한 자리 근처면 도킹한 면 방향(들어온 축)으로: 제자리에서 그 방향으로 먼저 돈 뒤(face_) 똑바로 후진
+    double ref = yaw;
+    if (dock_ok_ && std::hypot(x - dock_x_, y - dock_y_) < 0.40) {
+      ref = dock_yaw_;
+      face_ = 1;
+    }
+    gx_ = x - d * std::cos(ref);
+    gy_ = y - d * std::sin(ref);
+    gyaw_ = ref;
     tol_m_ = 0.03;  // 11-18: 1 cm · 3° → 3 cm · 10° — 물러나기만 하면 됨, 정밀하게 맞추느라 후진 중 방향을 계속 고쳐 비틀댐 (sim)
     tol_yaw_ = 10.0 * M_PI / 180.0;
     hold_s_ = 0.2;
@@ -406,6 +414,13 @@ private:
 
   void end(bool ok, const std::string & why) {
     timer_->cancel();
+    if (ok && box_mode_) {  // 상자 도킹 성공 — 그 자리 · 면 방향(odom)을 기억해 exit이 들어온 축으로 빠지게
+      double x, y, yaw;
+      dock_ok_ = robot_pose(x, y, yaw);
+      dock_x_ = x;
+      dock_y_ = y;
+      dock_yaw_ = gyaw_;
+    }
     box_mode_ = false;
     halt();
     done_(ok, why);
@@ -562,6 +577,8 @@ private:
   double speed_, pre_m_, pos_tol_, yaw_tol_, timeout_s_, res_v_, res_w_, release_m_, carrot_m_, v_max_, w_max_;
   bool pos_done_ = false;
   bool exit_ = false;
+  bool dock_ok_ = false;  // 마지막 상자 도킹 성공 자리 · 면 방향 (odom) — exit이 들어온 축으로 빠짐
+  double dock_x_ = 0.0, dock_y_ = 0.0, dock_yaw_ = 0.0;
   std::map<uint32_t, std::pair<perception::msg::TrackedObject, rclcpp::Time>> seen_;  // 추적 id → 마지막 온전한 상자 측정 (box_seed_s 동안)
   double exit_m_ = 0.165;
   double exit_v_ = 0.15;
