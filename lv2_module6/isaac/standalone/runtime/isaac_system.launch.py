@@ -85,6 +85,8 @@ def generate_launch_description():
         ExecuteProcess(cmd=['python3', os.path.join(HERE, 'camera_adapter.py'), '--ros-args', '-p', 'use_sim_time:=true',
                             *([] if ARGS['use_pole_back_cam'] == 'true' else ['-p', "cameras:=['pole_front_cam','gripper_cam']"])],
                        output='screen'),
+        # 적재함 상태 기록 (Isaac 정답 → 미션 기록 폴더 basket.jsonl) — 설명: basket_log.py (11-21)
+        ExecuteProcess(cmd=['python3', os.path.join(HERE, 'basket_log.py')], output='screen'),
         # bringup 노드 몇 개를 고친 파라미터로 다시 띄움 — 설명: node_params.py
         #   state_manager: use_sim_time -p가 params 파일 앞에 붙어 manager.yaml의 LOCALIZATION을 읽음(map:=slam인데 EXPLORE 거절) → -p를 뒤로
         *[ExecuteProcess(cmd=['python3', os.path.join(HERE, 'node_params.py'), name, *extra],
