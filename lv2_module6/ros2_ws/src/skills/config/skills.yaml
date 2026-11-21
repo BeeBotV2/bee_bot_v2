@@ -57,6 +57,9 @@ skill_inspect:
   ros__parameters:
     inspect_box_radius_m: 0.35  # [m] 상자 보기: 상자 가운데(도면)에서 이 안 퍽만 셈 — 11-20: 0.16이면 도면·실제 상자가 몇 cm만 어긋나도
                                 #   보이는 퍽을 못 세고 '다시 담기'(팔 옆으로)만 반복 → inspect_partial. 이웃 시작 박스는 0.734 m라 0.35까지 안 섞임
+    inspect_first_wait_s: 0.5   # [s] 첫 look 명령 뒤 기다림 — 이미 look이어도 다시 보냄 (11-21: 팔 떨림 · coordinator 퍽 기억)
+    inspect_near_m: 0.05        # [m] 퍽이 모자라면 다시 담기에 상자 가운데에서 로봇 쪽으로 당긴 점을 넣음 (11-21 S1: 차체 쪽 퍽 놓침)
+    inspect_near_side_m: 0.04   # [m] 그 점을 옆으로 ± (퍽 두 개 자리)
 skill_pick:
   ros__parameters:
     max_grasp_tries: 2       # 파지 후보를 점수순으로 몇 개까지
