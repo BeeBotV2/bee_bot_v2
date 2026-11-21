@@ -51,6 +51,7 @@
 #include "plan/msg/mission_state.hpp"
 #include "plan/msg/sub_goal_array.hpp"
 #include "plan/msg/task_status.hpp"
+#include "plan/shared_tf.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
@@ -267,8 +268,10 @@ private:
   std::string order_;                   // L1·L2·L3 그룹 ("YRG")
   std::vector<Puck> pucks_;             // 조사한 퍽 (tag·color·shape)
   std::map<int, std::pair<size_t, double>> puck_at_;  // tag → (시작 박스, x 오프셋) — 적재함에 못 실은 퍽을 집으러 갈 곳
-  std::map<int, std::pair<double, double>> puck_seen_;  // tag → 조사 때 본 자리 (map) — 적재함에 못 실은 퍽을 되돌려 놓을 곳
-  std::map<size_t, std::pair<double, double>> box_seen_;  // 시작 박스 → 조사 때 기준으로 쓴 가운데 (map, 인지 상자 · 없으면 도면)
+  // 기억한 자리는 Spot (plan/shared_tf.hpp) — 도킹해 서 있는 동안은 odom 기준으로 꺼냄 (here) · 11-21 실기: 서 있는데 map→odom이 3~4 cm 흔들림
+  std::map<int, Spot> puck_seen_;  // tag → 조사 때 본 자리 — 적재함에 못 실은 퍽을 되돌려 놓을 곳
+  std::map<size_t, Spot> box_seen_;  // 시작 박스 → 조사 때 기준으로 쓴 가운데 (인지 상자 · 없으면 도면)
+  std::pair<double, double> here(const Spot & s) const;  // 지금 쓸 map 점
   std::set<int> on_box_;                                  // 지금 시작 박스 위에 있는 퍽 tag (집으면 빠지고, 되돌려 놓은 게 확인되면 다시)
   void put_back(size_t b, int tag, const std::string & why, std::function<void()> next);  // 못 실은 퍽을 상자에 되돌리고 inspect로 확인
   plan::msg::BasketState::ConstSharedPtr basket_;  // 적재함 장부 — coordinator가 씀 (/coordinator/basket), 여기선 읽기만
@@ -358,6 +361,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr cmd_sub_, barcode_sub_;
   rclcpp::Subscription<perception::msg::MissionSignal>::SharedPtr signal_sub_, signal_status_sub_;
   std::map<int, perception::msg::TrackedObject> last_seen_;  // 태그 → 마지막으로 본 트랙 (locate memory)
+  std::map<int, Spot> last_spot_;  // 태그 → 그 트랙 자리
   rclcpp::Subscription<perception::msg::TrackedObjectArray>::SharedPtr objects_sub_;
   rclcpp::Subscription<plan::msg::BasketState>::SharedPtr basket_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr photo_sub_;

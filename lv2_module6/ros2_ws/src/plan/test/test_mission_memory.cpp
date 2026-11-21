@@ -39,3 +39,48 @@ TEST(PuckFor, FallsBackToSpotWhenTagUnread) {
   EXPECT_EQ(plan::puck_for(&a, 9, far, 0.04), nullptr);
   EXPECT_EQ(plan::puck_for(nullptr, 9, spot, 0.04), nullptr);
 }
+
+// Spot — 기억한 자리: 로봇이 서 있는 동안 map→odom이 흔들려도 odom 기준으로 다시 꺼냄 · 움직인 뒤는 적은 map 그대로 (11-21 실기 S1)
+namespace {
+geometry_msgs::msg::TransformStamped tf_xy(const std::string & parent, const std::string & child, double x, double y, double yaw) {
+  geometry_msgs::msg::TransformStamped t;
+  t.header.frame_id = parent;
+  t.child_frame_id = child;
+  t.transform.translation.x = x;
+  t.transform.translation.y = y;
+  t.transform.rotation.z = std::sin(yaw / 2);
+  t.transform.rotation.w = std::cos(yaw / 2);
+  return t;
+}
+}  // namespace
+
+TEST(Spot, FollowsMapOdomWhileRobotStill) {
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_SYSTEM_TIME);
+  tf2_ros::Buffer tf(clock);
+  tf.setTransform(tf_xy("map", "odom", 0.0, 0.0, 0.0), "test", true);
+  tf.setTransform(tf_xy("odom", "base_footprint", 1.0, 0.0, 0.0), "test", true);
+  const auto s = plan::make_spot(tf, 1.2, 0.1);  // 로봇 앞 0.2 m 퍽
+  EXPECT_TRUE(s.odom);
+  // 서 있는데 벽 정합이 map→odom을 4 cm · 2° 옮김 → 퍽도 로봇과 같이 옮겨 꺼냄
+  tf.setTransform(tf_xy("map", "odom", 0.0, -0.04, 0.035), "test", true);
+  double x, y;
+  plan::spot_map(tf, s, x, y);
+  EXPECT_NEAR(x, 1.2 * std::cos(0.035) - 0.1 * std::sin(0.035), 1e-6);
+  EXPECT_NEAR(y, -0.04 + 1.2 * std::sin(0.035) + 0.1 * std::cos(0.035), 1e-6);
+  // 로봇이 움직임 (BUILD 때 다시 옴) → 적은 map 그대로
+  tf.setTransform(tf_xy("odom", "base_footprint", 2.0, 0.0, 0.0), "test", true);
+  plan::spot_map(tf, s, x, y);
+  EXPECT_DOUBLE_EQ(x, 1.2);
+  EXPECT_DOUBLE_EQ(y, 0.1);
+}
+
+TEST(Spot, KeepsMapWithoutTf) {
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_SYSTEM_TIME);
+  tf2_ros::Buffer tf(clock);
+  const auto s = plan::make_spot(tf, 0.5, -0.3);
+  EXPECT_FALSE(s.odom);
+  double x, y;
+  plan::spot_map(tf, s, x, y);
+  EXPECT_DOUBLE_EQ(x, 0.5);
+  EXPECT_DOUBLE_EQ(y, -0.3);
+}
