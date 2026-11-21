@@ -265,13 +265,27 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: pole_front_cam
+        # 11-21 "벽은 지도에서, 상자는 카메라에서" — 칠하기는 지도 벽 0.15 m 안 점을 뺀 점구름(wall_point_filter), 지우기(광선)는 원래 점구름.
+        #   카메라가 위치 오차만큼 어긋난 자리에 지도 벽을 한 번 더 칠하면 광선으로 안 지워져 벽이 두꺼워지고 좁은 통로가 닫혔음
+        #   (실기 nav_1121_144601 S1 · 11-15 문틀 7 m 우회). 지도에 없는 것(no_box의 상자 · 떨어진 퍽)은 그대로 칠함
+        observation_sources: pole_front_cam pole_front_cam_clear
         pole_front_cam:
-          topic: /pole_front_cam/depth/color/points_filtered
+          topic: /pole_front_cam/depth/color/points_offwall
           data_type: "PointCloud2"
           min_obstacle_height: 0.06   # 11-21: 0.04로 낮췄다가 되돌림 — 2D 층은 점 하나로 칸을 칠해 바닥 근처 잡음(4~6 cm)이 S4 진입점 둘레를 막음(실기 nav_1121_144601). 7 cm 상자는 윗면 점으로 이 띠에 들어옴
           max_obstacle_height: 0.3
           marking: true
+          clearing: false
+          obstacle_min_range: 0.0
+          obstacle_max_range: 1.2
+          raytrace_min_range: 0.0
+          raytrace_max_range: 3.0
+        pole_front_cam_clear:   # 지우기 전용 — 벽 앞 칸도 광선으로 계속 지움
+          topic: /pole_front_cam/depth/color/points_filtered
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.06
+          max_obstacle_height: 0.3
+          marking: false
           clearing: true
           obstacle_min_range: 0.0
           obstacle_max_range: 1.2

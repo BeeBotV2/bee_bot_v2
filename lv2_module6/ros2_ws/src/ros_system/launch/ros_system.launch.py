@@ -471,6 +471,8 @@ def slam_nodes():
         Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
         # 도면 벽(/arena/walls_only) → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor 두 번째 입력 (옆·뒤)
         Node(package='ros_system', executable='grid_obstacle_cloud', name='grid_obstacle_cloud', output='screen', condition=on),
+        # 카메라 점구름 − 지도 벽 0.15 m 안 점 (src/wall_point_filter.cpp, 11-21) → 전역 costmap 칠하기 입력 (벽은 지도로만 · 두꺼워지지 않게)
+        Node(package='ros_system', executable='wall_point_filter', name='wall_point_filter', output='screen', condition=on),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_depth_gate', output='screen',
              condition=IfCondition(PythonExpression([*nvblox_any, ' and (not ', *one_proc, ' or ', *hcpp, ') and not ', *gate_cpp])),
              parameters=[gate_params('pole_front_cam')]),
