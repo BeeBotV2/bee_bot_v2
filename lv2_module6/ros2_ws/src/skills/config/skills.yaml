@@ -29,6 +29,8 @@ skill_approach:
     approach_carrot_m: 0.05  # [m] sim: 목표 방향 직선 위 이만큼 앞 점을 향해 조향 (옆 어긋남을 도착 전에 없앰)
     approach_v_max: 0.06     # [m/s] sim 전진 상한 (11-13: 0.12는 빠름 — 사용자)
     approach_w_max: 0.5      # [rad/s] sim 회전 상한 (11-13: 1.0은 면 맞출 때 크게 돎)
+    approach_face_deg: 15.0  # [deg] 상자 도킹 시작 때 상자 면 방향과 이만큼 넘게 틀어졌으면 먼저 제자리 회전 → 곧게 다가감 (11-21 실기 S1: 47° 비스듬히 시작해 휘어 들어감)
+    approach_face_done_deg: 4.0  # [deg] 그 회전을 이 안에서 끝냄
     approach_exit_v: 0.15    # [m/s] exit(상자에서 물러나기) 후진 상한 — 11-18: 0.05면 0.5 m 물러나는 데 16~19 s
     approach_exit_m: 0.165   # [m] goal.target "exit" 기본 후진 거리 (values[0]이 있으면 그 값) — 상자에서 standoff까지
     # 상자 도킹 (goal.values = [gap, half]): 도면 자리는 힌트 — 인지 상자로 목표를 정함 (11-12). 팔은 pose_look으로 천천히 (launch arm_velocity_scale 0.15)
