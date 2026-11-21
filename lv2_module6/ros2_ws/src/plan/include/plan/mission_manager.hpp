@@ -136,6 +136,7 @@ private:
   std::vector<std::string> goto_;  // start:GOTO 목록 (S1~S6 · L1~L3)
   void goto_seq(size_t k);         // 목록 k번째 상자에 SURVEY처럼 다가감 → 다음 · 끝나면 RETURN
   // 시작 박스 b에 가서 inspect → 할 일 퍽을 다 실을 때까지 → then. revisit: 1차에 못 실은 퍽(leftover_)을 다시 하러 온 것
+  SubGoal box_inspect(size_t b, double x, double y) const;
   void visit_box(size_t b, bool revisit, std::function<void()> then);
   void revisit(std::vector<size_t> boxes, size_t k);  // 1차 SURVEY 뒤 못 실은 퍽이 있는 상자만 다시 → BUILD 배정
   void load(size_t box, std::vector<int> found, size_t k, std::function<void()> then);  // 찾은 퍽(tag)을 차례로 load_one
