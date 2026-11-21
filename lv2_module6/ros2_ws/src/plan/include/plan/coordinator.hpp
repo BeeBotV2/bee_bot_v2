@@ -108,7 +108,8 @@ private:
   void begin_stop(const std::string & reason, StopDisposition disposition);
   void finish_stop();
   void finish_action(const std::shared_ptr<ExecuteHandle> & handle, bool success, bool cancelled,
-                     uint32_t final_step, const std::string & reason);
+                     uint32_t final_step, const std::string & reason, const std::string & detail = "");
+  std::string fail_detail_;  // 실패한 skill의 Result.detail — fail()이 ExecutePlan.detail로 넘김
   void publish_feedback(const std::string & stage);
   rclcpp_action::GoalResponse on_execute_goal(const rclcpp_action::GoalUUID &, std::shared_ptr<const ExecutePlan::Goal>);
   rclcpp_action::CancelResponse on_execute_cancel(const std::shared_ptr<ExecuteHandle> &);

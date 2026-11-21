@@ -6,6 +6,7 @@ SubGoal[] goals
 bool success
 uint32 final_step
 string reason
+string detail     # 실패한 skill의 마지막 단계들 (Skill.detail · 기록용)
 ---
 uint32 plan_id
 uint32 current_step

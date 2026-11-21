@@ -55,6 +55,7 @@ void SkillNode::serve(const std::string & action, std::function<void(const Skill
       active_ = h;
       active_action_ = action;
       stage_ = "시작";
+      stages_.clear();
       ++runs_;
       const uint64_t gen = ++gen_;
       start(*h->get_goal(), [this, gen](bool ok, const std::string & reason) { finish(gen, ok, reason); });
@@ -67,20 +68,31 @@ void SkillNode::finish(uint64_t gen, bool ok, const std::string & reason) {
   auto r = std::make_shared<SkillAction::Result>();
   r->success = ok;
   r->reason = reason;
+  if (!ok)
+    for (const auto & s : stages_) r->detail += (r->detail.empty() ? "" : " → ") + s;
   if (ok) active_->succeed(r);
   else { active_->abort(r); ++fails_; }
   last_ = active_action_ + (ok ? " 성공" : " 실패 " + reason);
-  RCLCPP_INFO(get_logger(), "%s", last_.c_str());
+  if (ok) RCLCPP_INFO(get_logger(), "%s", last_.c_str());
+  else RCLCPP_WARN(get_logger(), "%s — 단계: %s", last_.c_str(), r->detail.empty() ? "-" : r->detail.c_str());
   active_.reset();
 }
 
 void SkillNode::stage(const std::string & text) {
   stage_ = text;
+  stages_.push_back(text);
+  if (stages_.size() > 5) stages_.pop_front();
   RCLCPP_INFO(get_logger(), "%s: %s", active_action_.c_str(), text.c_str());
   if (!active_) return;
   auto f = std::make_shared<SkillAction::Feedback>();
   f->stage = text;
   active_->publish_feedback(f);
+}
+
+void SkillNode::detail(const std::string & text) {
+  if (!active_) return;
+  stages_.push_back(text);
+  if (stages_.size() > 6) stages_.pop_front();
 }
 
 void SkillNode::when_ready(std::function<bool()> ready, const std::string & reason, Done done, std::function<void()> go) {

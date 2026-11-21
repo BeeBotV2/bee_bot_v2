@@ -1,6 +1,7 @@
 // 팔 skill 공통 — 설명은 include/skills/arm_io.hpp (예전 coordinator.cpp move_arm · move_joints · set_gripper · contact_step …)
 #include "skills/arm_io.hpp"
 #include "skills/arm_state_cache.hpp"
+#include "skills/skill_node.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -77,6 +78,8 @@ ArmIO::ArmIO(rclcpp::Node & node)
   fade_sag_ = node.create_client<std_srvs::srv::Trigger>("/rl_arm_correction/fade_sag");
   ctx_pub_ = node.create_publisher<ml::msg::SkillContext>("/skill_context", rclcpp::QoS(10).reliable());
   hand_pub_ = node.create_publisher<perception::msg::HandTarget>("/hand_relative/target", rclcpp::QoS(1).reliable().transient_local());
+  hr_sub_ = node.create_subscription<perception::msg::HandRelative>("/hand_relative", rclcpp::QoS(10),
+    [this](perception::msg::HandRelative::ConstSharedPtr m) { hr_ = m; });
   state_cache_ = ArmStateCache::for_node(node);
   safety_sub_ = node.create_subscription<control::msg::ArmSafetyEvent>("/arm_safety_event", rclcpp::QoS(10).reliable(),
     [this](control::msg::ArmSafetyEvent::ConstSharedPtr m) {
@@ -584,6 +587,40 @@ bool ArmIO::ik_ee_yaw(const geometry_msgs::msg::PoseStamped & ee, double psi, co
   return true;
 }
 
+std::array<double, 5> ArmIO::efforts() {
+  std::array<double, 5> a{};
+  double q;
+  for (int i = 0; i < 5; ++i) state_cache_->joint(ARM[i], q, a[i]);
+  return a;
+}
+
+// "전류 A j1 0.01→0.02 j2 … · 각 rad [..] · hand puck rel (+12,-3,+40) mm 0.2 s (옆 퍽 (+60,+5) mm)"
+std::string ArmIO::jam_note(const std::array<double, 5> & base_a) {
+  char b[512];
+  int n = std::snprintf(b, sizeof b, "전류 A");
+  for (int i = 0; i < 5; ++i) {
+    double q = 0, e = 0;
+    state_cache_->joint(ARM[i], q, e);
+    n += std::snprintf(b + n, sizeof b - n, " j%d %+.2f→%+.2f", i + 1, base_a[i], e);
+  }
+  n += std::snprintf(b + n, sizeof b - n, " · 각 rad [");
+  for (int i = 0; i < 5; ++i) {
+    double q = 0;
+    state_cache_->position(ARM[i], q);
+    n += std::snprintf(b + n, sizeof b - n, "%s%.3f", i ? " " : "", q);
+  }
+  n += std::snprintf(b + n, sizeof b - n, "]");
+  if (hr_ && hr_->valid) {
+    n += std::snprintf(b + n, sizeof b - n, " · hand %s rel (%+.0f,%+.0f,%+.0f) mm %.1f s", hr_->kind.c_str(),
+                       1000 * hr_->rel.x, 1000 * hr_->rel.y, 1000 * hr_->rel.z, hr_->age);
+    if (hr_->neighbour)
+      std::snprintf(b + n, sizeof b - n, " (옆 퍽 %+.0f,%+.0f mm)", 1000 * hr_->neighbour_rel.x, 1000 * hr_->neighbour_rel.y);
+  } else {
+    std::snprintf(b + n, sizeof b - n, " · hand %s 못 잼", hr_ ? hr_->kind.c_str() : "-");
+  }
+  return b;
+}
+
 double ArmIO::jam_mean(double window_s) const {
   return state_cache_->jam_mean(window_s);
 }
@@ -612,24 +649,29 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
     };
     // 막힘 판정 (jam_current_a): 위에서 멈춘 마지막 0.3 s의 joint2+joint3 전류 → 쥐기·놓기 직전 0.3 s와 비교
     const auto base = std::make_shared<double>(0.0);
-    const Step jam_base = [this, base](Cb c) { *base = jam_mean(0.3); c(true); };
-    const Step jam_check = [this, base, name = policy.name](Cb c) {
+    const auto base_a = std::make_shared<std::array<double, 5>>();  // 관절별 전류 (기록용)
+    const Step jam_base = [this, base, base_a](Cb c) { *base = jam_mean(0.3); *base_a = efforts(); c(true); };
+    const Step jam_check = [this, base, base_a, name = policy.name](Cb c) {
       const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
       if (lim <= 0.0 || d <= lim) { c(true); return; }
       jam_ = true;
-      RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (바닥) — joint2+3 전류 %+.2f A (> %.2f) · 쥐지·놓지 않고 위로", name.c_str(), d, lim);
+      const std::string note = jam_note(*base_a);
+      RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (바닥) — joint2+3 전류 %+.2f A (> %.2f) · 쥐지·놓지 않고 위로 · %s", name.c_str(), d, lim, note.c_str());
+      if (auto * s = dynamic_cast<SkillNode *>(&node_)) s->detail("막힘 바닥 " + name + " Δ" + std::to_string(d).substr(0, 5) + " A · " + note);
       c(false);  // 위로 빼기는 끝 callback에서
     };
     // 내려가는 도중 막힘: 같은 기준을 50 ms마다 보다 넘으면 궤적을 취소 (막힌 채 바닥까지 밀지 않게)
-    const Step descend = [this, base, mv = move(above, down), name = policy.name](Cb c) {
+    const Step descend = [this, base, base_a, mv = move(above, down), name = policy.name](Cb c) {
       const uint64_t gen = gen_;
-      jam_timer_ = node_.create_timer(std::chrono::milliseconds(50), [this, base, gen, name]() {
+      jam_timer_ = node_.create_timer(std::chrono::milliseconds(50), [this, base, base_a, gen, name]() {
         if (gen != gen_) { jam_timer_->cancel(); return; }
         const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
         if (lim <= 0.0 || d <= lim) return;
         jam_timer_->cancel();
         jam_ = true;
-        RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (내려가는 중) — joint2+3 전류 %+.2f A (> %.2f) · 멈추고 위로", name.c_str(), d, lim);
+        const std::string note = jam_note(*base_a);
+        RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (내려가는 중) — joint2+3 전류 %+.2f A (> %.2f) · 멈추고 위로 · %s", name.c_str(), d, lim, note.c_str());
+        if (auto * s = dynamic_cast<SkillNode *>(&node_)) s->detail("막힘 내려가는 중 " + name + " Δ" + std::to_string(d).substr(0, 5) + " A · " + note);
         exec_->async_cancel_all_goals();
       });
       mv([this, c](bool ok) {

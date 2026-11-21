@@ -3,6 +3,7 @@
 // skill 노드 공통 틀 — 액션 서버 /skills/<이름> (skills/action/Skill) · 한 번에 goal 하나 · 취소 · 서버 대기 · 정책 폴더 · 진단
 //   skill마다 이 클래스를 상속해 start(goal, done)만 채움. 노드 하나가 액션 여럿을 낼 수 있음 (stand: stand · stand_pick)
 //   컴포넌트(rclcpp_components)라 skills.launch.py가 팔 skill은 컨테이너 하나(arm_skills), 주행 skill은 다른 하나(base_skills)에 올림
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -24,6 +25,8 @@ using Done = std::function<void(bool, const std::string &)>;
 class SkillNode : public rclcpp::Node {
 public:
   SkillNode(const std::string & name, const rclcpp::NodeOptions & options);
+  // 실패 기록용 메모 — 이번 goal이 실패하면 Result.detail에 단계들과 같이 들어감 (로그·피드백은 안 냄). ArmIO 막힘 수치 등 (11-21)
+  void detail(const std::string & text);
 
 protected:
   // /skills/<action> 서버 하나 — start는 비동기 (끝에 done 한 번)
@@ -44,6 +47,7 @@ private:
   std::vector<rclcpp_action::Server<SkillAction>::SharedPtr> servers_;
   std::shared_ptr<Handle> active_;
   std::string active_action_, stage_, last_;
+  std::deque<std::string> stages_;  // 이번 goal의 최근 단계 — 실패 때 Result.detail로 (실패 기록, 11-21)
   uint64_t gen_ = 0, runs_ = 0, fails_ = 0;
   double server_wait_s_ = 30.0;
   std::string model_dir_;

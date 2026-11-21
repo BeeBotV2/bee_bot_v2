@@ -10,5 +10,6 @@ perception/TrackedObject[] objects  # pick: coordinator가 기억한 대상(첫�
 ---
 bool success
 string reason                    # 실패 이유 (TaskStatus.reason으로 그대로): nav_failed · grasp_empty · arm_contact · *_unavailable …
+string detail                    # 실패 때 skill 안 마지막 단계들 "a → b → c" (기록용 — 판정은 reason만)
 ---
 string stage                     # 지금 단계 (로그·진단)
