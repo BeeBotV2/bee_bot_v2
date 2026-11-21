@@ -139,6 +139,9 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   approach_gap_ = declare_parameter<double>("approach_gap", 0.085);
   pick_reach_m_ = declare_parameter<double>("pick_reach_m", pick_reach_m_);
   creep_min_gap_ = declare_parameter<double>("creep_min_gap", creep_min_gap_);
+  back_min_x_ = declare_parameter<double>("inspect_back_min_x", back_min_x_);
+  back_want_x_ = declare_parameter<double>("inspect_back_want_x", back_want_x_);
+  back_max_m_ = declare_parameter<double>("inspect_back_max_m", back_max_m_);
   nav_turn_m_ = declare_parameter<double>("nav_turn_m", 0.10);
   approach_tries_ = static_cast<int>(declare_parameter<int64_t>("approach_tries", 3));
   retries_ = static_cast<int>(declare_parameter<int64_t>("retries", 2));
@@ -894,22 +897,25 @@ void MissionManager::visit_box(size_t b, bool again, std::function<void()> then)
       SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")};
     run_retry(goals, [this, b, cx, cy, goals, again, left, then](bool ok2, const std::string & why2) {
       if (!ok2) RCLCPP_WARN(get_logger(), "시작 박스 %zu inspect 실패 (%s) — 본 것만", b + 1, why2.c_str());
-      snap("box" + str(static_cast<int>(b) + 1));
-      auto found = collect(b, cx, cy);
-      for (const int tag : left) if (!std::count(found.begin(), found.end(), tag) && basket_slot_of(tag) < 0) found.push_back(tag);
-      const auto start = [this, b, then](const std::vector<int> & f, bool counted) {
-        if (counted)
-          for (int missing = static_cast<int>(puck_dx_.size()) - static_cast<int>(f.size()); missing > 0; --missing)
-            result("box " + str(static_cast<int>(b) + 1) + ": tag_unread");
-        load(b, f, 0, then);
-      };
-      // tag를 못 읽어 할 일이 박스 퍽 수보다 적음 — 한 번 더 봄 (1차만 · 다시 온 상자는 이미 실은 퍽이 있어 수를 모름)
-      if (again || found.size() >= puck_dx_.size()) { start(found, !again); return; }
-      run(goals, [this, b, cx, cy, found, start](bool, const std::string &) {
-        auto all = found;
-        for (const int tag : collect(b, cx, cy)) if (!std::count(all.begin(), all.end(), tag)) all.push_back(tag);
-        std::stable_partition(all.begin(), all.end(), [this](int tag) { return !lying_.count(tag); });
-        start(all, true);
+      // 차체에 붙은 퍽(tag 못 읽음 · 팔이 접히는 자리) — look 자세로 물러나 다시 본 뒤 셈
+      back_off(b, cx, cy, 0, [this, b, cx, cy, goals, again, left, then]() {
+        snap("box" + str(static_cast<int>(b) + 1));
+        auto found = collect(b, cx, cy);
+        for (const int tag : left) if (!std::count(found.begin(), found.end(), tag) && basket_slot_of(tag) < 0) found.push_back(tag);
+        const auto start = [this, b, then](const std::vector<int> & f, bool counted) {
+          if (counted)
+            for (int missing = static_cast<int>(puck_dx_.size()) - static_cast<int>(f.size()); missing > 0; --missing)
+              result("box " + str(static_cast<int>(b) + 1) + ": tag_unread");
+          load(b, f, 0, then);
+        };
+        // tag를 못 읽어 할 일이 박스 퍽 수보다 적음 — 한 번 더 봄 (1차만 · 다시 온 상자는 이미 실은 퍽이 있어 수를 모름)
+        if (again || found.size() >= puck_dx_.size()) { start(found, !again); return; }
+        run(goals, [this, b, cx, cy, found, start](bool, const std::string &) {
+          auto all = found;
+          for (const int tag : collect(b, cx, cy)) if (!std::count(all.begin(), all.end(), tag)) all.push_back(tag);
+          std::stable_partition(all.begin(), all.end(), [this](int tag) { return !lying_.count(tag); });
+          start(all, true);
+        });
       });
     });
   });
@@ -947,6 +953,53 @@ std::vector<int> MissionManager::collect(size_t b, double cx, double cy) {
   // 선 퍽 먼저 싣고 누운 퍽은 나중에 (세우다 옆 퍽을 칠 수 있음 · 11-15 사용자)
   std::stable_partition(found.begin(), found.end(), [this](int tag) { return !lying_.count(tag); });
   return found;
+}
+
+// 상자 윗면 위 퍽 중 차체에 붙은 것 — 로봇 앞 inspect_back_min_x 안이거나 tag를 못 읽음 (적재함에 실린 tag는 뺌).
+//   need = 가장 붙은 퍽이 inspect_back_want_x에 오게 물러날 거리 (tag만 못 읽은 퍽은 그 자리 기준)
+bool MissionManager::near_body(size_t b, double & need) const {
+  Pose2 r;
+  if (!objects_ || !robot_map(r) || !box_seen_.count(b)) return false;
+  const auto [bx, by] = here(box_seen_.at(b));
+  const double c = std::cos(r.yaw), sn = std::sin(r.yaw);
+  bool any = false;
+  need = 0.0;
+  for (const auto & o : objects_->objects) {
+    const auto & p = o.pose.pose.position;
+    if (!is_puck(o) || p.z > box_top_z_ + puck_h_ + 0.04) continue;  // 손에 든 퍽은 윗면보다 위
+    if (std::hypot(p.x - bx, p.y - by) > start_boxes_[b].half * M_SQRT2 + 0.03) continue;
+    const std::string t = detail(o, "tag");
+    if (!t.empty() && basket_slot_of(std::stoi(t)) >= 0) continue;
+    const double fwd = (p.x - r.x) * c + (p.y - r.y) * sn;
+    if (fwd >= back_min_x_ && !t.empty()) continue;
+    any = true;
+    need = std::max(need, back_want_x_ - fwd);
+  }
+  return any;
+}
+
+// 차체에 붙은 퍽이 있으면 look 자세로 곧게 물러나 다시 inspect (두 번까지 · 이번 도킹에서 inspect_back_max_m까지) → then.
+//   11-21 사용자: 차체 쪽 퍽이 안 보이면 look 자세로 후진 (퍽 IK 안정권 + tag·모양·색) · 실기 nav_1121_183927: 로봇 앞 x 0.13~0.15 m 퍽은
+//   tag를 못 읽거나 안 보임(S2 퍽 0 · S5 퍽 6 → puck_lost), 0.20~0.25 m는 다 읽음. 물러난 만큼 pick_near가 다시 다가갈 수 있음 (creep_used_)
+void MissionManager::back_off(size_t b, double cx, double cy, int tries, std::function<void()> then) {
+  double need = 0.0;
+  const double room = back_max_m_ - backed_;
+  Pose2 r;
+  if (tries >= 2 || back_.empty() || room < 0.01 || !near_body(b, need) || !robot_map(r)) { then(); return; }
+  const double step = std::clamp(need, 0.02, room);
+  note(fmt("상자 위 퍽이 차체에 붙음 — look 자세로 %.0f mm 물러남", step * 1000));
+  const double c = std::cos(r.yaw), sn = std::sin(r.yaw);
+  run({SubGoal().set__skill("pose").set__target("look"),
+       SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x - step * c, r.y - step * sn, r.yaw)).set__relation("drive_straight")},
+      [this, b, cx, cy, tries, step, then](bool ok, const std::string & why) {
+        // 실패해도 일부 움직였을 수 있음 — 물러날 거리는 덜 빼는 쪽 (더 물러나는 쪽이 안전) · 다가갈 여유는 늘림
+        backed_ += step;
+        creep_used_ -= step;
+        if (ok && !back_.empty()) back_ = fmt("%.3f", std::max(0.0, std::stod(back_) - step));
+        if (!ok) RCLCPP_WARN(get_logger(), "물러나기 실패 (%s) — 그 자리에서 inspect", why.c_str());
+        run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")},
+            [this, b, cx, cy, tries, then](bool, const std::string &) { back_off(b, cx, cy, tries + 1, then); });
+      });
 }
 
 void MissionManager::load(size_t b, std::vector<int> found, size_t k, std::function<void()> then) {
@@ -1697,7 +1750,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
       //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
       //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
-      if (ok) { creep_used_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
+      if (ok) { creep_used_ = 0.0; backed_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남
@@ -1803,10 +1856,15 @@ void MissionManager::locate(int tag, bool memory, std::function<void(const Track
   }
   // 그래도 못 집었으면 그 자리를 다시 봄
   note("퍽 " + str(tag) + (fresh ? " 다시 보기" : " 다시 보기 (인지 목록에 없음)"));
+  const size_t b = at->second.first;
   run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", m.x, m.y, box_top_z_ + puck_h_))},
-      [this, tag, mx = m.x, my = m.y, cb](bool, const std::string &) {
-        const double spot2[2] = {mx, my};
-        cb(puck_for(objects_.get(), tag, spot2, match_radius_));
+      [this, tag, b, mx = m.x, my = m.y, cb](bool, const std::string &) {
+        // 실패한 pick·세우기가 퍽을 차체 쪽으로 밀었으면 물러나 다시 봄 (11-21 실기 S5 퍽 6: 0.195 → 0.136 m · tag 못 읽어 puck_lost)
+        const auto [bx, by] = box_seen_.count(b) ? here(box_seen_[b]) : std::make_pair(mx, my);
+        back_off(b, bx, by, 0, [this, tag, mx, my, cb]() {
+          const double spot2[2] = {mx, my};
+          cb(puck_for(objects_.get(), tag, spot2, match_radius_));
+        });
       });
 }
 

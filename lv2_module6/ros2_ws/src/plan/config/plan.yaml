@@ -448,6 +448,11 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
       #   11-20: 시뮬에서는 먼 줄 퍽(0.287 m > pick_far 0.285)이 안 닿았음 — 실기에서 먼 퍽 pick 확인. 안 되면 0.13(6 cm)
     # 도킹 뒤 퍽이 멀면 팔이 닿게 조금 전진 (pick_near, 11-20) — 로봇 중심 ~ 퍽이 pick_reach_m 안에 들 만큼만 · 상자 앞 gap creep_min_gap까지
     pick_reach_m: 0.25 # [m] 수직 pick 한계 약 0.256 (시뮬 팔 범위) − 여유
+    # 차체에 붙은 퍽 (11-21 사용자): 상자 위 퍽이 로봇 앞 inspect_back_min_x 안이거나 tag를 못 읽으면 look 자세로 곧게 물러나 다시 inspect
+    #   (두 번까지) — 실기 nav_1121_183927: 0.13~0.15 m 퍽은 tag 못 읽음/안 보임 · 0.20~0.25 m는 다 읽음
+    inspect_back_min_x: 0.17 # [m]
+    inspect_back_want_x: 0.21 # [m] 가장 붙은 퍽이 이만큼 앞에 오게 물러남
+    inspect_back_max_m: 0.08 # [m] 한 도킹에서 물러나는 최대 (exit 거리에서 그만큼 뺌)
     creep_min_gap:
       0.095 # [m] 전진해도 base_footprint ~ 상자 변이 이 아래로는 안 감 (앞면 2.6 cm — 11-20 오전까지 쓰던 도킹 거리)
       #   11-20: 0.085 → 0.095 (+1 cm) — 도킹 때 가끔 상자를 밀고 더 들어감(상자 위치 추정이 멀게 잡히면 마지막 10 cm는 odom만 보고 감) → 1 cm 여유

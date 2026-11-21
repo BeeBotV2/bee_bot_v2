@@ -375,6 +375,10 @@ private:
   int placed_ = 0, photo_n_ = 0;
   int home_tries_ = 0;  // 출발 구역 복귀 Nav2 실패 횟수 — return_home_tries까지 다시 (11-18: 한 번 실패로 미션 ERROR 끝나던 것)
   double pick_reach_m_ = 0.25, creep_min_gap_ = 0.095, creep_used_ = 0.0;  // pick_near: 수직 pick 한계 · 상자 앞 최소 gap · 이번 도킹에서 전진한 거리
+  // 차체에 붙은 퍽 → look 자세로 물러남 (back_off): 로봇 앞 이 안 퍽 · 그 퍽을 이만큼 앞에 오게 · 이번 도킹에서 최대 (plan.yaml inspect_back_*)
+  double back_min_x_ = 0.17, back_want_x_ = 0.21, back_max_m_ = 0.08, backed_ = 0.0;
+  bool near_body(size_t b, double & need) const;
+  void back_off(size_t b, double cx, double cy, int tries, std::function<void()> then);
   std::string back_;   // 박스에 붙어 있을 때 물러날 standoff 자세 "x,y,yaw" (map) — 다음 go_near가 먼저 씀
   std::string run_dir_;
   perception::msg::TrackedObjectArray::ConstSharedPtr objects_;
