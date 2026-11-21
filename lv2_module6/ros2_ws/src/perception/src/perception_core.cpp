@@ -930,6 +930,13 @@ std::optional<double> box_face_dist(const BoxTop & box, const cv::Vec2d & robot_
   return near - front_x;
 }
 
+bool take_face(const std::optional<cv::Vec2d> & old_pt, const std::optional<cv::Vec2d> & old_dir, const cv::Vec2d & new_pt,
+               const cv::Vec2d & new_dir, bool cut) {
+  if (!old_pt || !old_dir || !cut) return true;
+  if (new_dir.dot(*old_dir) < std::cos(PI / 6)) return true;  // 다른 변으로 다가감
+  return (new_pt - *old_pt).dot(new_dir) < 0.0;               // 로봇 쪽으로 더 가까운 면
+}
+
 std::array<cv::Vec2d, 4> box_corners(const cv::Vec2d & c, double yaw, double ax, double ay) {
   const double co = std::cos(yaw), sn = std::sin(yaw);
   const double ds[4][2] = {{ax, ay}, {-ax, ay}, {-ax, -ay}, {ax, -ay}};

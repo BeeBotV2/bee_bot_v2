@@ -548,3 +548,13 @@ TEST(Core, KeepTrackYaw) {  // 트랙 방향을 덜 아는 관측으로 덮지 �
   EXPECT_FALSE(perception::keep_track_yaw(pi / 2, "standing", pi / 2, ""));     // 선 퍽끼리
   EXPECT_FALSE(perception::keep_track_yaw(pi / 2, "lying", pi, "lying"));       // 90° 트랙을 누운 축 180°로 고침
 }
+
+TEST(Core, TakeFace) {  // 잘린 관측이 더 먼 면으로 덮지 않음 (approach 앞면 정지)
+  using perception::take_face;
+  const cv::Vec2d x(1.0, 0.0), y(0.0, 1.0), old_pt(0.30, 0.0);
+  EXPECT_TRUE(take_face(std::nullopt, std::nullopt, {0.40, 0.0}, x, true));  // 처음
+  EXPECT_TRUE(take_face(old_pt, x, {0.37, 0.0}, x, false));                 // 안 잘림 — 밀린 상자도 따라감
+  EXPECT_FALSE(take_face(old_pt, x, {0.37, 0.0}, x, true));                 // 잘림 · 더 멂 — 화면에 잘린 가장자리
+  EXPECT_TRUE(take_face(old_pt, x, {0.29, 0.0}, x, true));                  // 잘림 · 더 가까움
+  EXPECT_TRUE(take_face(old_pt, x, {0.0, 0.40}, y, true));                  // 다른 변
+}

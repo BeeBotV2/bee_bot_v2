@@ -213,6 +213,10 @@ bool tag_on_box(const cv::Vec2d & tag_xy, const BoxTop & box, double margin);
 //   front_x = base_footprint → 로봇 앞면 [m] · 띠 안 점이 min_pts보다 적으면 없음
 std::optional<double> box_face_dist(const BoxTop & box, const cv::Vec2d & robot_xy, double robot_yaw, double front_x,
                                     double half_band = 0.08, double q = 0.05, int min_pts = 8);
+// 트랙 로봇 쪽 면을 새 관측으로 바꿀지 — 잘린 관측은 가까운 가장자리가 화면 아래로 빠져 면이 늘 더 멀게 잡힘 (11-22 실기 nav_1122_012444:
+//   실제 1 cm에서 0.08 m → approach가 목표를 3 cm씩 당겨 몸으로 상자를 비빔) → 잘린 관측은 더 가까울 때 · 방향이 30° 넘게 바뀔 때만
+bool take_face(const std::optional<cv::Vec2d> & old_pt, const std::optional<cv::Vec2d> & old_dir, const cv::Vec2d & new_pt,
+               const cv::Vec2d & new_dir, bool cut);
 // 상자 네 모서리 · 네 면 (가운데 xy, 바깥 방향 yaw) — 가운데 c, yaw 방향 변 ax · 수직 변 ay
 std::array<cv::Vec2d, 4> box_corners(const cv::Vec2d & c, double yaw, double ax, double ay);
 std::array<cv::Vec3d, 4> box_faces(const cv::Vec2d & c, double yaw, double ax, double ay);
