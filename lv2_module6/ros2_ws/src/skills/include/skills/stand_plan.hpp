@@ -90,6 +90,8 @@ std::vector<Q5> sample_move(const Q5 & from, const Q5 & to, double vel_scale, do
 // from → to를 via를 지나는 관절 공간 2차 베지어로 (제어점 2·via − (from+to)/2 → 곡선 가운데가 via) — 경유 자세에서 멈추지 않음.
 //   곡선이 관절 한계를 넘으면 via에서 꺾는 두 직선으로. 시간은 곡선 길이(관절 최대 차의 합)로 사다리꼴 · 부드러운 시작·끝 (move_s)
 std::vector<Q5> sample_via(const Q5 & from, const Q5 & via, const Q5 & to, double vel_scale, double dt);
+// to의 손끝을 곧게 h 올린 관절값 (joint1·joint5 그대로) — 손 수직 해가 없으면 joint4 상한에서 손을 20°까지 기울임 (load · unload 칸 위)
+bool raise_hand(const Q5 & to, double h, Q5 & out);
 // 호: 경유점 wp[1] → … → wp[W−2]를 묶음마다 smooth step으로, 묶음 안은 관절 길이 비례 직선 보간
 std::vector<Q5> sample_arc(const std::vector<Q5> & wp, const Params & p, double vel_scale, double hang_s, double dt);
 
