@@ -20,6 +20,8 @@ public:
   : SkillNode("skill_place", options), arm_(*this) {
     held_bottom_m_ = declare_parameter<double>("held_bottom_m", 0.0606);      // 손끝 → 손 안 퍽 바닥
     release_m_ = declare_parameter<double>("place_release_m", 0.02);          // 벌리는 높이 (퍽 바닥이 면 위 이만큼)
+    // sim 방식 닿는 구간 끝: 퍽 바닥이 면 위 이만큼에서 벌림 (0 = 면에 닿는 자리 — 11-22 실기: 닿는 순간 전류 +0.6 A를 막힘으로 보고 쥔 채 올라감)
+    drop_m_ = declare_parameter<double>("place_drop_m", 0.0);
     approach_m_ = declare_parameter<double>("place_approach_m", 0.08);        // moveit 방식: 위에서 내려오는 높이
     // sim 방식: 손 안 퍽 바닥이 면 위 이만큼에서 다가와 수직으로 내려감. 이웃 퍽(높이 60 mm)보다 높아야 옆으로 지나갈 때 안 침
     //   (11/08 실기 주사위 5: 5 cm로 가운데 눈을 놓으러 가다 먼 줄 퍽을 넘어뜨림). 손이 못 닿으면 5 cm(CONTACT_ABOVE_M)로
@@ -90,7 +92,7 @@ private:
     const double open_m = stand::gap_joint(open_gap_m_);
     if (arm_.sim_contact()) {
       auto down = release;
-      down.pose.position.z -= release_m_;  // 퍽 바닥이 면에 닿는 자리
+      down.pose.position.z -= release_m_ - drop_m_;  // 퍽 바닥이 면 위 drop_m (0이면 닿는 자리)
       auto above = down;
       above.pose.position.z += above_m_;
       {
@@ -145,7 +147,7 @@ private:
   SkillModel policy_;
   bool via_carry_ = true;
   std::vector<double> carry_left_, carry_right_;
-  double held_bottom_m_, release_m_, approach_m_, offset_x_m_, open_gap_m_, above_m_;
+  double held_bottom_m_, release_m_, drop_m_, approach_m_, offset_x_m_, open_gap_m_, above_m_;
 };
 
 }  // namespace skills

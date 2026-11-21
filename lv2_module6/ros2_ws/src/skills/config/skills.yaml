@@ -78,6 +78,7 @@ skill_place:
   ros__parameters:
     held_bottom_m: 0.0606    # [m] 손끝 → 손 안 퍽 바닥
     place_release_m: 0.02    # [m] 벌리는 높이 (퍽 바닥이 면 위 이만큼)
+    place_drop_m: 0.01       # [m] 닿는 구간은 퍽 바닥이 면 위 이만큼에서 벌림 — 11-22 실기 nav_1122_012444: 면까지 내려가 닿는 전류(+0.57 · +0.64 A)를 막힘으로 보고 놓지 않음
     place_approach_m: 0.08   # [m] contact_mode moveit: 위에서 내려오는 높이
 skill_load:
   ros__parameters:
