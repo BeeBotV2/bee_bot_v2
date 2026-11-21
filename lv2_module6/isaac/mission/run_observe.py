@@ -5,6 +5,7 @@
   python3 isaac/mission/run_observe.py --expect R5Y3G4 --code P2-01
   python3 isaac/mission/run_observe.py --only signal          # 신호만 (start:READ — 바코드 안 봄)
   python3 isaac/mission/run_observe.py --sim                  # Isaac
+  python3 isaac/mission/run_observe.py --clear-basket         # 적재함 장부가 남아 시작이 거부될 때 먼저 비움
 
 mission_manager에 start:BARCODE를 보냄 → BARCODE(바코드 · 신호등을 보는 자리 · 손목 엿보기) → READ(신호 해독) → DONE.
 SURVEY로는 안 넘어감. 그동안 /mission/qr(바코드 원문) · /mission/signal_status(사이클마다 읽은 신호)를 그대로 찍고,
@@ -19,6 +20,7 @@ import sys
 import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 from perception.msg import MissionSignal
 from plan.msg import MissionState
@@ -33,6 +35,7 @@ def main():
     ap.add_argument('--code', default='', help='맞아야 할 바코드 (예: P2-01) · 빈 값이면 비교 안 함')
     ap.add_argument('--only', choices=('all', 'signal'), default='all', help='signal = 신호만 (start:READ)')
     ap.add_argument('--sim', action='store_true', help='Isaac (use_sim_time · fastdds_local_only)')
+    ap.add_argument('--clear-basket', action='store_true', help='시작 전 /coordinator/basket_clear (run_mission과 같음)')
     ap.add_argument('--timeout', type=float, default=240.0, help='[s] 이 안에 안 끝나면 abort')
     a = ap.parse_args()
     m = re.fullmatch(r'R(\d)Y(\d)G(\d)', a.expect.upper()) if a.expect else None
@@ -49,6 +52,13 @@ def main():
     log = n.get_logger()
     latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     cmd = n.create_publisher(String, '/cmd/mission', 10)
+    if a.clear_basket:
+        c = n.create_client(Trigger, '/coordinator/basket_clear')
+        if not c.wait_for_service(timeout_sec=20.0):
+            sys.exit('/coordinator/basket_clear 안 보임 — coordinator가 떠 있는지 확인')
+        f = c.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(n, f, timeout_sec=10.0)
+        log.info(f'적재함 장부: {f.result().message if f.result() else "응답 없음"}')
     st = {'phase': None, 'last': None, 'last0': None, 'started': False, 'running': False, 'done': None, 'msg': None, 'qr': None, 't': 0}
 
     def on_state(msg):
