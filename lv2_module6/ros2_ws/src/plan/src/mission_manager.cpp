@@ -170,6 +170,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_tol_ = declare_parameter<double>("place_tol", 0.010);
   place_search_ = declare_parameter<double>("place_search", 0.05);
   loc_keep_s_ = declare_parameter<double>("loc_box_keep_s", loc_keep_s_);
+  loc_match_m_ = declare_parameter<double>("loc_box_match_m", loc_match_m_);
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
@@ -363,10 +364,20 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       // 근래 본 퍽 (near_body) — 차체에 붙은 퍽은 보이다 사라짐 (실기 nav_1121_214753 S3: stand 뒤 퍽 5가 0.14 m에 2 s 보이고 빠짐 → 물러나지 않고 puck_lost)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
       for (const auto & o : m->objects)
-        if (o.class_name == "location_box" && !detail(o, "tag").empty()) {
-          const LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+        {
           // 윗면을 다 찾은 관측만 (corners · 안 잘림) — 윗면 없이 태그만 본 관측은 위치가 태그 자리(가운데에서 최대 약 10 cm)
-          if (detail(o, "cut") != "true" && !detail(o, "corners").empty()) loc_whole_[detail(o, "tag")] = seen;
+          if ((o.class_name != "location_box" && o.class_name != "start_box") || detail(o, "cut") == "true" || detail(o, "corners").empty()) continue;
+          std::string tag = o.class_name == "location_box" ? detail(o, "tag") : "";
+          // 멀리서는 태그를 못 읽어 장소 상자도 start_box로 나오고, 태그가 읽히는 거리에선 윗면이 잘림 (11-22 실기 nav_1122_033953 L3:
+          //   둘이 한 번도 겹치지 않아 가운데를 못 정함) → 장소 중심에서 loc_box_match_m 안의 온전한 start_box는 그 장소 상자로 봄
+          //   (시작 박스와 장소 상자는 0.8 m 넘게 떨어짐)
+          if (tag.empty() && active_) {
+            const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y);
+            for (size_t li = 0; li < locations_.size() && li < loc_tags_.size(); ++li)
+              if (std::hypot(a.x - locations_[li].first, a.y - locations_[li].second) < loc_match_m_) { tag = str(loc_tags_[li]); break; }
+          }
+          if (tag.empty()) continue;
+          loc_whole_[tag] = LocSeen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
         }
       for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
         it = (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() > back_recent_s_ ? recent_pucks_.erase(it) : std::next(it);
