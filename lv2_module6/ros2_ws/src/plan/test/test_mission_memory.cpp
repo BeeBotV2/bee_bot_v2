@@ -84,3 +84,11 @@ TEST(Spot, KeepsMapWithoutTf) {
   EXPECT_DOUBLE_EQ(x, 0.5);
   EXPECT_DOUBLE_EQ(y, -0.3);
 }
+
+// 상자 조사 — 보인 tag 퍽이 할 일인지 (11-21 실기 S6: S4에서 떨어뜨린 퍽 5를 '아는 tag'라 건너뜀)
+TEST(BoxTodo, PicksNewAndMovedPucksOnly) {
+  EXPECT_FALSE(plan::box_todo(true, true, false));  // 적재함에 있음
+  EXPECT_TRUE(plan::box_todo(false, false, false));  // 처음 봄
+  EXPECT_FALSE(plan::box_todo(false, true, true));  // 이 상자 퍽으로 이미 적힘
+  EXPECT_TRUE(plan::box_todo(false, true, false));  // 다른 상자로 알던 퍽 (S6의 퍽 5)
+}

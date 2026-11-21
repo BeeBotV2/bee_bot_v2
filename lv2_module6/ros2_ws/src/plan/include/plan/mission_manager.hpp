@@ -85,6 +85,10 @@ struct Box {  // arena [m] — 정사각 박스 (윗면 = box_top_z)
 const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedObjectArray * objs, int tag,
                                                 const double * spot_xy, double radius);
 
+// 상자 위에 보인 tag 퍽이 할 일인지 (test_mission_memory): 적재함에 있으면 아님 · 처음 보면 할 일 · 이 상자 퍽으로 이미 적혔으면 아님(중복) ·
+//   다른 상자 퍽으로 알던 퍽은 할 일 (떨어뜨렸거나 옮겨짐)
+inline bool box_todo(bool in_basket, bool known, bool same_box) { return !in_basket && (!known || !same_box); }
+
 class MissionManager : public rclcpp::Node {
 public:
   explicit MissionManager(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
@@ -119,6 +123,8 @@ private:
   std::vector<std::string> goto_;  // start:GOTO 목록 (S1~S6 · L1~L3)
   void goto_seq(size_t k);         // 목록 k번째 상자에 SURVEY처럼 다가감 → 다음 · 끝나면 RETURN
   void load(size_t box, std::vector<int> found, size_t k);  // 찾은 퍽(tag)을 적재함에 — 트랙 id는 집기 직전에 다시 찾음
+  // 상자 윗면 위 tag 퍽 중 할 일 (처음 본 퍽 · 다른 상자 자리로 기억했는데 여기 있는 퍽)을 이 상자로 적고 돌려줌
+  std::vector<int> collect(size_t b, double cx, double cy);
   void solve_allocation();
   void build(size_t i);
   void bring(size_t i);                          // 그 퍽을 장소 앞에서 손에 쥘 때까지 (적재함 · 시작 박스)
