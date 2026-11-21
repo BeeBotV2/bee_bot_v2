@@ -337,6 +337,7 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions & options) : rclcpp::No
   //   이번 영상에 'box' 네모가 없으면 예전처럼 화면 전체
   box_roi_yolo_ = pb("box_roi_yolo", false);  // 기본 끔 — 로봇에서 상자가 같은지 확인한 뒤 켬 (11/12)
   robot_front_x_ = pd("robot_front_x", 0.069);  // base_footprint → 로봇 앞면 [m] (상자 face_dist_m 기준 · 시뮬 pick_env ROBOT_FRONT_X)
+  box_known_side_ = pd("box_known_side_m", 0.205);  // 시작 박스 · 장소 상자 윗면 한 변 [m] — 0이면 보이는 윗면 그대로 (anchor_box_center)
   // 실물 gripper_cam 깊이가 바닥·상자를 12 mm 높게 봄 (11-14 실측 9자세: 바닥 +10~14 · 상자 +11~13 · 상자−바닥 70 그대로 · 팔 토크·카메라 높이와 무관)
   //   → 퍽 자세·상자 윗면 판정의 바닥 높이만 올림 (위치·손 카메라 상대값은 그대로). Isaac 깊이는 정확해서 use_sim_time이면 0
   gripper_floor_offset_ = get_parameter("use_sim_time").as_bool() ? 0.0 : pd("gripper_floor_offset_m", 0.0);
@@ -747,6 +748,9 @@ void PerceptionNode::update_tracks(const std::string & cam, Frame & s, const std
       boxes[i].yaw.reset();
       cut[i] = true;
     }
+  if (box_known_side_ > 0.0)  // 안 잘린 상자는 크기를 알아 카메라 쪽 가장자리 기준으로 가운데 (먼 쪽 윗면이 퍽에 가려도)
+    for (size_t i = 0; i < boxes.size(); ++i)
+      if (!cut[i]) anchor_box_center(boxes[i], cv::Vec2d(trans[0], trans[1]), box_known_side_);
   // 로봇 앞 방향 (추적 좌표) — 상자 로봇 쪽 면까지 거리 (box_face_dist)
   std::optional<std::pair<cv::Vec2d, double>> robot2d;
   if (base_now) robot2d = std::make_pair(cv::Vec2d(base_now->second[0], base_now->second[1]),
