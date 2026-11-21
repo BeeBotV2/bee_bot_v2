@@ -113,3 +113,25 @@ TEST(ProgressWatch, DetourReplanIsNotStall) {  // 남쪽 통로 막혀 북쪽 �
   for (; t < 10.0; t += 0.5) EXPECT_FALSE(w.update(t, 1.0 + 0.0 * t));  // 10 s 멈춤
   for (double r = 4.0; r > 0.2; r -= 0.1, t += 0.5) EXPECT_FALSE(w.update(t, r)) << t;  // 우회로 0.2 m/s
 }
+
+TEST(TrajCheck, StartContactAllowedOnlyWhileLeaving) {
+  // 11-21 실기: load 막힘 자세에서 손가락이 적재함 칸 링(base_link)에 걸린 채 시작 — 빠져나가는 궤적은 보내야 함
+  using skills::ContactPair;
+  const ContactPair ring{"base_link", "finger_right_link"}, cam{"gripper_cam_link", "shoulder_link"};
+  std::set<ContactPair> start;
+  ContactPair bad;
+  EXPECT_TRUE(skills::contacts_ok(start, {ring}, true, false, bad));    // 시작: 이미 닿음 → 허용
+  EXPECT_TRUE(skills::contacts_ok(start, {ring}, false, false, bad));   // 아직 빠져나가는 중
+  EXPECT_FALSE(skills::contacts_ok(start, {ring, cam}, false, false, bad));  // 새 쌍
+  EXPECT_EQ(bad, cam);
+  EXPECT_TRUE(skills::contacts_ok(start, {}, false, false, bad));       // 떨어짐
+  EXPECT_FALSE(skills::contacts_ok(start, {ring}, false, false, bad));  // 다시 닿음
+  std::set<ContactPair> s2;
+  EXPECT_TRUE(skills::contacts_ok(s2, {ring}, true, false, bad));
+  EXPECT_FALSE(skills::contacts_ok(s2, {ring}, false, true, bad));      // 끝 자세에서도 닿음
+  std::set<ContactPair> s3;
+  EXPECT_FALSE(skills::contacts_ok(s3, {ring}, true, true, bad));       // 샘플 하나(끝)뿐
+  std::set<ContactPair> s4;
+  EXPECT_TRUE(skills::contacts_ok(s4, {}, true, false, bad));           // 처음부터 안 닿음
+  EXPECT_FALSE(skills::contacts_ok(s4, {ring}, false, false, bad));
+}
