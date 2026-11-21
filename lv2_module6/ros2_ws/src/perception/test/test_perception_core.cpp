@@ -558,3 +558,21 @@ TEST(Core, TakeFace) {  // 잘린 관측이 더 먼 면으로 덮지 않음 (app
   EXPECT_TRUE(take_face(old_pt, x, {0.29, 0.0}, x, true));                  // 잘림 · 더 가까움
   EXPECT_TRUE(take_face(old_pt, x, {0.0, 0.40}, y, true));                  // 다른 변
 }
+
+TEST(Core, AnchorBoxCenter) {  // 퍽이 먼 쪽 윗면을 가려도 가운데는 카메라 쪽 가장자리 + 반 변
+  perception::BoxTop b;
+  b.yaw = 0.0;
+  for (double x = -0.1025; x <= 0.03; x += 0.005)    // 카메라(−x 쪽)에서 가까운 쪽만 보임 — 먼 쪽 7 cm 가림
+    for (double y = -0.1025; y <= 0.1025; y += 0.005) b.pts.emplace_back(1.0 + x, 2.0 + y);
+  b.c = {1.0 - 0.036, 2.0};  // 보이는 점의 가운데 (가려서 쏠림)
+  perception::anchor_box_center(b, {0.0, 2.0}, 0.205);
+  EXPECT_NEAR(b.c[0], 1.0, 0.006);
+  EXPECT_NEAR(b.c[1], 2.0, 0.006);
+  perception::BoxTop full = b;  // 다 보이면 그대로 (가운데 점 평균)
+  full.pts.clear();
+  for (double x = -0.1025; x <= 0.1026; x += 0.005)
+    for (double y = -0.1025; y <= 0.1026; y += 0.005) full.pts.emplace_back(1.0 + x, 2.0 + y);
+  full.c = {1.0, 2.0};
+  perception::anchor_box_center(full, {0.0, 2.0}, 0.205);
+  EXPECT_NEAR(full.c[0], 1.0, 0.006);
+}

@@ -208,6 +208,10 @@ std::vector<BoxTop> find_box_tops(const cv::Mat1f & depth_m, const cv::Matx33d &
                                   const std::optional<Body> & avoid_body = std::nullopt,
                                   const std::vector<double> & body_box = {});
 bool tag_on_box(const cv::Vec2d & tag_xy, const BoxTop & box, double margin);
+// 크기를 아는 상자(known 변 [m])의 가운데를 카메라 쪽 가장자리에 맞춤 — 윗면 깊이 점이 한 변 방향으로 known − tol보다 짧게 잡히면
+//   (상자 위 퍽이 먼 쪽 윗면을 가림 · 11-22 실기 nav_1122_041846: 퍽을 놓을수록 L2 가운데가 3~9 cm 로봇 쪽으로 쏠림)
+//   그 방향은 카메라에 가까운 끝 + known/2로. 다 보이면 그대로. yaw가 있어야 함 (잘린 상자는 쓰지 말 것 — 가까운 끝이 잘림)
+void anchor_box_center(BoxTop & box, const cv::Vec2d & cam_xy, double known, double tol = 0.015);
 // 로봇 앞면 → 상자의 로봇 쪽 면 거리 [m] — 윗면 깊이 점 중 로봇 앞 띠(|옆| < half_band) 안에서 가장 가까운 쪽(하위 q 분위)
 //   잘려서 가운데·크기를 못 믿어도, 로봇 쪽 모서리가 보이는 동안은 잼. robot_xy·robot_yaw = base_footprint (추적 좌표)
 //   front_x = base_footprint → 로봇 앞면 [m] · 띠 안 점이 min_pts보다 적으면 없음

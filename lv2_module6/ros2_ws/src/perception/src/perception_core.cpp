@@ -937,6 +937,23 @@ bool take_face(const std::optional<cv::Vec2d> & old_pt, const std::optional<cv::
   return (new_pt - *old_pt).dot(new_dir) < 0.0;               // 로봇 쪽으로 더 가까운 면
 }
 
+void anchor_box_center(BoxTop & box, const cv::Vec2d & cam_xy, double known, double tol) {
+  if (!box.yaw || known <= 0.0 || box.pts.size() < 8) return;
+  const cv::Vec2d u(std::cos(*box.yaw), std::sin(*box.yaw)), v(-u[1], u[0]);
+  cv::Vec2d c = box.c;
+  for (const cv::Vec2d & ax : {u, v}) {
+    std::vector<double> s;
+    for (const auto & p : box.pts) s.push_back((p - box.c).dot(ax));
+    std::sort(s.begin(), s.end());
+    const double lo = s[s.size() / 50], hi = s[s.size() - 1 - s.size() / 50];  // 양 끝 2 % 버림 (깊이 잡음)
+    double mid = 0.5 * (lo + hi);
+    if (hi - lo < known - tol) mid = (cam_xy - box.c).dot(ax) < 0.0 ? lo + known / 2 : hi - known / 2;  // 카메라 쪽 끝 기준
+    c += mid * ax;
+  }
+  box.c = c;
+  box.ax = box.ay = known;
+}
+
 std::array<cv::Vec2d, 4> box_corners(const cv::Vec2d & c, double yaw, double ax, double ay) {
   const double co = std::cos(yaw), sn = std::sin(yaw);
   const double ds[4][2] = {{ax, ay}, {-ax, ay}, {-ax, -ay}, {ax, -ay}};
