@@ -755,28 +755,24 @@ void PerceptionNode::update_tracks(const std::string & cam, Frame & s, const std
   std::optional<std::pair<cv::Vec2d, double>> robot2d;
   if (base_now) robot2d = std::make_pair(cv::Vec2d(base_now->second[0], base_now->second[1]),
                                          std::atan2(base_now->first(1, 0), base_now->first(0, 0)));
-  std::map<size_t, std::pair<int, std::optional<double>>> box_tag;  // 상자 번호 → (태그 번호, 태그 yaw)
-  for (const auto & t : tags) {  // 장소 태그 (L1~L3) — 붙은 상자를 location_box로
+  // 장소 태그 (L1~L3)는 상자 윗면 정중앙 (11-22 실물 확인) → 상자 가운데 = 태그 가운데 — 퍽이 윗면을 가려도 · 윗면이 화면에 잘려도
+  std::map<size_t, std::pair<int, cv::Vec3d>> box_tag;  // 상자 번호 → (태그 번호, 태그 가운데)
+  for (const auto & t : tags) {
     if (!location_tags_.count(t.id)) continue;
-    auto d = marker_det(s, t.box, t.c, rot, trans, "location_box");
-    if (!d) continue;
-    auto [l_yaw, face] = tag_yaw(t.corners, location_tag_size_, s.fx, s.fy, s.cx, s.cy, rot);
-    if (face != "side") l_yaw.reset();  // 장소 태그는 상자 윗면(위치는 정해지지 않음) → 태그로는 방향을 안 정함 (방향 = 윗면 변)
+    const auto c = tag_center(t.corners, depth_m, location_tag_size_, 0.0, s.fx, s.fy, s.cx, s.cy, rot, trans, arm_mask);
+    if (!c) continue;  // 비스듬히 본 태그 (윗면도 옆면도 아님)
     std::optional<size_t> on;
     for (size_t i = 0; i < boxes.size(); ++i)
-      if (tag_on_box(cv::Vec2d(d->z[0], d->z[1]), boxes[i], box_tag_margin_)) { on = i; break; }
+      if (tag_on_box(cv::Vec2d((*c)[0], (*c)[1]), boxes[i], box_tag_margin_)) { on = i; break; }
     if (on) {
-      box_tag[*on] = {t.id, l_yaw};
+      box_tag[*on] = {t.id, *c};
       continue;
     }
-    // 윗면을 못 찾음 → 상자 위치 = 태그 위치 (태그가 윗면 어디에 붙었는지 몰라 상자 가운데와 최대 약 10 cm 어긋남 · 방향 모름)
+    auto d = marker_det(s, t.box, t.c, rot, trans, "location_box");  // 윗면을 못 찾음 → 태그만으로
+    if (!d) continue;
+    d->z = *c;
     d->tag = t.id;
     d->size = location_box_size_;
-    if (l_yaw) {
-      d->z -= location_box_size_[0] / 2.0 * cv::Vec3d(std::cos(*l_yaw), std::sin(*l_yaw), 0.0);
-      d->yaw = l_yaw;
-      d->yaw_period = 2 * PI;
-    }
     dets.push_back(*d);
   }
   for (size_t i = 0; i < boxes.size(); ++i) {
@@ -800,10 +796,12 @@ void PerceptionNode::update_tracks(const std::string & cam, Frame & s, const std
     d.px = cv::Point(static_cast<int>(s.fx * p_img[0] / p_img[2] + s.cx), static_cast<int>(s.fy * p_img[1] / p_img[2] + s.cy));
     d.yaw = bt.yaw;
     d.yaw_period = PI / 2;  // 윗면 사각형 변 방향 — 정사각형이라 90°마다 같음
-    if (box_tag.count(i)) {  // 장소 태그가 윗면에 있는 상자 → location_box (방향 = 윗면 변, 90° 주기)
+    if (box_tag.count(i)) {  // 장소 태그가 윗면에 있는 상자 → location_box · 가운데 = 태그 가운데 · 크기는 아는 값 (방향 = 윗면 변, 90° 주기)
       d.class_name = "location_box";
       d.tag = box_tag[i].first;
-      if (box_tag[i].second) { d.yaw = box_tag[i].second; d.yaw_period = 2 * PI; }
+      d.z[0] = box_tag[i].second[0];
+      d.z[1] = box_tag[i].second[1];
+      d.size = location_box_size_;
     }
     dets.push_back(d);
   }
@@ -1151,8 +1149,9 @@ std::vector<int> PerceptionNode::fuse(const std::string & cam, const builtin_int
     used_t.insert(tid);
     const Det & d = dets[i];
     Track & tr = tracks_.at(tid);
-    if (!(d.cut && (tr.class_name == "start_box" || tr.class_name == "location_box"))) {
-      // 잘린 상자 관측은 가운데·크기를 갱신하지 않음 — 일부로 잰 값이 다가가는 동안 위치를 끌고 감 (11/12 사용자: 상자 앞 1~2 cm 도킹)
+    if (!(d.cut && tr.class_name == "start_box")) {
+      // 잘린 시작 박스 관측은 가운데·크기를 갱신하지 않음 — 일부로 잰 값이 다가가는 동안 위치를 끌고 감 (11/12 사용자: 상자 앞 1~2 cm 도킹)
+      //   장소 상자는 늘 태그 가운데라 잘려도 갱신
       cv::Matx33d K;
       std::tie(tr.p, tr.P, K) = kf_update(tr.p, pred[tid], d.z, d.R);
       const double a = (K(0, 0) + K(1, 1) + K(2, 2)) / 3.0;  // 이번 관측을 믿은 정도 — 크기도 같은 비율로

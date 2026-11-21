@@ -42,7 +42,7 @@ diagnostic_msgs/KeyValue[] details      # 클래스별 속성 — puck: posture 
 장소 48mm L1~L3 = 12~14 (상자 **윗면** — 윗면 어디에 붙는지는 미정) · 줄무늬 바코드(P2-01 …) = 장소 작업 지시 → class `barcode` 물체(`content`) + `/mission/qr`.
 
 **상자** (205×205×70mm): depth로 바닥 위 상자 윗면(약 7cm 판)을 찾아 위치 = **윗면 가운데**, `size` = 잰 가로·세로·높이(붙은 상자는 큰 판 하나로).
-- 장소 태그(12~14)가 윗면(가장자리 8cm 여유 포함) 안에 있으면 class **`location_box`** (L1~L3 — 놓는 곳) · `tag`. 방향 = 윗면 변 방향(`yaw_period` 90 — 네 옆면 중 어느 면인지만 앎, 정해진 앞면 없음).
+- 장소 태그(12~14)가 윗면(가장자리 8cm 여유 포함) 안에 있으면 class **`location_box`** (L1~L3 — 놓는 곳) · `tag`. 태그는 윗면 정중앙이라 위치 = 태그 가운데 (윗면이 잘리거나 가려도). 윗면을 못 찾아도 태그만으로 나옴. 방향 = 윗면 변 방향(`yaw_period` 90 — 네 옆면 중 어느 면인지만 앎, 정해진 앞면 없음).
   장소 태그는 윗면에만 붙음(위치는 정해지지 않음) — 태그로 방향을 정하지 않음. **받는 쪽은 `yaw_period`로 판단.**
   태그만 보이고 윗면을 못 찾으면(멀거나 일부만 보임) **태그 위치 그대로** · 기본 크기 · 방향 없음(단위 쿼터니언, `yaw_period` 없음) — 태그가 윗면 가운데가 아니면 상자 가운데와 최대 약 10cm 어긋남. 가까이 가서 윗면을 찾으면 윗면 가운데로 바뀜.
 - 태그가 없으면 class **`start_box`** (퍽이 처음 있던 곳) · 방향 = 윗면 변 방향(`yaw_period` 90). 같은 자리에 `location_box`가 있으면 지움 (장소 상자를 태그가 안 보이는 쪽에서 본 것).
@@ -65,7 +65,7 @@ diagnostic_msgs/KeyValue[] details      # 클래스별 속성 — puck: posture 
 | `class_name` | YOLO: `puck`(서 있는 퍽) · `puck_lying`(누운 퍽) · `traffic_light` · `person` · `obstacle` / 표식·depth: `location_box`(장소 상자 — AprilTag 12~14) · `start_box`(태그 없는 상자) · `barcode`(바코드 P2-xx) — 이 8개만 나감 | 모델 이름(`bee_yolo11n_v5.pt`: `puck_red_box` · `puck_green_cyl` … · `traffic_light_red` · `traffic_light_off` …)은 나눠서 냄: 퍽 → `puck` + `color` + `details.shape`(+ 자세), 신호등 → `traffic_light` + 상태(`color` · `details.state`). 다른 클래스끼리는 가까워도 합치지 않음 |
 | `confidence` | 마지막 관측의 YOLO 신뢰도 (0~1, `confidence` 파라미터 이상만) | 평균 아님 |
 | `pose.pose.position` | map 좌표 [m] — 원점 = map 원점(시뮬레이터: 출발 칸 `spawn`), x 앞 · y 왼쪽 · z 위(바닥 ≈ 0). **추적은 odom 기준, 발행 순간의 map ← odom(cuVSLAM 최신 보정)으로 바꿔 냄** — 보정이 바뀌면(맞든 틀리든) 로봇 위치와 함께 옮겨져 로봇과의 상대 위치는 유지. 위치추정 자체가 틀리면 map 좌표는 그만큼 통째로 어긋남 | 박스 중심 방향의 **카메라 쪽 앞면 점** — 실제 중심보다 카메라 쪽으로 물체 반지름쯤 당겨짐 (퍽 2~3cm). z도 앞면 점 높이. 두 카메라가 다른 방향에서 보면 일부 상쇄 |
-| `pose.pose.orientation` | 바닥 위 회전(yaw)만 `(0, 0, sin(yaw/2), cos(yaw/2))` — 퍽(모양·태그로 구했을 때) · `location_box`·`start_box`(윗면 변). 모르면 `(0, 0, 0, 1)` | 방향 주기는 `details.yaw_period` — 90이면 90°마다 같은 자세(사각 퍽·상자), 180이면 누운 퍽 긴 축, 360이면 구분됨(옆면 태그 법선 — 윗면 태그 상자는 해당 없음). 공분산 yaw 대각(35)이 작으면 아는 방향. 상자 면 앞에 설 때: 면 방향 = yaw + k·90°, 면 위치 = 가운데 + 0.1025m × 그 방향 |
+| `pose.pose.orientation` | 바닥 위 회전(yaw)만 `(0, 0, sin(yaw/2), cos(yaw/2))` — 퍽(모양·태그로 구했을 때) · `location_box`·`start_box`(윗면 변). 모르면 `(0, 0, 0, 1)` | 방향 주기는 `details.yaw_period` — 90이면 90°마다 같은 자세(사각 퍽·상자), 180이면 누운 퍽 긴 축, 360이면 구분됨(퍽 옆면 태그 법선). 공분산 yaw 대각(35)이 작으면 아는 방향. 상자 면 앞에 설 때: 면 방향 = yaw + k·90°, 면 위치 = 가운데 + 0.1025m × 그 방향 |
 | `pose.covariance` | 6×6 행 우선. **위치 3×3 블록**(인덱스 0~2·6~8·12~14) = 융합 위치 불확실성 [m²], 회전 대각(21·28·35) = 1e3(모름) | 관측 잡음만 반영 — 위의 앞면 쏠림(바이어스)은 안 들어감. 관측 σ: depth 축 `depth_sigma0 + depth_sigma_k·z²`, 가로·세로 `pixel_sigma·z/f` |
 | `size` | [m] x = 박스 가로 폭 · y = 박스 세로 높이 (픽셀 × 거리 / 초점거리), z = 클래스 기본값(퍽 0.06 — 발제 30×30×60mm, 누운 퍽 0.03 등). 크기를 못 재면 셋 다 클래스 기본값. **상자(`location_box`·`start_box`)는 잰 윗면 가로·세로 · 높이(바닥~윗면)** | 퍽은 **map 축 크기가 아님** (카메라 영상 기준). 관측마다 칼만 이득 비율로 갱신 |
 | `last_seen` | 마지막으로 관측된 **영상 시각** (카메라 header.stamp) | `TrackedObjectArray.header.stamp`(발행 시각)과 다름 |
