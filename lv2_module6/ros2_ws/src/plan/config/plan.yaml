@@ -418,7 +418,11 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   11-20 절대값으로 다시 켬: wall_localization이 odom 좌표 depth 점(최근 arena_corr_wall_keep_s)을 벽에 맞춘 결과를 map→odom 목표로
     #   (/localization/map_to_odom) — 조각을 더하지 않아 잠금·지연에도 안 쌓임 (시뮬 11-20: 증분은 −1°를 98번). BEE_MAP_ANCHOR=odom일 때만 받음
     #   mission_manager는 arena_corr_wall_fit이 켜져 있으면 상자로는 안 옮김 (loc_tick 안 돎)
-    arena_corr_to_localization: false # 11-20 sim bag: 4분에 map→odom yaw −6.7° · S4 상자 31 cm 어긋남 → 끔 (78597556 값)
+    #   11-21 Isaac 전체 미션(실기와 같은 Cyclone · odom 기준, 26분)으로 true 확정: 위치 오차 평균 1.5 cm · p95 3.7 cm
+    #   (odom만은 최대 47 cm 밀림 — 벽 정합이 되돌림). false로 둔 같은 판은 도킹 중 바퀴 헛돎 뒤 위치 오차 41 cm가 남아
+    #   box 3 · 복귀 nav_no_progress로 미션 실패. 11-20의 −6.7° 틀어짐은 재현 안 됨 (map→odom yaw 0→+4°는 실제 odom drift를 따라감)
+    # !! 절대 false로 바꾸지 말 것 — 틀어짐이 보이면 끄지 말고 bag · GT 비교로 원인을 먼저 찾는다 (끄면 odom drift가 그대로 남음)
+    arena_corr_to_localization: true # 절대 바꾸지 말 것 (11-21 · 위 주석)
     arena_corr_loc_min_n: 3 # 상자 근거 이만큼(또는 벽 정합)일 때만 — 상자 1~2개로는 안 옮김
     arena_corr_loc_step_m: 0.05 # [m] 한 번에 넘기는 조각 (MapGate 잠금 0.30 m보다 훨씬 작게)
     arena_corr_loc_step_rad: 0.0175 # [rad] (1°)
