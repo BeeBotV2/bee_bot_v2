@@ -631,7 +631,8 @@ void send_state()
     print_value(or_nan(GRIPPER_INDEX, slope * rpm_to_rad_s(g.velocity * VELOCITY_RPM_PER_UNIT)));
     print_value(or_nan(GRIPPER_INDEX, g.current * CURRENT_MA_PER_UNIT / 1000.0f));
 
-    print_value(imu.quat[1]);  // imu.update()는 loop()에서 매번 (11-21)  // cIMU quat = w, x, y, z
+    // imu.update()는 loop()에서 매번 (11-21)
+    print_value(imu.quat[1]);  // cIMU quat = w, x, y, z
     print_value(imu.quat[2]);
     print_value(imu.quat[3]);
     print_value(imu.quat[0]);
