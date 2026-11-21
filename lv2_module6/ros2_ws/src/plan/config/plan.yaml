@@ -407,6 +407,8 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     arena_corr_wall_keep_s: 25.0 # [s] 이만큼 최근에 본 depth 점 칸만 (odom이 서서히 틀어지니 짧게 · 11-20)
     arena_corr_wall_z_min: 0.10 # [m] odom 높이 띠 — 상자(7 cm)·퍽은 빼고 벽만
     arena_corr_wall_z_max: 0.30
+    arena_corr_wall_hold_m: 0.02 # [m] 지난 fit 뒤 로봇이 이만큼 · hold_rad 안이면 fit 안 함 — 정지 중(stand·load) 칸이 줄어 fit이 튀던 것 (11-22 실기)
+    arena_corr_wall_hold_rad: 0.0175 # [rad] (1°)
     arena_corr_walls_m:
       0.0 # [m] /arena/walls(도면 벽)를 다시 보내는 최소 변화 — 보낼 때마다 Nav2 costmap이 다시 잡힘 · 0 = 안 보냄
       #   11-15: 0.15 → 0 — 전역 경로가 /arena/walls를 봄. 상자 하나(근거 1개)로 dy −0.2 m 보정이 벽까지 옮겨 문이 실제보다 위로 →
