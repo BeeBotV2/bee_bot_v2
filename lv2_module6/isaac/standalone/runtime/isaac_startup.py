@@ -34,6 +34,7 @@ from pxr import Gf, PhysxSchema, Usd, UsdGeom, UsdPhysics
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCENE = os.environ.get("ISAAC_SCENE") or os.path.join(HERE, "..", "..", "usda", "maze_map_1711.usda")  # isaac_sim.sh <scene>
 RESET_FILE = "/tmp/beebot_isaac_reset"  # isaac_sim.sh와 같은 경로
+PUCK_RESET_FILE = "/tmp/beebot_puck_reset"  # loops/stand_loop.py use_sim: pucks back to their Play-start pose, sim keeps running
 TRUTH_FILE = "/tmp/beebot_sim_pucks.json"
 TRUTH_EVERY = 15  # frames (~4 Hz at 60 fps)
 BASE = "/World/beebot/Geometry/base_footprint/base_link"  # 1 cm above base_footprint, same x y (URDF base_joint)
@@ -56,12 +57,28 @@ def _poses(stage, paths):
     if "view" not in _phys:
         _phys["sim"] = omni.physics.tensors.create_simulation_view("numpy", omni.usd.get_context().get_stage_id())
         _phys["view"] = _phys["sim"].create_rigid_body_view(paths)
+        _phys["start"] = _phys["view"].get_transforms().copy()  # first read after Play (after apply_case): reset_pucks target
     v = _phys["view"]
     out = {}
     for path, t in zip(v.prim_paths, v.get_transforms()):  # px py pz qx qy qz qw
         out[path] = Gf.Matrix4d().SetTransform(Gf.Rotation(Gf.Quatd(float(t[6]), float(t[3]), float(t[4]), float(t[5]))),
                                                Gf.Vec3d(float(t[0]), float(t[1]), float(t[2])))
     return out
+
+
+def reset_pucks():
+    """Teleport every puck back to its pose at the first truth read after Play (PhysX, zero velocity).
+    Only the time stays: no Stop, so /clock, TF and the ROS nodes go on (reset.sh restarts all of them)."""
+    v = _phys.get("view")
+    if v is None:
+        return
+    import numpy as np
+    idx = np.arange(1, v.count, dtype=np.uint32)  # [0] = base_link stays
+    t = v.get_transforms()
+    t[idx] = _phys["start"][idx]
+    v.set_transforms(t, idx)
+    v.set_velocities(np.zeros((v.count, 6), dtype=np.float32), idx)
+    print(f"[isaac_startup] pucks reset ({len(idx)})", flush=True)
 
 
 def write_truth(stage, pucks):
@@ -298,6 +315,12 @@ async def _setup():
         if dyn is not None:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 dyn_obs(stage, dyn)
+        if os.path.exists(PUCK_RESET_FILE) and timeline.is_playing():
+            try:
+                reset_pucks()
+            except Exception as e:  # noqa: BLE001 - never stop the reset loop
+                print(f"[isaac_startup] puck reset failed: {e!r}", flush=True)
+            os.remove(PUCK_RESET_FILE)
         if os.path.exists(RESET_FILE):
             timeline.stop()
             _phys.clear()

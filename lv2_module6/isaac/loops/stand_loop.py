@@ -29,6 +29,12 @@ you take the puck out). gone (off the box)
 -> stop. A puck that already stands is picked straight away. logs/stand_auto_<ts>.csv, one bag.
     ROS_DOMAIN_ID=88 python3 stand_loop.py --auto --x 0.22 --y 0.0
 
+use_sim=true --no-ask: unattended stand-only rounds. After each round the Isaac truth (/tmp/beebot_sim_pucks.json, puck
+nearest the stand spot: tilt < 5 deg = y) fills `standing`, then /tmp/beebot_puck_reset puts every puck back to its
+Play-start pose (isaac_startup.py, sim keeps running) — scene pick_bot docked on a box with a lying puck:
+    echo '{"box": 5, "side": "-y"}' > /tmp/beebot_pick_case.json ; isaac/standalone/isaac_sim.sh pick_bot
+    python3 stand_loop.py use_sim=true --perception --no-ask --bag off --rounds 0
+
 use_sim=true (or --use_sim true): the beebot in Isaac Sim (isaac/standalone/isaac_sim.sh — same bringup, topics
 and skills as the robot, every node on /clock): this script and its bag recorder run on sim time too (the depth check
 compares image stamps with "now"). Run it in a shell with the ROS_DOMAIN_ID isaac_sim.sh was started with.
@@ -153,6 +159,33 @@ def spin(sec):
     end = time.time() + sec
     while time.time() < end:
         rclpy.spin_once(node, timeout_sec=0.02)
+
+
+SIM_TRUTH, SIM_PUCK_RESET = Path("/tmp/beebot_sim_pucks.json"), Path("/tmp/beebot_puck_reset")
+
+
+def sim_standing(cx, cy):
+    """use_sim: Isaac truth of the puck nearest (cx, cy) in base_link → 'y' (tilt < 5 deg) / 'n', '' if no fresh truth"""
+    try:
+        import json
+        d = json.loads(SIM_TRUTH.read_text())
+    except (OSError, ValueError):
+        return ""
+    if time.time() - d["t"] > 2.0 or not d["pucks"]:
+        return ""
+    p = min(d["pucks"].values(), key=lambda q: math.hypot(q["x"] - cx, q["y"] - cy))
+    return "y" if p["tilt"] < 5.0 and math.hypot(p["x"] - cx, p["y"] - cy) < 0.08 else "n"
+
+
+def sim_reset_pucks():
+    """use_sim: ask isaac_startup.py to put the pucks back (consumed within a frame or two), then let them settle"""
+    SIM_PUCK_RESET.touch()
+    t0 = time.time()
+    while SIM_PUCK_RESET.exists() and time.time() - t0 < 5.0:
+        time.sleep(0.05)
+    if SIM_PUCK_RESET.exists():
+        print("  WARN: puck reset not taken (old isaac_startup.py, or Isaac paused)")
+    spin(1.0)
 
 
 def world_pose():
@@ -595,7 +628,7 @@ try:
     while args.rounds == 0 or n < args.rounds:
         n += 1
         plan_id = int(time.time()) % 1000000 + n
-        if n == 1:
+        if n == 1 and not (args.use_sim and not args.ask):
             input(f"\n[round {n}] put the puck lying at the spot, hands clear. Enter = start ")
         elif not args.ask:
             spin(args.pause)
@@ -648,6 +681,9 @@ try:
         standing = ""
         if args.ask:
             standing = input(f"[round {n}] puck stood up? y/n ").strip()[:1].lower()
+        elif args.use_sim:
+            standing = sim_standing(cx, cy)
+            print(f"  isaac truth: {'standing' if standing == 'y' else 'not standing' if standing == 'n' else 'no truth'}")
         pick, pick_reason = "", ""
         if args.pick and verdict == "standing" and top_xy:
             print(f"  pick: standing puck at base ({top_xy[0]:.3f}, {top_xy[1]:.3f})")
@@ -661,6 +697,8 @@ try:
             open_gripper()
         if args.ask:
             input(f"[round {n}] put the puck back lying at the spot, Enter = round {n + 1} ")
+        elif args.use_sim:
+            sim_reset_pucks()
         w.writerow(dict(round=n, result="SUCCEEDED" if s and s.state == TaskStatus.SUCCEEDED else "FAILED",
                         reason=s.reason if s else "timeout", seconds=round(time.time() - t0, 1), standing=standing,
                         x_m=args.x, y_m=args.y, axis_deg=args.axis_deg, puck_id=target, seen_x_m=seen[0],
