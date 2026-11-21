@@ -169,6 +169,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   wall_clearance_ = declare_parameter<double>("wall_clearance", 0.22);
   place_tol_ = declare_parameter<double>("place_tol", 0.010);
   place_search_ = declare_parameter<double>("place_search", 0.05);
+  loc_keep_s_ = declare_parameter<double>("loc_box_keep_s", loc_keep_s_);
+  place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
@@ -358,6 +360,11 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       objects_ = m;
       // 근래 본 퍽 (near_body) — 차체에 붙은 퍽은 보이다 사라짐 (실기 nav_1121_214753 S3: stand 뒤 퍽 5가 0.14 m에 2 s 보이고 빠짐 → 물러나지 않고 puck_lost)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
+      for (const auto & o : m->objects)
+        if (o.class_name == "location_box" && !detail(o, "tag").empty()) {
+          loc_any_[detail(o, "tag")] = o;
+          if (detail(o, "cut") != "true") loc_whole_[detail(o, "tag")] = o;
+        }
       for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
         it = (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() > back_recent_s_ ? recent_pucks_.erase(it) : std::next(it);
       // 상자 인지 위치(marks_)는 arena_correction을 꺼도 approach_perceived면 셈 (보정 자체는 update_corr 안에서 acorr_on_만)
@@ -1371,14 +1378,23 @@ void MissionManager::bring(size_t i) {
   const int slot = basket_slot_of(job.tag);  // coordinator 장부에서 그 tag가 실린 칸
   // 적재함에 없음 — 시작 박스에서 직접 집어 들고 오지 않음 (11-21 사용자: 들고 다니면 꼬임 · SURVEY에서 다 싣고, 못 실은 퍽은 한 번 더 왔음)
   if (slot < 0) { skip("not_loaded"); return; }
-  go_near(loc_boxes_[job.loc], tx, ty, [this, i, job, slot, skip](bool ok, const std::string & why) {
+  const auto at_box = [this, i, job, slot, skip](bool ok, const std::string & why) {
     if (!ok) { skip("place_approach_failed " + why); return; }
     correct(job.loc);
     run_retry({SubGoal().set__skill("unload").set__target(str(slot))}, [this, i, skip](bool ok2, const std::string & why2) {
       if (!ok2) { skip("tray_pick_failed " + why2); return; }
       place_check(i, 0);
     });
-  });
+  };
+  // 이미 그 장소 상자에 붙어 있고 다음 칸이 팔 닿는 거리면 물러나지 않고 그 자리에서 (11-22 사용자: 칸마다 exit → 다시 도킹)
+  const Box & box = loc_boxes_[job.loc];
+  Pose2 r;
+  if (!back_.empty() && stop_ == box_label(box) && robot_arena(r) && std::hypot(tx - r.x, ty - r.y) <= place_reach_m_) {
+    RCLCPP_INFO(get_logger(), "%s 붙은 채 다음 칸 %d (%.3f m)", stop_.c_str(), job.cell, std::hypot(tx - r.x, ty - r.y));
+    at_box(true, "");
+    return;
+  }
+  go_near(box, tx, ty, at_box);
 }
 
 void MissionManager::job_done(size_t i, bool ok) {
@@ -1895,13 +1911,22 @@ void MissionManager::correct(size_t li) {
   if (li >= loc_tags_.size() || li >= loc_boxes_.size() || !objects_) return;
   const Box & b = loc_boxes_[li];
   const double ex = b.x, ey = b.y;
-  for (const auto & o : objects_->objects) {
-    if (o.class_name != "location_box" || detail(o, "tag") != str(loc_tags_[li])) continue;
-    const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y);
-    corr_[li] = tag_correction(ex, ey, a.x, a.y, corr_max_);
-    RCLCPP_INFO(get_logger(), "L%zu 상자 보정 (%+.1f, %+.1f) mm", li + 1, corr_[li].first * 1000, corr_[li].second * 1000);
-    return;
-  }
+  // 안 잘린 마지막 관측 우선 — 붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고(11-21 L2: 칸마다 8 cm 튐), 목록에서 빠지기도 함
+  //   (11-22 실기 nav_1122_023039: 첫 칸 보정이 없어 도면 칸 — 상자가 도면에서 11 cm라 상자 밖에 놓음)
+  // ponytail: map 좌표로 기억 — 그사이 map→odom이 밀리면 그만큼 틀림 (loc_box_keep_s 안만)
+  const std::string tag = str(loc_tags_[li]);
+  const auto fresh = [this](const std::map<std::string, perception::msg::TrackedObject> & m, const std::string & k) -> const perception::msg::TrackedObject * {
+    const auto it = m.find(k);
+    return it != m.end() && (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() <= loc_keep_s_ ? &it->second : nullptr;
+  };
+  const perception::msg::TrackedObject * o = fresh(loc_whole_, tag);
+  const bool whole = o != nullptr;
+  if (!o) o = fresh(loc_any_, tag);
+  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 보정 없음 — %.0f s 안에 본 장소 상자 없음 (보정 %+.1f, %+.1f mm 그대로)", li + 1, loc_keep_s_, corr_[li].first * 1000, corr_[li].second * 1000); return; }
+  const auto a = to_arena(o->pose.pose.position.x, o->pose.pose.position.y);
+  corr_[li] = tag_correction(ex, ey, a.x, a.y, corr_max_);
+  RCLCPP_INFO(get_logger(), "L%zu 상자 보정 (%+.1f, %+.1f) mm — %s %.1f s 전", li + 1, corr_[li].first * 1000, corr_[li].second * 1000,
+              whole ? "안 잘린 관측" : "잘린 관측", (now() - rclcpp::Time(o->last_seen, RCL_ROS_TIME)).seconds());
 }
 
 std::pair<double, double> MissionManager::cell_target(size_t li, int cell) const {
