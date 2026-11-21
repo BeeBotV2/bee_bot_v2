@@ -2029,7 +2029,12 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
     // 다시 잡을 때 진입점이 가까우면(0.4 m 안) Nav2 대신 approach 정밀 이동(drive_straight, 1 cm) — Nav2는 목표 허용 오차(약 15 cm) 안이면
     //   '이미 도착'으로 안 움직임 (시뮬 11-22: L1 옆 5.9 cm를 Nav2로 두 번 다시 보내도 그대로)
     Pose2 r0;
-    const bool near_entry = precise && robot_map(r0) && std::hypot(mm.x - r0.x, mm.y - r0.y) < 0.4;
+    //   옆으로 10 cm 넘게 비켜서야 하면 Nav2 — 정밀 이동은 상자 앞 좁은 데서 크게 돌다 막힘 (시뮬 11-22 L3 옆 26 cm: approach_blocked 두 번)
+    bool near_entry = precise && robot_map(r0) && std::hypot(mm.x - r0.x, mm.y - r0.y) < 0.4;
+    if (near_entry) {
+      const double lat0 = -(mm.x - r0.x) * std::sin(mm.yaw) + (mm.y - r0.y) * std::cos(mm.yaw);
+      near_entry = std::abs(lat0) <= 0.10;
+    }
     const SubGoal go = near_entry ? SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", mm.x, mm.y, mm.yaw)).set__relation("drive_straight")
                                   : nav(mm);
     run({stow(), go}, [this, step, to, li, n, m, f, cx, cy, f_a, after, dock, ff, bx, by, tries](bool ok, const std::string & why) {
