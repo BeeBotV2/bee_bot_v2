@@ -215,6 +215,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   scan_from_light_ = declare_parameter<bool>("barcode_scan_from_light", scan_from_light_);
   scan_offsets_ = declare_parameter<std::vector<double>>("barcode_scan_offsets", scan_offsets_);
   scan_range_m_ = declare_parameter<double>("barcode_scan_range_m", scan_range_m_);
+  peek_dirs_ = static_cast<size_t>(std::max<int64_t>(1, declare_parameter<int64_t>("barcode_peek_dirs", 2)));
   hires_settle_s_ = declare_parameter<double>("barcode_hires_settle_s", hires_settle_s_);
   barcode_peek_s_ = declare_parameter<double>("barcode_peek_s", barcode_peek_s_);
   barcode_peek_switch_s_ = declare_parameter<double>("barcode_peek_switch_s", barcode_peek_switch_s_);
@@ -731,7 +732,8 @@ void MissionManager::barcode_phase() {
         }
         // 엿보기로 못 읽음 — 신호등 왼쪽 다음 방향으로 손목만 (고해상도 그대로 · 팔은 접은 채라 신호등을 덜 가림, 11-21 사용자: 엿보기로 찾기)
         //   본 후보로 실패했으면 그 후보는 버리고 신호등 왼쪽을 처음부터 훑음
-        const bool next_dir = light_ && scan_from_light_ && (!scan_ || scan_k_ + 1 < scan_offsets_.size());
+        // 11-22: 0.7 m 엿보기는 바코드가 흐려 거의 안 읽힘(오프라인 재시험 0/13) — 위치 확인용으로 barcode_peek_dirs 방향만 보고 gaze로
+        const bool next_dir = light_ && scan_from_light_ && (!scan_ || scan_k_ + 1 < std::min(peek_dirs_, scan_offsets_.size()));
         if (hires_at_.nanoseconds() > 0 && (now() - hires_at_).seconds() > barcode_peek_s_ && next_dir) {
           if (scan_) ++scan_k_;
           else { scan_only_ = true; scan_k_ = 0; }
