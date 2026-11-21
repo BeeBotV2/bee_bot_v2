@@ -1,5 +1,6 @@
 // skill_unload — /skills/unload: 적재함 칸의 퍽을 꺼내 손에 (goal.slot · goal.shape · goal.tag — 칸 고르기·장부는 coordinator)
-//   sim: carry → 벌림 → 칸 위(q_over) → 닿는 구간 (unload_slot 정책: q_grasp → 쥐기 → 잡기 판정 → 칸 위) → carry
+//   sim: carry → 벌림 → 칸 위(q_over) → 닿는 구간 (unload_slot 정책: q_grasp → 쥐기 → 잡기 판정 → 칸 위) → 곧게 unload_lift_m 더 위
+//     → carry (unload_end_pose carry) · 그 높이에서 끝 (over — 다음 place가 carry를 멈추지 않고 지나 놓을 자리로)
 //   moveit: carry → 벌림 → q_over → q_grasp → 닫기 → 잡기 판정 → q_over → carry (예전)
 //   빈손이면 reason grasp_empty (coordinator가 그 칸을 '확인 필요'로)
 //   정책: models/skills/unload_slot/ (slot_env.UnloadEnv)
@@ -21,6 +22,9 @@ public:
     table_.declare(*this);
     // 끝 자세: carry(기본) · over(칸 위 그대로 — 다음 place가 carry를 멈추지 않고 지나 놓을 자리로)
     declare_parameter<std::string>("unload_end_pose", "carry");  // 실행 중 ros2 param set으로 바꿀 수 있음
+    // 쥐고 칸 위(q_over)로 올라온 뒤 곧게 이만큼 더 — q_over에선 손 안 퍽 바닥이 옆 칸 퍽 윗면 바로 위라 carry · place로 옆으로
+    //   가며 옆 퍽에 부딪혀 손 안 퍽이 틀어짐 (11-21 sim 사용자). load_over_lift_m(0.04)과 같은 이유 · 0 = 예전처럼 안 올림
+    declare_parameter<double>("unload_lift_m", 0.04);
     policy_ = load_model("unload_slot");
     serve("unload", [this](const SkillGoal & g, Done done) {
       const std::string shape = g.shape.empty() ? "box" : g.shape;
@@ -45,6 +49,7 @@ public:
             // 칸 TF (slot_puck): 손 카메라는 못 씀 — perception이 적재함 안 퍽을 자기 몸으로 지움 (시뮬 UnloadEnv slot_tf)
             [this, slot = g.slot](ArmIO::Cb c) { arm_.hand_target("slot_puck", -1, slot); c(true); },
             arm_.contact_step(policy_, [a, d](ArmIO::Q5 & x, ArmIO::Q5 & y) { x = a; y = d; return true; }, true, GRIPPER_OPEN_M, true),
+            lift_step(a),
             get_parameter("unload_end_pose").as_string() == "over" ? ArmIO::Step([](ArmIO::Cb c) { c(true); }) : arm_.joints_step(carry)}
           : std::vector<ArmIO::Step>{
             arm_.joints_step(carry), arm_.gripper_step(GRIPPER_OPEN_M), arm_.joints_step(over), arm_.joints_step(grasp),
@@ -64,6 +69,20 @@ protected:
   void stop() override { arm_.stop(); }
 
 private:
+  // 칸 위(over)에서 손을 곧게 unload_lift_m 올림 — IK가 안 되면 경고만 하고 그 높이로 (예전과 같음)
+  ArmIO::Step lift_step(const ArmIO::Q5 & over) {
+    const double h = get_parameter("unload_lift_m").as_double();
+    if (h <= 0.0) return [](ArmIO::Cb c) { c(true); };
+    ArmIO::Q5 hi{};
+    if (!stand::raise_hand(over, h, hi)) {
+      return [this, h](ArmIO::Cb c) {
+        RCLCPP_WARN(get_logger(), "unload: 칸 위 %.0f cm 더 높이 IK 실패 — 칸 위 높이로 나감 (옆 퍽을 칠 수 있음)", 100 * h);
+        c(true);
+      };
+    }
+    return arm_.traj_step([this, hi](const ArmIO::Q5 & now) { return stand::sample_move(now, hi, arm_.velocity_scale(), TRAJ_DT); });
+  }
+
   ArmIO::Step via_step(const std::vector<double> & carry, const std::vector<double> & over) {
     ArmIO::Q5 via{}, to{};
     std::copy_n(carry.begin(), 5, via.begin());

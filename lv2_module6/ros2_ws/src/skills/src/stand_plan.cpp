@@ -322,4 +322,46 @@ std::vector<Q5> sample_arc(const std::vector<Q5> & wp, const Params & p, double 
   return out;
 }
 
+// (load_skill에서 옮김 11-21 — unload도 씀)
+// to의 손끝을 곧게 h 올린 관절값 (joint1·joint5 그대로). 손 수직 해(ik_down)가 없으면 joint4를 상한에 두고 손을 조금 기울임 —
+//   안쪽 칸(4~11)의 q_over는 joint4가 상한(1.97 rad) 근처라 수직으로는 0.5~1.5 cm밖에 못 올림 (+4 cm: 기울기 9~19°)
+bool raise_hand(const Q5 & to, double h, Q5 & out) {
+  V3 axis{};
+  const auto p0 = fk(to, &axis);
+  const V3 goal{p0[0], p0[1], p0[2] + h};
+  if (ik_down(goal, std::atan2(axis[1], axis[0]), to, out)) return true;
+  constexpr double J4_LO = -1.7, J4_HI = 1.97, J2_LIM = 1.919862, J3_LO = -1.570796, J3_HI = 1.396263;  // URDF 한계 (stand_plan.cpp LO·HI)
+  constexpr double MAX_TILT = 0.35;  // [rad] 20° 넘게 기울여야 하면 실패 (손 안 퍽이 기울어 오히려 낮아짐)
+  const double down = to[1] + to[2] + to[3];  // 손 수직일 때 joint2 + joint3 + joint4
+  double a = to[1], b = to[2];
+  const auto pose = [&](double x, double y) {
+    Q5 q = to;
+    q[1] = x; q[2] = y; q[3] = std::clamp(down - x - y, J4_LO, J4_HI);
+    return q;
+  };
+  const auto err = [&](double x, double y) {
+    const auto p = fk(pose(x, y));
+    return V3{p[0] - goal[0], p[1] - goal[1], p[2] - goal[2]};
+  };
+  for (int it = 0; it < 30; ++it) {  // 가우스-뉴턴 (수치 야코비안, 미지수 joint2·joint3 두 개)
+    const auto e = err(a, b);
+    if (std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) < 2e-4) break;
+    constexpr double d = 1e-5;
+    const auto ea = err(a + d, b), eb = err(a, b + d);
+    double ja[3], jb[3];
+    for (int k = 0; k < 3; ++k) { ja[k] = (ea[k] - e[k]) / d; jb[k] = (eb[k] - e[k]) / d; }
+    double aa = 0, ab = 0, bb = 0, ae = 0, be = 0;
+    for (int k = 0; k < 3; ++k) { aa += ja[k] * ja[k]; ab += ja[k] * jb[k]; bb += jb[k] * jb[k]; ae += ja[k] * e[k]; be += jb[k] * e[k]; }
+    const double det = aa * bb - ab * ab;
+    if (std::abs(det) < 1e-12) return false;
+    a -= (bb * ae - ab * be) / det;
+    b -= (aa * be - ab * ae) / det;
+  }
+  const auto e = err(a, b);
+  out = pose(a, b);
+  return std::sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) < 5e-4 && std::abs(a) <= J2_LIM && b >= J3_LO && b <= J3_HI &&
+         std::abs(out[1] + out[2] + out[3] - down) <= MAX_TILT;
+}
+
+
 }  // namespace skills::stand

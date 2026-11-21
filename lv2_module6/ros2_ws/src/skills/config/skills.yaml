@@ -84,6 +84,8 @@ skill_load:
 skill_unload:
   ros__parameters:
     server_wait_s: 30.0
+    unload_lift_m: 0.04      # [m] 쥐고 칸 위로 나온 뒤 곧게 더 올림 — 손 안 퍽이 옆 칸 퍽을 치지 않게 (11-21 sim) · load_over_lift_m과 같은 높이
+    unload_end_pose: over    # 11-21 사용자: carry에서 멈추지 않음 — 올린 높이에서 끝내고 다음 place가 carry를 경유점으로 지나 놓을 자리로 (pick · load와 같음)
 skill_stand:
   ros__parameters:
     stand_waypoints: ik            # ik (해석 IK, 기본) | table (params/stand_table.yaml, scripts/stand_table_export.py)
