@@ -403,6 +403,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     arena_corr_wall_gate: 0.3 # [m] 도면 벽에서 이 안의 칸만 (그 밖 = 상자·사람·도면에 없는 것)
     arena_corr_wall_min_cells: 60 # 맞은 칸(5 cm depth 점 칸)이 이보다 적으면 안 씀 (5 cm 칸 → 벽 3 m)
     arena_corr_wall_min_eig: 0.03 # x · y · 회전이 다 묶여야 (벽 한 줄만 보이면 그 벽을 따라가는 방향을 모름)
+    arena_corr_wall_max_rms: 0.11 # [m] fit RMS가 이보다 크면 안 씀 — 11-22 실기: 정상 판 RMS p90 0.097 · 맵이 틀어진 판(nav_1121_233425 · nav_1122_023039) 0.14~0.16
     arena_corr_wall_period: 2.0 # [s] 다시 맞추는 주기
     arena_corr_wall_keep_s: 25.0 # [s] 이만큼 최근에 본 depth 점 칸만 (odom이 서서히 틀어지니 짧게 · 11-20)
     arena_corr_wall_z_min: 0.10 # [m] odom 높이 띠 — 상자(7 cm)·퍽은 빼고 벽만
