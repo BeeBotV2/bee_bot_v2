@@ -456,7 +456,8 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     retries: 2 # skill(집기·놓기·inspect)이 실패하면 다시 하는 횟수. 그래도 안 되면 그 퍽만 실패로 두고 다음 (집기 = 1 + retries번, 다시 할 때마다 inspect로 봄)
     # SURVEY (11-21 사용자): 시작 박스의 퍽을 다 실어야 다음 상자 · 들고 다니지 않음 · 못 실은 퍽은 BUILD(place) 전에 그 상자에 한 번 더 옴
     survey_load_tries: 3 # 퍽 하나 load 시도 수 — 실패하면 상자 빈 자리에 되돌리고 inspect → pick → load
-    put_back_ring_m: 0.05 # [m] 되돌릴 자리: 상자 가운데 · 다른 퍽이 가까우면 가운데에서 이만큼 둘레 8방향 중 빈 곳
+    put_back_x_m: 0.21 # [m] 되돌릴 자리: 로봇 앞 이만큼 (상자 윗면 안으로 당김) — 상자 가운데(약 0.25 m)는 pick 한계에 걸림 · tag는 0.20~0.25 m에서 잘 읽힘 (11-21 실기)
+    put_back_ring_m: 0.05 # [m] 그 자리에 다른 퍽이 가까우면 옆 · 조금 앞으로 이만큼씩 옮긴 곳 중 빈 곳
     put_back_clear_m: 0.065 # [m] 빈 곳 = 다른 퍽 중심에서 이만큼 넘게 (11-21 실기 S2: 5 cm에 되돌린 퍽 9에 퍽 0 pick이 얹혀 막힘)
     planner: "rule" # BUILD 순서: rule (배정 순서대로) | plan_next (학습된 플래너가 다음 퍽·복귀 시점을 고름 — 마지막 단계)
     plan_model: "" # 비면 share/ml/model/plan/plan_next.onnx (.policy 경로를 주면 MlpPolicy로)

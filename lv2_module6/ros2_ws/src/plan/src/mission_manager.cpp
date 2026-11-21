@@ -145,6 +145,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   load_tries_ = static_cast<int>(declare_parameter<int64_t>("survey_load_tries", load_tries_));
   put_back_ring_m_ = declare_parameter<double>("put_back_ring_m", put_back_ring_m_);
   put_back_clear_m_ = declare_parameter<double>("put_back_clear_m", put_back_clear_m_);
+  put_back_x_m_ = declare_parameter<double>("put_back_x_m", put_back_x_m_);
   match_radius_ = declare_parameter<double>("match_radius", 0.04);
   stand_check_s_ = declare_parameter<double>("stand_check_s", 1.0);
   stand_find_m_ = declare_parameter<double>("stand_find_m", 0.10);  // [m] stand 뒤 선 퍽을 누운 가운데에서 이 안에서 찾음 → pick
@@ -982,21 +983,30 @@ void MissionManager::give_up(size_t b, int tag, const std::string & why) {
   result("puck " + str(tag) + ": " + why + " (place 전에 다시 옴)");
 }
 
-std::pair<double, double> free_spot(double cx, double cy, const std::vector<std::pair<double, double>> & others, double ring, double clear) {
-  std::vector<std::pair<double, double>> pts = {{cx, cy}};
-  for (int k = 0; k < 8; ++k) pts.emplace_back(cx + ring * std::cos(k * M_PI / 4), cy + ring * std::sin(k * M_PI / 4));
-  std::pair<double, double> best = pts.front();
+std::pair<double, double> free_spot(double rx, double ry, double ryaw, double cx, double cy, double lim, double want_x,
+                                    const std::vector<std::pair<double, double>> & others, double ring, double clear) {
+  const double fx = std::cos(ryaw), fy = std::sin(ryaw);  // 로봇 앞
+  const double lx = -fy, ly = fx;                         // 로봇 왼쪽
+  // 바라는 점: 로봇 앞 want_x · 옆은 상자 가운데 줄 — 상자 윗면 안(가운데에서 lim)으로 당김
+  const double lat0 = (cx - rx) * lx + (cy - ry) * ly;
+  double px = rx + fx * want_x + lx * lat0, py = ry + fy * want_x + ly * lat0;
+  if (const double d = std::hypot(px - cx, py - cy); d > lim) { px = cx + (px - cx) * lim / d; py = cy + (py - cy) * lim / d; }
+  // 후보 (앞, 옆) 순서: 그 점 → 옆으로 → 옆·조금 앞 → 조금 앞 — 로봇 쪽(팔이 접히는 쪽)으로는 안 감
+  static const double off[][2] = {{0, 0}, {0, 1}, {0, -1}, {0.5, 1}, {0.5, -1}, {0.5, 0}, {1, 0}, {1, 1}, {1, -1}};
+  std::pair<double, double> best = {px, py};
   double best_d = -1.0;
-  for (const auto & p : pts) {
+  for (const auto & o : off) {
+    const double x = px + ring * (o[0] * fx + o[1] * lx), y = py + ring * (o[0] * fy + o[1] * ly);
+    if (std::hypot(x - cx, y - cy) > lim + 1e-9) continue;  // 상자 윗면 밖
     double d = std::numeric_limits<double>::infinity();
-    for (const auto & o : others) d = std::min(d, std::hypot(o.first - p.first, o.second - p.second));
-    if (d >= clear) return p;
-    if (d > best_d) { best_d = d; best = p; }
+    for (const auto & q : others) d = std::min(d, std::hypot(q.first - x, q.second - y));
+    if (d >= clear) return {x, y};
+    if (d > best_d) { best_d = d; best = {x, y}; }
   }
   return best;
 }
 
-// 놓을 자리: 상자 가운데 · 다른 퍽이 가까우면 가운데 둘레에서 비어 있는 곳 (free_spot) — 다시 집을 때 옆 퍽에 손가락이 얹히지 않게.
+// 놓을 자리: 로봇 앞 put_back_x_m · 상자 윗면 안 · 다른 퍽이 가까우면 옆에서 비어 있는 곳 (free_spot) — 다시 집을 때 옆 퍽에 손가락이 얹히지 않게.
 //   다른 퍽 = 지금 상자 윗면에 보이는 퍽 + 상자 위에 있다고 적힌 퍽의 본 자리. 놓은 뒤 inspect로 다시 봐서 다음 pick이 새 자리를 쓰게 함
 void MissionManager::put_back(size_t b, int tag, const std::string & why, std::function<void(bool)> next) {
   const auto [bx, by] = here(box_seen_[b]);
@@ -1007,7 +1017,11 @@ void MissionManager::put_back(size_t b, int tag, const std::string & why, std::f
     if (!is_puck(o) || detail(o, "tag") == str(tag) || p.z > box_top_z_ + puck_h_ + 0.04) continue;  // 손에 든 퍽은 윗면보다 위
     if (std::hypot(p.x - bx, p.y - by) <= start_boxes_[b].half * M_SQRT2) others.emplace_back(p.x, p.y);
   }
-  const auto [px, py] = free_spot(bx, by, others, std::min(put_back_ring_m_, start_boxes_[b].half - 0.04), put_back_clear_m_);
+  // 로봇 앞 put_back_x_m 근처 — 상자 가운데는 팔 끝(pick 한계 0.25 m)에 걸리고 tag도 덜 읽힘 (11-21 실기: tag를 잘 읽은 퍽 x 0.20~0.25 m)
+  Pose2 r;
+  if (!robot_map(r)) r = {bx - put_back_x_m_, by, 0.0};  // TF 없음 — 상자 가운데 쪽으로
+  const auto [px, py] = free_spot(r.x, r.y, r.yaw, bx, by, start_boxes_[b].half - 0.04, put_back_x_m_, others, put_back_ring_m_,
+                                  put_back_clear_m_);
   const std::string head = "puck " + str(tag) + ": load 실패 " + why;
   note("퍽 " + str(tag) + " 상자 " + str(static_cast<int>(b) + 1) + "에 되돌림" + fmt(" (가운데에서 %.0f mm)", 1000 * std::hypot(px - bx, py - by)));  // fmt는 double만
   run({SubGoal().set__skill("place").set__target(fmt("%.4f,%.4f,%.4f", px, py, box_top_z_))},
