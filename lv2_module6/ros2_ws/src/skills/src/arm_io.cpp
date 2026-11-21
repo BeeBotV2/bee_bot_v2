@@ -76,6 +76,7 @@ ArmIO::ArmIO(rclcpp::Node & node)
   gripper_ = rclcpp_action::create_client<Gripper>(&node, "/gripper_controller/gripper_cmd");
   reset_sag_ = node.create_client<std_srvs::srv::Trigger>("/rl_arm_correction/reset_sag");
   fade_sag_ = node.create_client<std_srvs::srv::Trigger>("/rl_arm_correction/fade_sag");
+  clear_octomap_ = node.create_client<std_srvs::srv::Empty>("/clear_octomap");
   ctx_pub_ = node.create_publisher<ml::msg::SkillContext>("/skill_context", rclcpp::QoS(10).reliable());
   hand_pub_ = node.create_publisher<perception::msg::HandTarget>("/hand_relative/target", rclcpp::QoS(1).reliable().transient_local());
   hr_sub_ = node.create_subscription<perception::msg::HandRelative>("/hand_relative", rclcpp::QoS(10),
@@ -210,6 +211,9 @@ void ArmIO::move_arm(const geometry_msgs::msg::PoseStamped & target, Cb done, do
     const auto res = f.get();
     if (res->motion_plan_response.error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
       RCLCPP_WARN(node_.get_logger(), "플랜 실패 (%d) — 남은 재시도 %d", res->motion_plan_response.error_code.val, tries_left);
+      if (tries_left > 0 && clear_if_start_in_octomap(res->motion_plan_response.error_code.val,
+                                                      [this, target, done, yaw, tries_left]() { move_arm(target, done, yaw, tries_left - 1); }))
+        return;
       if (tries_left > 0) move_arm(target, done, yaw, tries_left - 1);
       else done(false);
       return;
@@ -242,7 +246,13 @@ void ArmIO::move_joints(const std::vector<double> & q5, Cb done, bool retry) {
   plan_->async_send_request(req, [this, q5, done, gen, retry](rclcpp::Client<GetMotionPlan>::SharedFuture f) {
     if (gen != gen_) return;
     const auto res = f.get();
-    if (res->motion_plan_response.error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) { done(false); return; }
+    if (res->motion_plan_response.error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
+      RCLCPP_WARN(node_.get_logger(), "관절 이동 플랜 실패 (%d)", res->motion_plan_response.error_code.val);
+      if (retry && clear_if_start_in_octomap(res->motion_plan_response.error_code.val, [this, q5, done]() { move_joints(q5, done, false); }))
+        return;
+      done(false);
+      return;
+    }
     // 실행 거부: 직전 동작·처짐 보정(stow 쉬는 자세에서 풂)으로 팔이 아직 움직이면 'start point deviates' (11/09 Isaac: 첫 라운드
     //   stow → inspect look 자세가 joint4로 거부 → inspect_failed). 닿아서 실패(contact_)면 다시 안 함
     execute(res->motion_plan_response.trajectory, [this, q5, done, retry](bool ok) {
@@ -252,6 +262,22 @@ void ArmIO::move_joints(const std::vector<double> & q5, Cb done, bool retry) {
       move_joints(q5, done, false);
     });
   });
+}
+
+// 계획이 시작 자세 충돌로 거부되면 octomap을 비우고 바로 한 번 다시 계획 (11-21 Isaac 전체 미션)
+//   pick 실패(grasp_empty) 뒤나 손에 퍽을 든 채(퍽이 MoveIt에 붙인 물체가 아니라 octomap 칸으로 찍힘) octomap 칸이
+//   gripper_cam_link · finger_left_link와 닿은 채 남아 inspect · place · stow가 모두 CheckStartStateCollision으로 거부 → 연쇄 실패.
+//   거부 코드는 START_STATE_IN_COLLISION이 아니라 FAILURE(99999)로 옴 → 둘 다. 비운 바로 뒤(다음 점구름 전)에 계획 — pick 시작과 같은 방식
+bool ArmIO::clear_if_start_in_octomap(int code, std::function<void()> retry) {
+  using E = moveit_msgs::msg::MoveItErrorCodes;
+  if ((code != E::START_STATE_IN_COLLISION && code != E::FAILURE) || !clear_octomap_->service_is_ready()) return false;
+  RCLCPP_WARN(node_.get_logger(), "계획 실패 (%d) — octomap 비우고 바로 다시 계획 (시작 자세가 octomap과 닿았을 수 있음)", code);
+  const uint64_t gen = gen_;
+  clear_octomap_->async_send_request(std::make_shared<std_srvs::srv::Empty::Request>(),
+    [this, gen, retry](rclcpp::Client<std_srvs::srv::Empty>::SharedFuture) {
+      if (gen == gen_) retry();
+    });
+  return true;
 }
 
 double ArmIO::grip_current_a() const { return node_.get_parameter("grip_current_a").as_double(); }

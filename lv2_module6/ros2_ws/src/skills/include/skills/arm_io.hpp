@@ -25,6 +25,7 @@
 #include "skills/model.hpp"
 #include "skills/arm_state_cache.hpp"
 #include "skills/stand_plan.hpp"
+#include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "tf2_ros/buffer.h"
 
@@ -144,6 +145,9 @@ private:
   rclcpp_action::Client<ExecuteTrajectory>::SharedPtr exec_;
   rclcpp_action::Client<Gripper>::SharedPtr gripper_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr reset_sag_, fade_sag_;
+  rclcpp::Client<std_srvs::srv::Empty>::SharedPtr clear_octomap_;
+  // 시작 자세가 octomap과 닿아 계획 거부(START_STATE_IN_COLLISION · FAILURE)면 octomap을 비우고 retry를 부름 (11-21) · 아니면 false
+  bool clear_if_start_in_octomap(int code, std::function<void()> retry);
   rclcpp::Publisher<ml::msg::SkillContext>::SharedPtr ctx_pub_;
   rclcpp::Publisher<perception::msg::HandTarget>::SharedPtr hand_pub_;
   rclcpp::Subscription<control::msg::ArmSafetyEvent>::SharedPtr safety_sub_;
