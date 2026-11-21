@@ -376,8 +376,10 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       for (const auto & o : m->objects)
         {
           // 장소 상자 가운데 = 윗면 정중앙 태그 (perception) — 태그를 읽은 관측이면 잘려도 됨
-          if (o.class_name != "location_box") continue;
-          const std::string tag = detail(o, "tag");
+          // perception은 장소 태그를 읽은 상자만 location_box · 못 읽은 상자는 start_box로 냄 (perception_node 윗면 상자) →
+          //   진입점 잡기용으로는 도면 장소 0.35 m 안의 잘리지 않은 start_box도 그 장소 상자로 (11-22 실기 L3: 0.6 m에서 태그 못 읽어 '못 봄')
+          if (o.class_name != "location_box" && o.class_name != "start_box") continue;
+          const std::string tag = o.class_name == "location_box" ? detail(o, "tag") : std::string();
           if (tag.empty()) {  // 태그 못 읽음 — 윗면이 잘리지 않았으면 도면 장소 0.35 m 안의 것을 그 장소 상자로 (진입점 다시 잡기용)
             if (detail(o, "cut") == "true") continue;
             const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y);
