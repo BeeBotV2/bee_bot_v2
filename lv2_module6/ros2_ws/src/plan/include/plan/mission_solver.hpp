@@ -57,6 +57,9 @@ std::vector<int> dice_cells_ordered(int n, double facing_yaw);
 std::pair<double, double> cell_offset(int cell, double step = 0.060);
 
 struct Pose2 { double x = 0, y = 0, yaw = 0; };
+// 인지한 장소 상자(가운데 · 윗면 변 방향, arena) 위의 칸 중심 — 칸 번호는 경기장 축 기준(cell_offset)이라 상자 방향을
+//   가장 가까운 경기장 축으로 접어(±45°) 그만큼만 돌림 (상자가 돌아가 있어도 같은 칸 번호 = 같은 자리)
+std::pair<double, double> box_cell(const Pose2 & box, int cell, double step = 0.060);
 
 // 경기장(arena) 자세 → map 자세. start = 로봇이 켜진 자리의 arena 자세 (map 원점 = 그 자리, map x = 그때 로봇 앞)
 Pose2 arena_to_map(const Pose2 & p, const Pose2 & start);
