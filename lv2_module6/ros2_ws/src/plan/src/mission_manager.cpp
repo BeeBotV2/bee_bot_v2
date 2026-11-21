@@ -1323,36 +1323,51 @@ void MissionManager::go_home(bool corrected) {
     });
     return;
   }
-  note(corrected ? "출발 구역 안으로 보정" : "출발 구역으로");
+  note(corrected ? "출발 구역 가운데로 · 방향 맞춤" : "출발 구역으로");
   const double zx = (start_zone_[0] + start_zone_[2]) / 2, zy = (start_zone_[1] + start_zone_[3]) / 2;
   const auto p = to_map(zx, zy, M_PI);
-  // 처음엔 Nav2로 · 보정은 approach로 (구역 가운데로 저속 직선 — Nav2 허용 오차 0.10보다 정확). 보정은 park_home 정책
-  //   (skill_approach — 시뮬 drive_env park: 5 cm · 10° 안에 3 s 정지, 81.1 → 96.5 %)
-  run({stow(), SubGoal().set__skill(corrected ? "approach" : "navigate").set__target(fmt("%.4f,%.4f,%.4f", p.x, p.y, p.yaw))
-                 .set__relation(corrected ? "park_home" : leg_to("start"))},  // " leg:L3_start" — 앞 공백은 skill이 무시
-    [this, corrected](bool ok, const std::string & why) {
-      // 11-18: 실패 한 번으로 미션을 끝내지 않음 — navigate의 끼임 풀기(후진·회전·전진) 뒤에도 안 되면 처음부터 다시 (사용자: 바로 죽으면 안 됨)
-      if (!ok && !corrected && ++home_tries_ < 3) {
-        RCLCPP_WARN(get_logger(), "출발 구역 복귀 실패 (%s) — 다시 %d/3", why.c_str(), home_tries_ + 1);
-        go_home(false);
-        return;
-      }
-      if (!ok && !corrected) { finish(false, "return_nav:" + why); return; }
-      Pose2 r;
-      const bool known = robot_arena(r);
-      const bool in = known && footprint_in_zone(r, footprint_[0], footprint_[1], footprint_[2], start_zone_);
-      if (!in && !corrected) { go_home(true); return; }
-      note(in ? "출발 구역에서 정지" : "출발 구역 밖 — 그대로 정지");
-      write_log("return.json", "{\"in_zone\": " + std::string(in ? "true" : "false") + ", \"corrected\": " +
-                (corrected ? "true" : "false") + fmt(", \"x_mm\": %.0f, \"y_mm\": %.0f", r.x * 1000, r.y * 1000) +
-                fmt(", \"yaw\": %.3f}\n", r.yaw));
-      if (!in) result("return: footprint_out_of_zone");
-      snap("return");
-      timer_ = create_wall_timer(std::chrono::duration<double>(home_hold_s_), [this]() {
-        timer_->cancel();
-        finish(true);
-      });
+  const auto arrive = [this, corrected](bool ok, const std::string & why) {
+    // 11-18: 실패 한 번으로 미션을 끝내지 않음 — navigate의 끼임 풀기(후진·회전·전진) 뒤에도 안 되면 처음부터 다시 (사용자: 바로 죽으면 안 됨)
+    if (!ok && !corrected && ++home_tries_ < 3) {
+      RCLCPP_WARN(get_logger(), "출발 구역 복귀 실패 (%s) — 다시 %d/3", why.c_str(), home_tries_ + 1);
+      go_home(false);
+      return;
+    }
+    if (!ok && !corrected) { finish(false, "return_nav:" + why); return; }
+    if (!corrected) { go_home(true); return; }  // Nav2 도착 → 가운데로 곧게 · 제자리에서 방향 맞춤
+    if (!ok) RCLCPP_WARN(get_logger(), "출발 구역 가운데·방향 맞춤 실패 (%s) — 그 자리에서 판정", why.c_str());
+    Pose2 r;
+    const bool known = robot_arena(r);
+    const bool in = known && footprint_in_zone(r, footprint_[0], footprint_[1], footprint_[2], start_zone_);
+    note(in ? "출발 구역에서 정지" : "출발 구역 밖 — 그대로 정지");
+    write_log("return.json", "{\"in_zone\": " + std::string(in ? "true" : "false") + ", \"corrected\": true" +
+              fmt(", \"x_mm\": %.0f, \"y_mm\": %.0f", r.x * 1000, r.y * 1000) + fmt(", \"yaw\": %.3f}\n", r.yaw));
+    if (!in) result("return: footprint_out_of_zone");
+    snap("return");
+    timer_ = create_wall_timer(std::chrono::duration<double>(home_hold_s_), [this]() {
+      timer_->cancel();
+      finish(true);
     });
+  };
+  if (!corrected) {  // Nav2로 출발 구역 가운데 근처까지
+    run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.4f,%.4f,%.4f", p.x, p.y, p.yaw)).set__relation(leg_to("start"))}, arrive);
+    return;
+  }
+  // 11-21 실기: park_home(가운데 + 방향 0°를 한 번에 5 cm·10°)은 옆으로 몇 cm 어긋나면 좁은 구역에서 좌우로 비틀기만 하다
+  //   approach_blocked (18:58 옆 7.8 cm · 16:16 · 13:45) → ① 가운데를 향해 곧게(뒤면 후진) ② 그 자리에서 제자리 회전으로 방향만
+  Pose2 r;
+  if (!robot_map(r)) { arrive(false, "no_tf"); return; }
+  const double dx = p.x - r.x, dy = p.y - r.y;
+  const auto turn = [this, p, arrive](bool, const std::string &) {
+    Pose2 q;
+    if (!robot_map(q)) { arrive(false, "no_tf"); return; }
+    run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", q.x, q.y, p.yaw)).set__relation("park_home")}, arrive);
+  };
+  if (std::hypot(dx, dy) < 0.02) { turn(true, ""); return; }
+  double line = std::atan2(dy, dx);
+  if (std::abs(std::remainder(line - r.yaw, 2 * M_PI)) > M_PI / 2) line += M_PI;  // 가운데가 뒤쪽 — 그 방향을 등지고 후진
+  run({stow(), SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", p.x, p.y, std::remainder(line, 2 * M_PI)))
+                 .set__relation("park_home")}, turn);
 }
 
 void MissionManager::stop(const std::string & why) {
