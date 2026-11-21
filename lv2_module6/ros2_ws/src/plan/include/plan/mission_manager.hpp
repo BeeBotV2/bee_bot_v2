@@ -342,7 +342,8 @@ private:
   //   odom으로 적어 둠 (Spot) — 그사이 벽 정합이 map→odom을 옮겨도 상자는 odom에선 그대로 (11-22 실기: 붙어 있는 동안 3~5 cm씩)
   struct LocSeen { Spot s; rclcpp::Time t; };
   std::map<std::string, LocSeen> loc_whole_;
-  double loc_keep_s_ = 60.0, place_reach_m_ = 0.25;
+  double loc_keep_s_ = 60.0, place_reach_m_ = 0.25, realign_m_ = 0.08, realign_wait_s_ = 0.8;
+  rclcpp::TimerBase::SharedPtr realign_timer_;
   // 도면 보정 — 인지한 시작 박스·장소 상자(윗면 가운데)를 도면 상자와 짝지어 arena → map 변환을 고침 (출발 자세 · 도면 오차)
   //   켜면 to_map · to_arena 전부에 들어감 (다가설 자리 · 장소 · 복귀 · /arena/walls). 회차 시작마다 0부터
   struct Mark { double qx = 0, qy = 0; int hits = 0; };  // 도면 상자 하나에 짝지은 인지 위치 (map, 지수 평균)
