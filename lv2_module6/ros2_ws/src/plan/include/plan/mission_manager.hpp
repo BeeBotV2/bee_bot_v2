@@ -344,6 +344,7 @@ private:
   struct LocSeen { Spot s; rclcpp::Time t; };
   std::map<std::string, LocSeen> loc_whole_;
   bool build_nearest_ = true, use_given_order_ = false;  // BUILD 장소 순서: 적재가 끝난 자리에서 가까운 곳부터 (build_location_nearest)
+  bool place_fixed_side_ = true;  // 장소 상자: 붙은 면에서만 놓음 (다른 변으로 안 돎, 11-22)
   double loc_keep_s_ = 60.0, place_reach_m_ = 0.25, realign_m_ = 0.08, realign_wait_s_ = 0.8;
   rclcpp::TimerBase::SharedPtr realign_timer_;
   // 도면 보정 — 인지한 시작 박스·장소 상자(윗면 가운데)를 도면 상자와 짝지어 arena → map 변환을 고침 (출발 자세 · 도면 오차)

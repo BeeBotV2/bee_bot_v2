@@ -172,6 +172,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_search_ = declare_parameter<double>("place_search", 0.05);
   loc_keep_s_ = declare_parameter<double>("loc_box_keep_s", loc_keep_s_);
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
+  place_fixed_side_ = declare_parameter<bool>("place_fixed_side", place_fixed_side_);
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
@@ -1431,6 +1432,26 @@ void MissionManager::bring(size_t i) {
     if (!ok) { skip("place_approach_failed " + why); return; }
     correct(job.loc);
     if (!loc_pose_[job.loc]) { skip("place_box_unseen"); return; }  // 상자를 못 봤으면 도면 칸에 놓지 않음 (퍽은 적재함에 그대로)
+    // 붙은 자리에서 그 장소 남은 칸 중 팔 닿는 가장 먼 칸부터 (11-22 사용자: 면 고정 · 먼 곳부터 — 놓인 퍽 위로 손이 안 지남)
+    //   처음 도킹한 퍽도 포함 (build의 같은 정렬은 붙은 뒤 다음 퍽부터만 적용됨)
+    {
+      Pose2 rr;
+      if (robot_arena(rr)) {
+        size_t best = i;
+        double best_d = -1.0;
+        for (size_t j = i; j < jobs_.size() && jobs_[j].loc == job.loc; ++j) {
+          const auto cj = cell_target(job.loc, jobs_[j].cell);
+          const double d = std::hypot(cj.first - rr.x, cj.second - rr.y);
+          if (d <= place_reach_m_ && d > best_d) { best = j; best_d = d; }
+        }
+        if (best != i) {
+          RCLCPP_INFO(get_logger(), "L%d 먼 칸 %d부터 (%.3f m)", static_cast<int>(job.loc) + 1, jobs_[best].cell, best_d);
+          std::swap(jobs_[i], jobs_[best]);
+          bring(i);  // 붙은 채라 바로 at_box
+          return;
+        }
+      }
+    }
     // 팔이 안 닿는 칸이면 꺼내지 않음 — 꺼낸 뒤 place가 IK로 바로 실패하면 퍽을 쥔 채 다음 칸으로 감 (11-22 실기 nav_1122_025043: L1 칸 2 · 5,
     //   0.282 · 0.263 m — 그 칸 쪽 변은 벽 0.22 m 안이라 빠짐)
     const auto c = cell_target(job.loc, job.cell);
@@ -1449,7 +1470,9 @@ void MissionManager::bring(size_t i) {
   // 이미 그 장소 상자에 붙어 있고 다음 칸이 팔 닿는 거리면 물러나지 않고 그 자리에서 (11-22 사용자: 칸마다 exit → 다시 도킹)
   const Box & box = loc_boxes_[job.loc];
   Pose2 r;
-  if (!back_.empty() && stop_ == box_label(box) && robot_arena(r) && std::hypot(tx - r.x, ty - r.y) <= place_reach_m_) {
+  // 면 고정(place_fixed_side)이면 닿든 안 닿든 다른 변으로 안 돎 — 안 닿는 칸은 at_box가 꺼내지 않고 건너뜀
+  if (!back_.empty() && stop_ == box_label(box) && robot_arena(r) &&
+      (place_fixed_side_ || std::hypot(tx - r.x, ty - r.y) <= place_reach_m_)) {
     RCLCPP_INFO(get_logger(), "%s 붙은 채 다음 칸 %d (%.3f m)", stop_.c_str(), job.cell, std::hypot(tx - r.x, ty - r.y));
     at_box(true, "");
     return;
