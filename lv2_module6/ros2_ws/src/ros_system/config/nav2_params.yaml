@@ -283,7 +283,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         inflation_radius: 0.45   # 바깥쪽은 통로 가운데로 끄는 비용
-        cost_scaling_factor: 6.0   # 11-18: 8 → 4 → 8 → 6 (사용자) — 4는 너무 가운데·집 앞 우회, 8(+multiplier 1)은 벽 끝에 붙어 꼬리 걸림 (sim M16)
+        cost_scaling_factor: 8.0   # 11-21: 6 → 8 (사용자, 곡선 경로 줄이기 — multiplier 1.5와 함께). 11-18: 8 → 4 → 8 → 6 (사용자) — 4는 너무 가운데·집 앞 우회, 8(+multiplier 1)은 벽 끝에 붙어 꼬리 걸림 (sim M16)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # velocity_smoother — /cmd_vel_mux → /cmd_vel_smoothed. 한계 = 실기
