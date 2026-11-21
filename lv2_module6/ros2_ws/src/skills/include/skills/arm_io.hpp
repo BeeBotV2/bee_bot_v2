@@ -8,7 +8,9 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "control/msg/arm_safety_event.hpp"
@@ -44,6 +46,11 @@ constexpr double GRIPPER_CLOSED_M = 0.0;
 constexpr double TRAJ_DT = 0.02;            // 궤적 샘플 간격 (학습 때 정책 주기)
 constexpr double CONTACT_ABOVE_M = 0.05;    // 시뮬 above_m (손끝이 내려갈 자리 위)
 
+// 궤적 자기 충돌 검사 한 샘플 (순수 함수 — test_skills): 첫 샘플(끝이 아니면)에 닿은 쌍은 start에 담고 허용 ·
+//   그다음은 start에 남은 쌍만 허용(빠져나가는 중), 떨어진 쌍은 start에서 뺌 · 새 쌍이나 끝 자세의 접촉은 bad에 담고 false
+using ContactPair = std::pair<std::string, std::string>;
+bool contacts_ok(std::set<ContactPair> & start, const std::set<ContactPair> & now, bool first, bool last, ContactPair & bad);
+
 class ArmIO {
 public:
   using Cb = std::function<void(bool)>;
@@ -72,7 +79,8 @@ public:
   void move_arm(const geometry_msgs::msg::PoseStamped & target, Cb done,
                 double yaw = std::numeric_limits<double>::quiet_NaN(), int tries_left = -1);
   // joint1~5 관절 목표. 실행이 거부·실패하면(보통 'start point deviates' — 아직 움직이는 팔) 멈출 때까지 기다려 한 번 다시 (retry)
-  void move_joints(const std::vector<double> & q5, Cb done, bool retry = true);
+  //   시작 자세가 자기 충돌이라 계획이 거부되면 start_collision_lift_m만큼 곧게 올려 빠져나온 뒤 한 번 다시 (escape)
+  void move_joints(const std::vector<double> & q5, Cb done, bool retry = true, bool escape = true);
   // 그리퍼 (m, 손가락 하나) · effort_a [A] = 쥐는 힘 (goal effort → Goal Current, 음수 = controllers.yaml max_effort)
   void set_gripper(double width_m, Cb done, double effort_a = -1.0);
 
@@ -136,6 +144,7 @@ private:
   rclcpp::Subscription<perception::msg::HandRelative>::SharedPtr hr_sub_;
   perception::msg::HandRelative::ConstSharedPtr hr_;
   double jam_mean(double window_s) const;
+  bool jam_lagging(double & lag) const;  // jam_lag_rad 넘게 못 따라감 (꺼짐·값 없음이면 true) · lag = max |joint2|,|joint3| [rad]
   std::string contact_mode_ = "sim", grip_fail_;
   uint64_t gen_ = 0;
   uint32_t run_ = 0;
@@ -148,6 +157,8 @@ private:
   rclcpp::Client<std_srvs::srv::Empty>::SharedPtr clear_octomap_;
   // 시작 자세가 octomap과 닿아 계획 거부(START_STATE_IN_COLLISION · FAILURE)면 octomap을 비우고 retry를 부름 (11-21) · 아니면 false
   bool clear_if_start_in_octomap(int code, std::function<void()> retry);
+  static bool start_in_collision(int code);  // 계획 거부가 시작 자세 충돌 때문 (START_STATE_IN_COLLISION · FAILURE)
+  void lift_out(Cb done);                     // 지금 손끝을 start_collision_lift_m 곧게 올림 (traj_step — 시작 접촉 허용 검사)
   rclcpp::Publisher<ml::msg::SkillContext>::SharedPtr ctx_pub_;
   rclcpp::Publisher<perception::msg::HandTarget>::SharedPtr hand_pub_;
   rclcpp::Subscription<control::msg::ArmSafetyEvent>::SharedPtr safety_sub_;

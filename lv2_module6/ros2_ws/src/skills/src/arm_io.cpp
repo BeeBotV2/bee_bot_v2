@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
+#include <utility>
 
 #include "shape_msgs/msg/solid_primitive.hpp"
 #include "tf2/LinearMath/Transform.hpp"
@@ -55,10 +57,17 @@ ArmIO::ArmIO(rclcpp::Node & node)
   //   빼고 실패 arm_jam (pick은 다음 후보, coordinator는 단계를 한 번 더). 0 = 끔. 11-08 실기 pick 62판: 막힘 최솟값 +0.64 A ·
   //   정상 최댓값 +0.40 A (arm_safety_monitor 3.0 A는 막혀도 안 닿음 — 실측 최대 0.9~1.1 A)
   node.declare_parameter<double>("jam_current_a", 0.5);
+  // 막힘은 전류에 더해 joint2·3이 목표를 이만큼 [rad] 넘게 못 따라갈 때만 — 전류만 오르고 위치는 따라오면 바닥·칸에 닿은 것 (막힘 아님).
+  //   0 = 전류만 (예전). 11-21 실기 load: 막힘 4건 joint3 18~44 mrad · 성공 20건 ≤ 11 mrad · 바닥 막힘 판정 1건 0.2 mrad (오판)
+  //   추종 값이 없으면(/rl_arm_correction/debug 0.5 s 넘게 끊김) 전류만으로 판정
+  node.declare_parameter<double>("jam_lag_rad", 0.0);
   // traj_step(MoveIt 계획을 거치지 않는 궤적) 보내기 전 자기 충돌 검사 — false면 끔 (예전처럼) · 매번 읽음
   node.declare_parameter<bool>("traj_collision_check", true);
   node.declare_parameter<double>("traj_check_step_rad", 0.05);  // [rad] 관절이 이만큼 넘게 움직인 샘플마다 검사 (끝 자세는 늘)
   node.declare_parameter<double>("traj_check_timeout_s", 2.0);  // [s] 검사 전체 상한 — 넘으면 실패
+  // 시작 자세가 이미 자기 충돌이라 MoveIt 계획이 거부되면 손끝을 이만큼 곧게 올려 빠져나온 뒤 다시 계획 [m] · 0 = 안 함
+  //   11-21 실기 bag: load 막힘 자세(손가락이 적재함 칸 링 = base_link에 걸림)에서 inspect look 계획이 99999로 거부 → 퍽을 쥔 채 다음 상자로
+  node.declare_parameter<double>("start_collision_lift_m", 0.03);
   node.declare_parameter<bool>("sag_fade", true);  // pick·load 시작 fade_sag (false = 예전처럼 닿는 구간 시작에서 한 번에 0) · 매번 읽음
   grip_current_a_ = node.declare_parameter<double>("grip_current_a", 0.1);  // 닫을 때 쥐는 힘 상한 [A] — 실기 11/08: gap 26 mm와 같이 0.1 A (약 7 N)
   grasp_check_ = node.declare_parameter<bool>("grasp_check", true);
@@ -222,9 +231,9 @@ void ArmIO::move_arm(const geometry_msgs::msg::PoseStamped & target, Cb done, do
   });
 }
 
-void ArmIO::move_joints(const std::vector<double> & q5, Cb done, bool retry) {
+void ArmIO::move_joints(const std::vector<double> & q5, Cb done, bool retry, bool escape) {
   if (q5.size() != 5) { done(false); return; }
-  if (settle_) { settle([this, q5, done]() { move_joints(q5, done); }); return; }
+  if (settle_) { settle([this, q5, done, escape]() { move_joints(q5, done, true, escape); }); return; }
   auto req = std::make_shared<GetMotionPlan::Request>();
   auto & r = req->motion_plan_request;
   r.group_name = "arm";
@@ -243,23 +252,32 @@ void ArmIO::move_joints(const std::vector<double> & q5, Cb done, bool retry) {
   }
   r.goal_constraints.push_back(c);
   const uint64_t gen = gen_;
-  plan_->async_send_request(req, [this, q5, done, gen, retry](rclcpp::Client<GetMotionPlan>::SharedFuture f) {
+  plan_->async_send_request(req, [this, q5, done, gen, retry, escape](rclcpp::Client<GetMotionPlan>::SharedFuture f) {
     if (gen != gen_) return;
     const auto res = f.get();
-    if (res->motion_plan_response.error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
-      RCLCPP_WARN(node_.get_logger(), "관절 이동 플랜 실패 (%d)", res->motion_plan_response.error_code.val);
-      if (retry && clear_if_start_in_octomap(res->motion_plan_response.error_code.val, [this, q5, done]() { move_joints(q5, done, false); }))
+    const int code = res->motion_plan_response.error_code.val;
+    if (code != moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
+      RCLCPP_WARN(node_.get_logger(), "관절 이동 플랜 실패 (%d)", code);
+      if (retry && clear_if_start_in_octomap(code, [this, q5, done, escape]() { move_joints(q5, done, false, escape); }))
         return;
+      // octomap을 비워도 거부 — 시작 자세가 로봇 자기 충돌(예: 손가락이 적재함 칸 링에 걸림)일 수 있음 → 곧게 올려 빠져나온 뒤 한 번 다시
+      if (escape && start_in_collision(code)) {
+        lift_out([this, q5, done](bool ok) {
+          if (!ok) { done(false); return; }
+          move_joints(q5, done, false, false);
+        });
+        return;
+      }
       done(false);
       return;
     }
     // 실행 거부: 직전 동작·처짐 보정(stow 쉬는 자세에서 풂)으로 팔이 아직 움직이면 'start point deviates' (11/09 Isaac: 첫 라운드
     //   stow → inspect look 자세가 joint4로 거부 → inspect_failed). 닿아서 실패(contact_)면 다시 안 함
-    execute(res->motion_plan_response.trajectory, [this, q5, done, retry](bool ok) {
+    execute(res->motion_plan_response.trajectory, [this, q5, done, retry, escape](bool ok) {
       if (ok || !retry || contact_) { done(ok); return; }
       RCLCPP_WARN(node_.get_logger(), "관절 이동 실행 실패 — 팔이 멈춘 뒤 한 번 다시");
       settle_ = true;
-      move_joints(q5, done, false);
+      move_joints(q5, done, false, escape);
     });
   });
 }
@@ -268,9 +286,43 @@ void ArmIO::move_joints(const std::vector<double> & q5, Cb done, bool retry) {
 //   pick 실패(grasp_empty) 뒤나 손에 퍽을 든 채(퍽이 MoveIt에 붙인 물체가 아니라 octomap 칸으로 찍힘) octomap 칸이
 //   gripper_cam_link · finger_left_link와 닿은 채 남아 inspect · place · stow가 모두 CheckStartStateCollision으로 거부 → 연쇄 실패.
 //   거부 코드는 START_STATE_IN_COLLISION이 아니라 FAILURE(99999)로 옴 → 둘 다. 비운 바로 뒤(다음 점구름 전)에 계획 — pick 시작과 같은 방식
-bool ArmIO::clear_if_start_in_octomap(int code, std::function<void()> retry) {
+bool ArmIO::start_in_collision(int code) {
   using E = moveit_msgs::msg::MoveItErrorCodes;
-  if ((code != E::START_STATE_IN_COLLISION && code != E::FAILURE) || !clear_octomap_->service_is_ready()) return false;
+  return code == E::START_STATE_IN_COLLISION || code == E::FAILURE;  // CheckStartStateCollision 어댑터 거부는 99999(FAILURE)로 옴
+}
+
+void ArmIO::lift_out(Cb done) {
+  const double h = node_.get_parameter("start_collision_lift_m").as_double();
+  Q5 now, up;
+  if (h <= 0.0 || !arm_now(now) || !stand::raise_hand(now, h, up)) {
+    RCLCPP_WARN(node_.get_logger(), "시작 자세 충돌 — 곧게 올리기 못 함 (h %.3f m)", h);
+    done(false);
+    return;
+  }
+  if (!validity_->service_is_ready()) { done(false); return; }
+  // FAILURE(99999)는 다른 이유일 수도 있음 — 지금 자세가 정말 로봇 자기 충돌일 때만 올림
+  auto req = std::make_shared<GetStateValidity::Request>();
+  req->group_name = "arm";
+  req->robot_state.is_diff = true;
+  req->robot_state.joint_state.name.assign(std::begin(ARM), std::end(ARM));
+  req->robot_state.joint_state.position.assign(now.begin(), now.end());
+  const uint64_t gen = gen_;
+  validity_->async_send_request(req, [this, gen, h, up, done](rclcpp::Client<GetStateValidity>::SharedFuture f) {
+    if (gen != gen_) return;
+    using C = moveit_msgs::msg::ContactInformation;
+    const auto self = [](uint32_t t) { return t == C::ROBOT_LINK || t == C::ROBOT_ATTACHED; };
+    const auto & cs = f.get()->contacts;
+    if (std::none_of(cs.begin(), cs.end(), [&](const auto & c) { return self(c.body_type_1) && self(c.body_type_2); })) {
+      done(false);
+      return;
+    }
+    RCLCPP_WARN(node_.get_logger(), "시작 자세 자기 충돌 — 손끝 %.0f cm 곧게 올린 뒤 다시 계획", 100 * h);
+    traj_step([this, up](const Q5 & from) { return stand::sample_move(from, up, velocity_scale(), TRAJ_DT); })(done);
+  });
+}
+
+bool ArmIO::clear_if_start_in_octomap(int code, std::function<void()> retry) {
+  if (!start_in_collision(code) || !clear_octomap_->service_is_ready()) return false;
   RCLCPP_WARN(node_.get_logger(), "계획 실패 (%d) — octomap 비우고 바로 다시 계획 (시작 자세가 octomap과 닿았을 수 있음)", code);
   const uint64_t gen = gen_;
   clear_octomap_->async_send_request(std::make_shared<std_srvs::srv::Empty::Request>(),
@@ -361,6 +413,16 @@ ArmIO::Step ArmIO::traj_step(std::function<std::vector<Q5>(const Q5 &)> make) {
   };
 }
 
+// 궤적 자기 충돌 검사 한 샘플 — 설명은 arm_io.hpp
+bool contacts_ok(std::set<ContactPair> & start, const std::set<ContactPair> & now, bool first, bool last, ContactPair & bad) {
+  if (first && !last) { start = now; return true; }
+  for (const auto & p : now)
+    if (last || !start.count(p)) { bad = p; return false; }  // 새 쌍 · 다시 닿음 · 끝 자세에서도 닿음
+  for (auto it = start.begin(); it != start.end();)  // 떨어진 쌍은 더는 허용 안 함
+    it = now.count(*it) ? std::next(it) : start.erase(it);
+  return true;
+}
+
 // /check_state_validity로 자세를 하나씩 차례로 검사 — 로봇 링크끼리(붙인 물체 포함) 닿는 자세가 하나라도 있으면 실패. world(octomap·퍽·
 //   적재함)와 닿는 건 무시 — 닿는 구간은 일부러 퍽·칸에 닿음. 서비스가 없거나 시간 안에 답이 없으면 실패 (안전 쪽).
 //   샘플(0.02 s)을 한꺼번에 보내면 서비스 큐(깊이 10)를 넘은 요청이 버려져 답이 끝내 안 옴 → pick 닿는 구간에서 멈춤 (11-20 실기 2판째).
@@ -379,7 +441,10 @@ void ArmIO::check_self_collision(const std::vector<Q5> & samples, Cb done) {
     for (int i = 0; i < 5 && !far; ++i) far = std::abs(samples[k][i] - samples[picks->back()][i]) > step;
     if (far) picks->push_back(k);
   }
-  struct State { size_t i = 0; bool over = false; rclcpp::TimerBase::SharedPtr timer; };
+  // 첫 샘플(≈ 지금 자세)에 이미 닿은 쌍은 빠져나가는 동안 허용 (11-21 실기: load 막힘 자세에서 '위로'·place 궤적이 샘플 1에서 거부돼
+  //   퍽을 쥔 채 갇힘) — 한 번 떨어진 뒤 다시 닿거나 · 새 쌍이 닿거나 · 끝 자세에서도 닿으면 실패
+  using Pair = ContactPair;
+  struct State { size_t i = 0; bool over = false; rclcpp::TimerBase::SharedPtr timer; std::set<Pair> start; };
   auto st = std::make_shared<State>();
   const uint64_t gen = gen_;
   const auto finish = [this, st, gen, done](bool ok) {
@@ -415,10 +480,18 @@ void ArmIO::check_self_collision(const std::vector<Q5> & samples, Cb done) {
     req->robot_state.joint_state.position.assign((*qs)[k].begin(), (*qs)[k].end());
     validity_->async_send_request(req, [this, st, k, n = qs->size(), next, finish, self](rclcpp::Client<GetStateValidity>::SharedFuture f) {
       if (st->over) return;
-      for (const auto & c : f.get()->contacts) {
-        if (!self(c.body_type_1) || !self(c.body_type_2)) continue;
+      std::set<Pair> now;
+      for (const auto & c : f.get()->contacts)
+        if (self(c.body_type_1) && self(c.body_type_2))
+          now.insert(std::minmax(c.contact_body_1, c.contact_body_2));
+      if (st->i == 0)
+        for (const auto & p : now)
+          if (k + 1 < n)
+            RCLCPP_WARN(node_.get_logger(), "궤적 충돌 검사: 시작 자세가 이미 %s - %s 닿음 — 빠져나가는 동안 허용", p.first.c_str(), p.second.c_str());
+      Pair bad;
+      if (!contacts_ok(st->start, now, st->i == 0, k + 1 == n, bad)) {
         RCLCPP_ERROR(node_.get_logger(), "궤적 충돌 검사: 샘플 %zu/%zu에서 %s - %s 닿음 — 궤적 안 보냄", k + 1, n,
-                     c.contact_body_1.c_str(), c.contact_body_2.c_str());
+                     bad.first.c_str(), bad.second.c_str());
         finish(false);
         return;
       }
@@ -651,6 +724,15 @@ double ArmIO::jam_mean(double window_s) const {
   return state_cache_->jam_mean(window_s);
 }
 
+bool ArmIO::jam_lagging(double & lag) const {
+  const double lim = node_.get_parameter("jam_lag_rad").as_double();
+  std::array<double, 5> l{};
+  lag = std::numeric_limits<double>::quiet_NaN();
+  if (lim <= 0.0 || !state_cache_->lag(node_.now().seconds(), 0.5, l)) return true;  // 꺼짐 · 값 없음 → 전류만
+  lag = std::max(std::abs(l[1]), std::abs(l[2]));
+  return lag > lim;
+}
+
 ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5 &, Q5 &)> plan, bool close,
                                 double open_m, bool lift_on_empty) {
   return [this, policy, plan, close, open_m, lift_on_empty](Cb cb) {
@@ -680,9 +762,15 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
     const Step jam_check = [this, base, base_a, name = policy.name](Cb c) {
       const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
       if (lim <= 0.0 || d <= lim) { c(true); return; }
+      double lag;
+      if (!jam_lagging(lag)) {  // 전류만 오름 — 바닥에 닿은 것으로 보고 그대로 놓기·쥐기
+        RCLCPP_WARN(node_.get_logger(), "%s: 바닥 전류 %+.2f A (> %.2f)지만 joint2·3 추종 %.1f mrad — 막힘 아님, 계속", name.c_str(), d, lim, 1000 * lag);
+        c(true);
+        return;
+      }
       jam_ = true;
       const std::string note = jam_note(*base_a);
-      RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (바닥) — joint2+3 전류 %+.2f A (> %.2f) · 쥐지·놓지 않고 위로 · %s", name.c_str(), d, lim, note.c_str());
+      RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (바닥) — joint2+3 전류 %+.2f A (> %.2f) · 추종 %.1f mrad · 쥐지·놓지 않고 위로 · %s", name.c_str(), d, lim, 1000 * lag, note.c_str());
       if (auto * s = dynamic_cast<SkillNode *>(&node_)) s->detail("막힘 바닥 " + name + " Δ" + std::to_string(d).substr(0, 5) + " A · " + note);
       c(false);  // 위로 빼기는 끝 callback에서
     };
@@ -693,10 +781,12 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
         if (gen != gen_) { jam_timer_->cancel(); return; }
         const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
         if (lim <= 0.0 || d <= lim) return;
+        double lag;
+        if (!jam_lagging(lag)) return;  // 전류만 오르고 위치는 따라옴 — 계속 내려감 (끝에서 바닥 판정)
         jam_timer_->cancel();
         jam_ = true;
         const std::string note = jam_note(*base_a);
-        RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (내려가는 중) — joint2+3 전류 %+.2f A (> %.2f) · 멈추고 위로 · %s", name.c_str(), d, lim, note.c_str());
+        RCLCPP_WARN(node_.get_logger(), "%s: 막힘 (내려가는 중) — joint2+3 전류 %+.2f A (> %.2f) · 추종 %.1f mrad · 멈추고 위로 · %s", name.c_str(), d, lim, 1000 * lag, note.c_str());
         if (auto * s = dynamic_cast<SkillNode *>(&node_)) s->detail("막힘 내려가는 중 " + name + " Δ" + std::to_string(d).substr(0, 5) + " A · " + note);
         exec_->async_cancel_all_goals();
       });
