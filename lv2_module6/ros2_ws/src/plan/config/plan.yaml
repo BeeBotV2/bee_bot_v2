@@ -457,8 +457,8 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
       #   11-20: 시뮬에서는 먼 줄 퍽(0.287 m > pick_far 0.285)이 안 닿았음 — 실기에서 먼 퍽 pick 확인. 안 되면 0.13(6 cm)
     # 11-21 사용자: 장소 상자(L1~L3)만 더 바짝 — 앞면 5 cm. 인지 앞면 거리(face_dist_m)로 목표를 앞뒤 ≤3 cm 옮겨 면에서 멈춤 ·
     #   면 10 cm 안은 approach_min_speed. 시작 상자는 approach_gap · odom 목표 그대로. 끄려면 place_approach_gap −1 · place_face_stop_m 0
-    place_approach_gap: 0.119 # [m] base_footprint ~ 장소 상자 변 (로봇 앞면 0.069 → 5 cm)
-    place_face_stop_m: 0.05 # [m] 인지 앞면 거리가 이만큼이 되게 목표를 옮김
+    place_approach_gap: -1.0 # 11-22 사용자: 장소 상자 도킹을 시작 박스와 똑같이 — 시작 박스와 같게 approach_gap(0.144) — 전 0.119
+    place_face_stop_m: 0.0 # 11-22 사용자: 장소 상자 도킹을 시작 박스와 똑같이 — 앞면 정지 끔 (시작 박스와 같게 odom 목표 그대로) — 전 0.05
     # 도킹 뒤 퍽이 멀면 팔이 닿게 조금 전진 (pick_near, 11-20) — 로봇 중심 ~ 퍽이 pick_reach_m 안에 들 만큼만 · 상자 앞 gap creep_min_gap까지
     pick_reach_m: 0.25 # [m] 수직 pick 한계 약 0.256 (시뮬 팔 범위) − 여유
     # 차체에 붙은 퍽 (11-21 사용자): 상자 위 퍽이 로봇 앞 inspect_back_min_x 안이거나 tag를 못 읽으면 look 자세로 곧게 물러나 다시 inspect
@@ -484,7 +484,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     place_search: 0.05 # [m] 놓은 뒤 확인 때 칸에서 이 안의 퍽만 그 퍽으로 봄
     place_reach_m: 0.35 # [m] 11-22 사용자: 도킹 한 번으로 무늬 전부 (먼 줄 0.28 m 포함) — 붙은 자리에서 이 안이면 물러나지 않고 바로 놓음 · 다른 변으로 안 돎 (전 0.25: 실기 IK 실패 0.274 · 0.286 기록으로 정했던 값)
     loc_box_keep_s: 60.0 # [s] 놓기 보정에 쓰는 장소 상자 관측 — 이 안에 장소 태그(윗면 정중앙)를 읽은 관측만
-    place_realign_m: 0.08 # [m] 장소 상자 진입점 도착 뒤 상자 쪽으로 돌아 봤을 때 인지 상자 정면에서 옆으로 이만큼 넘게 벗어나면 진입점을 고쳐 Nav2 한 번 더 · 0 = 끔
+    place_realign_m: 0.0 # 11-22 사용자: 장소 상자 도킹을 시작 박스와 똑같이 — Nav2 뒤 돌아보기·진입점 다시 끔 (시작 박스와 같게 Nav2 → 바로 approach) — 전 0.08
     place_realign_wait_s: 0.8 # [s] 돈 뒤 윗면 관측을 기다리는 시간
     place_exit_min_m: 0.25 # [m] 장소 상자에서 물러날 때 최소 이만큼 (벽 쪽은 다가설 자리 규칙 · 0.32 m 넘게 남김) — 0.15 m면 다음 Nav2가 상자 옆에서 막혀 local costmap 지움 (11-22 실기 L3)
     match_radius: 0.04 # [m] 조사 때 퍽 자리와 트랙을 짝짓는 거리
