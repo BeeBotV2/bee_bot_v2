@@ -182,7 +182,7 @@ private:
     //   추적마다 마지막 온전한 측정 하나만 (잘린 측정은 안 덮음)
     const auto t = now();
     for (const auto & o : m.objects)
-      if (is_box(o) && std::min(o.size.x, o.size.y) >= box_min_side_) seen_[o.id] = {o, rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+      if (is_box(o) && !is_cut(o) && std::min(o.size.x, o.size.y) >= box_min_side_) seen_[o.id] = {o, rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
     for (auto it = seen_.begin(); it != seen_.end();)
       it = (t - it->second.second).seconds() > box_seed_s_ ? seen_.erase(it) : std::next(it);
     if (!box_mode_ || frozen_ || !timer_ || timer_->is_canceled()) return;
@@ -191,6 +191,13 @@ private:
 
   static bool is_box(const perception::msg::TrackedObject & o) {
     return o.class_name == "start_box" || o.class_name == "location_box";
+  }
+
+  // 화면 끝에 잘린 상자 (perception "cut") — 새로 생긴 추적이면 가운데가 보이는 쪽으로 치우침
+  static bool is_cut(const perception::msg::TrackedObject & o) {
+    for (const auto & kv : o.details)
+      if (kv.key == "cut") return kv.value == "true";
+    return false;
   }
 
   void update_box(const std::vector<perception::msg::TrackedObject> & objects) {
@@ -205,6 +212,9 @@ private:
       //   곧 오래된 것이 되고, standoff 0.25 m에선 gripper_cam에 상자가 잘려 보여 걸러짐 (11-13 headless approach_box_unseen)
       if ((t - rclcpp::Time(o.last_seen, t.get_clock_type())).seconds() > (have_box_ ? box_stale_s_ : box_seed_s_)) continue;
       if (std::min(o.size.x, o.size.y) < box_min_side_) continue;
+      // 가운데는 진입점에서 온전히 본 상자로 정함 — 붙는 중 잘린 관측은 안 씀 (11-21 실기 L3: 붙다 잘린 관측에서 새로 생긴
+      //   추적이 3~5 cm 옆에 있어 그쪽으로 끌려가 옆으로 4~6 cm 어긋나게 도킹). 아직 못 봤으면 잘린 것도 받음 (찾기만)
+      if (have_box_ && is_cut(o)) continue;
       const auto & q = o.pose.pose.orientation;
       double x = o.pose.pose.position.x, y = o.pose.pose.position.y, a = 2.0 * std::atan2(q.z, q.w);
       if (!from_map(rclcpp::Time(o.last_seen, RCL_ROS_TIME), x, y, a)) continue;
