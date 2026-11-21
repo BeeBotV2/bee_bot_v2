@@ -171,7 +171,6 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_tol_ = declare_parameter<double>("place_tol", 0.010);
   place_search_ = declare_parameter<double>("place_search", 0.05);
   loc_keep_s_ = declare_parameter<double>("loc_box_keep_s", loc_keep_s_);
-  loc_match_m_ = declare_parameter<double>("loc_box_match_m", loc_match_m_);
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
@@ -366,17 +365,9 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
       for (const auto & o : m->objects)
         {
-          // 윗면을 다 찾은 관측만 (corners · 안 잘림) — 윗면 없이 태그만 본 관측은 위치가 태그 자리(가운데에서 최대 약 10 cm)
-          if ((o.class_name != "location_box" && o.class_name != "start_box") || detail(o, "cut") == "true" || detail(o, "corners").empty()) continue;
-          std::string tag = o.class_name == "location_box" ? detail(o, "tag") : "";
-          // 멀리서는 태그를 못 읽어 장소 상자도 start_box로 나오고, 태그가 읽히는 거리에선 윗면이 잘림 (11-22 실기 nav_1122_033953 L3:
-          //   둘이 한 번도 겹치지 않아 가운데를 못 정함) → 장소 중심에서 loc_box_match_m 안의 온전한 start_box는 그 장소 상자로 봄
-          //   (시작 박스와 장소 상자는 0.8 m 넘게 떨어짐)
-          if (tag.empty() && active_) {
-            const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y);
-            for (size_t li = 0; li < locations_.size() && li < loc_tags_.size(); ++li)
-              if (std::hypot(a.x - locations_[li].first, a.y - locations_[li].second) < loc_match_m_) { tag = str(loc_tags_[li]); break; }
-          }
+          // 장소 상자 가운데 = 윗면 정중앙 태그 (perception) — 태그를 읽은 관측이면 잘려도 됨
+          if (o.class_name != "location_box") continue;
+          const std::string tag = detail(o, "tag");
           if (tag.empty()) continue;
           loc_whole_[tag] = LocSeen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
         }
@@ -2027,7 +2018,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
         const auto it = li < loc_tags_.size() ? loc_whole_.find(str(loc_tags_[li])) : loc_whole_.end();
         Pose2 r;
         if (it == loc_whole_.end() || it->second.t < t_turn || !robot_arena(r)) {
-          RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 상자 윗면을 다 못 봄, 그대로 approach", to.c_str());
+          RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 장소 태그를 못 읽음, 그대로 approach", to.c_str());
           run({dock(f)}, after);
           return;
         }
@@ -2052,8 +2043,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   });
 }
 
-// ---------- 장소 상자 — 칸은 인지한 상자(가운데 · 변 방향) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
-//   윗면을 다 찾은(안 잘린) 마지막 관측만 (붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고, 목록에서 빠지기도 함 — 실기 nav_1122_023039)
+// ---------- 장소 상자 — 칸은 인지한 상자 가운데(윗면 정중앙 태그) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
 //   관측은 odom 점으로 기억 → 쓸 때 지금 map으로 (붙어 있는 동안 벽 정합이 map→odom을 3~5 cm씩 옮김)
 void MissionManager::correct(size_t li) {
   if (li >= loc_tags_.size() || li >= loc_boxes_.size() || li >= loc_pose_.size()) return;
@@ -2064,10 +2054,10 @@ void MissionManager::correct(size_t li) {
     return it != m.end() && (now() - it->second.t).seconds() <= loc_keep_s_ ? &it->second : nullptr;
   };
   loc_pose_[li].reset();
-  // 장소마다 상자 가운데는 한 번만 정함 (처음으로 윗면을 다 본 관측) — 그 뒤 퍽들은 같은 가운데 (면이 바뀌어도)
+  // 장소마다 상자 가운데는 한 번만 정함 (처음 태그를 읽은 관측) — 가운데 칸 퍽이 태그를 가리고 나서도 같은 가운데
   if (!loc_fix_[li]) {
     const LocSeen * o = fresh(loc_whole_, tag);
-    if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 윗면을 다 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
+    if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 태그를 읽은 장소 상자 없음", li + 1, loc_keep_s_); return; }
     loc_fix_[li] = o->s;
   }
   double mx, my;
@@ -2269,7 +2259,7 @@ bool MissionManager::robot_arena(Pose2 & p) const {
 // ---------- 도면 보정 — 인지 상자(윗면 가운데, map) ↔ 도면 상자 짝으로 arena → map 변환을 고침
 //   start_box는 9개 상자 전부와 (태그 못 본 장소 상자도 start_box로 나옴), location_box는 태그의 장소 상자와만 짝지음.
 //   gate 안에 하나뿐일 때만 · 로봇에서 arena_corr_range 안 · arena_corr_min_hits번 본 짝만 맞춤에 씀
-//   영상 끝에 잘린 상자(cut — 중심을 못 믿음)와 같은 관측의 재발행(last_seen 그대로)은 안 셈 — 트랙은 안 보여도 계속 나와서
+//   영상 끝에 잘린 시작 박스(cut — 중심을 못 믿음)와 같은 관측의 재발행(last_seen 그대로)은 안 셈 — 트랙은 안 보여도 계속 나와서
 //   한 번 본 것이 min_hits를 바로 채웠음 (11-15 실기 approach_loop snap에서 확인한 거름을 여기로)
 void MissionManager::update_corr(const perception::msg::TrackedObjectArray & m) {
   if (loc_on_ && wall_s() - loc_last_ < loc_settle_s_) return;  // 로봇 위치를 옮기는 중 — 이 관측은 옛 좌표와 섞임
@@ -2289,7 +2279,7 @@ void MissionManager::update_corr(const perception::msg::TrackedObjectArray & m) 
     if (!start_box && o.class_name != "location_box") continue;
     const auto dist = detail(o, "distance");
     if (!dist.empty() && std::stod(dist) > acorr_range_) continue;
-    if (detail(o, "cut") == "true") continue;
+    if (start_box && detail(o, "cut") == "true") continue;  // 장소 상자는 태그 가운데라 잘려도 씀
     const std::pair<int32_t, uint32_t> stamp{o.last_seen.sec, o.last_seen.nanosec};
     const auto it = acorr_seen_.find(o.id);
     if (it != acorr_seen_.end() && it->second == stamp) continue;
