@@ -36,6 +36,9 @@ CallbackReturn RlArmCorrection::on_init() {
   auto_declare<double>("gravity_max", 0.2);         // [rad] 한 관절 상한
   auto_declare<double>("policy_hz", 50.0);          // 시뮬 정책 주기
   auto_declare<double>("max_cam_age_s", 0.45);      // 손 카메라 값이 이보다 오래되면 정책을 안 돌림 → Δ 그대로 (시뮬 pick_env meas_age_max)
+  // pick · pick_far: 손 카메라가 원기둥으로 본 퍽이면 정책을 안 돌림 (Δ 0 그대로) — 11-22 실기: 정책 Δ가 들어간 pick은 5~8 mm 높고
+  //   옆으로 5~7 mm (Δ 0이면 ±1 mm) · 원기둥은 둥글어 옆 어긋남에 약함 (사용자: 원기둥만 끔)
+  auto_declare<bool>("pick_policy_cyl", false);
   // 손 카메라 튄 값 거르기 (헤더 HandJumpGate): 이 단계부터 (2 = 바닥에 닿아 멈춤) rel이 hand_jump_m 넘게 뛰면 confirm개 연속일 때만 받음
   auto_declare<double>("hand_jump_m", 0.005);
   auto_declare<int>("hand_jump_confirm", 3);
@@ -116,6 +119,7 @@ CallbackReturn RlArmCorrection::on_configure(const rclcpp_lifecycle::State &) {
   }
   policy_dt_ = 1.0 / node->get_parameter("policy_hz").as_double();
   max_cam_age_s_ = node->get_parameter("max_cam_age_s").as_double();
+  pick_policy_cyl_ = node->get_parameter("pick_policy_cyl").as_bool();
   hand_jump_m_ = node->get_parameter("hand_jump_m").as_double();
   hand_jump_confirm_ = static_cast<int>(node->get_parameter("hand_jump_confirm").as_int());
   hand_jump_phase_ = static_cast<int>(node->get_parameter("hand_jump_phase").as_int());
@@ -315,7 +319,9 @@ return_type RlArmCorrection::update_and_write_commands(const rclcpp::Time & time
                         : (hand_.kind == "cell" || hand_.kind == "slot");
     cam_age = (time - rclcpp::Time(hand_.header.stamp, time.get_clock_type())).seconds();
     cam_ok = hand_.valid && cam_kind && cam_age >= -0.1 && cam_age <= max_cam_age_s_;
-    if (since_policy_ >= policy_dt_ - 1e-6 && ctx_.q_above.size() == 5 && ctx_.q_down.size() == 5 && cam_ok) {
+    const bool pick = it->layout == ArmLayout::Pick || it->layout == ArmLayout::PickBox || it->layout == ArmLayout::PickFar;
+    const bool skip_cyl = pick && !pick_policy_cyl_ && cam_ok && !hand_.is_box;
+    if (since_policy_ >= policy_dt_ - 1e-6 && ctx_.q_above.size() == 5 && ctx_.q_down.size() == 5 && cam_ok && !skip_cyl) {
       since_policy_ = 0.0;
       ArmObsIn in;
       in.qd = qd; in.q_ref = ref; in.prev_act = prev_act_; in.corr = corr_;
