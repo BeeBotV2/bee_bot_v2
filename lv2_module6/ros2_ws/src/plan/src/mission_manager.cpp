@@ -1416,7 +1416,9 @@ void MissionManager::bring(size_t i) {
     at_box(true, "");
     return;
   }
-  go_near(box, tx, ty, at_box);
+  // go_near는 점을 도면 기준으로 받아 인지 상자 가운데(near_c_)만큼 옮김 — 인지 상자 위 칸(tx, ty)을 주면 두 번 옮겨짐
+  const auto [hx, hy] = cell_offset(job.cell, grid_step_);
+  go_near(box, locations_[job.loc].first + hx, locations_[job.loc].second + hy, at_box);
 }
 
 void MissionManager::job_done(size_t i, bool ok) {
@@ -1870,6 +1872,18 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       }
       return blocked;
     }), poses.end());
+    // 장소 상자: 칸(px, py)에 팔이 닿는 변 먼저 — 붙은 자리(가운데에서 반 변 + gap)에서 칸이 place_reach_m 안인지.
+    //   한 변에선 먼 줄(0.28 m)이 안 닿음 → 반대 변에서 (11-22 사용자). 안 닿는 변은 뒤로 (대신 시도 · 붙은 뒤 place_unreachable)
+    if (box_label(box)[0] == 'L') {
+      const double reach_d = box.half + (box.gap >= 0.0 ? box.gap : approach_gap_);
+      const auto dock_d = [&](const Pose2 & p) {
+        return std::hypot(near_c_.first - reach_d * std::cos(p.yaw) - px, near_c_.second - reach_d * std::sin(p.yaw) - py);
+      };
+      std::stable_partition(poses.begin(), poses.end(), [&](const Pose2 & p) { return dock_d(p) <= place_reach_m_; });
+      if (!poses.empty())
+        RCLCPP_INFO(get_logger(), "%s 칸 점 (%.3f, %.3f) — 첫 변에서 %.3f m%s", box_label(box).c_str(), px, py, dock_d(poses[0]),
+                    dock_d(poses[0]) <= place_reach_m_ ? "" : " (닿는 변 없음)");
+    }
   }
   if (k >= poses.size() || static_cast<int>(k) >= approach_tries_) { done(false, "approach_failed"); return; }
   // Nav2로 변 앞 standoff까지 → approach로 approach_gap까지 직선으로 붙음 (Nav2 원형 footprint로는 못 붙는 거리)
