@@ -26,6 +26,7 @@ public:
     // sim 방식: 손 안 퍽 바닥이 면 위 이만큼에서 다가와 수직으로 내려감. 이웃 퍽(높이 60 mm)보다 높아야 옆으로 지나갈 때 안 침
     //   (11/08 실기 주사위 5: 5 cm로 가운데 눈을 놓으러 가다 먼 줄 퍽을 넘어뜨림). 손이 못 닿으면 5 cm(CONTACT_ABOVE_M)로
     above_m_ = declare_parameter<double>("place_above_m", 0.08);
+    pull_max_m_ = declare_parameter<double>("place_pull_max_m", 0.08);  // 칸이 팔 밖이면 로봇 쪽으로 이만큼까지 당겨 닿는 자리에 놓음 (11-22)
     // 놓을 때 손가락 벌림 [m] — 0.036(시뮬 place_env release_gap)이면 사각 퍽(30 mm, 대각선 42 mm)이 손 안에서 조금만 기울어도
     //   손가락 사이에 끼어, 박스에 닿은 뒤 퍽을 쥔 채 다시 올라가 공중에서 돌다 떨어져 누움 (11-10 Isaac 퍽 정답 시간선 · 3회 재현).
     //   0.046이면 같은 퍽이 목표 4 mm 안에 섬. 주사위 칸 이웃 퍽(틈 30 mm) 사이에서 손가락이 걸리는지는 아직 시험 전
@@ -88,8 +89,34 @@ private:
     }
   }
 
-  void place_cell(const geometry_msgs::msg::PoseStamped & release, double top, double psi, ArmIO::Cb done) {
+  void place_cell(geometry_msgs::msg::PoseStamped release, double top, double psi, ArmIO::Cb done) {
     const double open_m = stand::gap_joint(open_gap_m_);
+    // 11-22 사용자: 칸이 수직 IK 밖이어도 포기하지 말고 시도 — 손이 닿는 자리(칸 위 5 cm · 내려놓을 자리 둘 다 IK)가 나올 때까지
+    //   로봇 쪽(ψ 반대)으로 5 mm씩 place_pull_max_m까지 당김. 그래도 없으면 원래 칸으로 그대로 시도 (실패하면 place_failed)
+    {
+      ArmIO::Q5 now{}, q{};
+      const auto reach = [&](double s_m) {
+        auto r = release;
+        r.pose.position.x -= s_m * std::cos(psi);
+        r.pose.position.y -= s_m * std::sin(psi);
+        auto d = r;
+        d.pose.position.z -= release_m_ - drop_m_;
+        auto a = d;
+        a.pose.position.z += CONTACT_ABOVE_M;
+        return arm_.ik_ee_yaw(a, psi, now, q) && arm_.ik_ee_yaw(d, psi, now, q);
+      };
+      if (arm_.arm_now(now) && !reach(0.0)) {
+        double s_m = 0.005;
+        while (s_m <= pull_max_m_ + 1e-9 && !reach(s_m)) s_m += 0.005;
+        if (s_m <= pull_max_m_ + 1e-9) {
+          RCLCPP_WARN(get_logger(), "place: 칸이 팔 밖 — 로봇 쪽으로 %.0f mm 당겨 닿는 자리에 놓음", s_m * 1000);
+          release.pose.position.x -= s_m * std::cos(psi);
+          release.pose.position.y -= s_m * std::sin(psi);
+        } else {
+          RCLCPP_WARN(get_logger(), "place: %.0f mm 당겨도 IK 없음 — 원래 칸으로 그대로 시도", pull_max_m_ * 1000);
+        }
+      }
+    }
     if (arm_.sim_contact()) {
       auto down = release;
       down.pose.position.z -= release_m_ - drop_m_;  // 퍽 바닥이 면 위 drop_m (0이면 닿는 자리)
@@ -147,7 +174,7 @@ private:
   SkillModel policy_;
   bool via_carry_ = true;
   std::vector<double> carry_left_, carry_right_;
-  double held_bottom_m_, release_m_, drop_m_, approach_m_, offset_x_m_, open_gap_m_, above_m_;
+  double held_bottom_m_, release_m_, drop_m_, approach_m_, offset_x_m_, open_gap_m_, above_m_, pull_max_m_ = 0.08;
 };
 
 }  // namespace skills
