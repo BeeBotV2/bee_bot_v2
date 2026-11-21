@@ -535,6 +535,7 @@ void MissionManager::barcode_phase() {
   gaze_sent_ = false;
   peek_sent_ = false;
   peek_done_ = !barcode_peek_;
+  cand_.reset();
   peek_at_ = hires_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   returning_ = false;
   light_warned_ = false;
@@ -615,8 +616,18 @@ void MissionManager::barcode_phase() {
             candidate_range = range;
             const double z = o.pose.pose.position.z;  // map 높이 (바닥 = 0) — 이상하면 barcode_height_m
             if (z > 0.03 && z < 0.8) candidate_z = z;
+            cand_ = std::array<double, 3>{target.x, target.y, candidate_z};
             break;
           }
+        }
+        // 지금 안 보여도 이번 관측에서 본 후보 자리로 — 엿보기·접기 동안 카메라가 돌아가 인지 목록에서 빠지면 gaze를 못 보내고
+        //   barcode_candidate_missing으로 끝났음 (11-21 실기 20:43: +0.60 rad · 0.53 m에서 보고 엿보기 뒤 29 s 동안 gaze 없음)
+        if (!candidate_yaw && cand_) {
+          const double dx = (*cand_)[0] - base_arena.x, dy = (*cand_)[1] - base_arena.y;
+          const double yaw = std::atan2(dy, dx) - base_arena.yaw;
+          candidate_yaw = std::atan2(std::sin(yaw), std::cos(yaw));
+          candidate_range = std::hypot(dx, dy);
+          candidate_z = (*cand_)[2];
         }
       }
       // ⓪ 엿보기 — 팔은 접은 채 손목만 바코드 쪽으로(joint1 방위 · joint4 높이) + 손 카메라를 잠깐 고해상도로
@@ -729,8 +740,20 @@ void MissionManager::hires(bool on) {
     [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
       const auto r = f.get();
       const bool ok = !r.empty() && r[0].successful;
-      if (ok) RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s (%.2f s)", prof.c_str(), (now() - t0).seconds());
-      else RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s 실패: %s", prof.c_str(), r.empty() ? "응답 없음" : r[0].reason.c_str());
+      if (!ok) { RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s 실패: %s", prof.c_str(), r.empty() ? "응답 없음" : r[0].reason.c_str()); return; }
+      // realsense-ros는 켜진 스트림의 프로필을 바꾸면 "re-enable the stream for the change to take effect" — 껐다 켜야 적용
+      //   (11-21 실기: 프로필만 바꿔 640 px 그대로 → 엿보기 5 s 뒤 "고해상도 영상이 안 옴")
+      cam_params_->set_parameters({rclcpp::Parameter("enable_color", false)},
+        [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>>) {
+          cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)},
+            [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f2) {
+              const auto r2 = f2.get();
+              const bool ok2 = !r2.empty() && r2[0].successful;
+              if (ok2) RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s (스트림 다시 켬 · %.2f s)", prof.c_str(), (now() - t0).seconds());
+              else RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s — 스트림 다시 켜기 실패: %s", prof.c_str(),
+                               r2.empty() ? "응답 없음" : r2[0].reason.c_str());
+            });
+        });
     });
 }
 

@@ -35,9 +35,11 @@
 //     관측(신호·바코드) 오류와 복귀 이동 실패만 ERROR로 멈추고 coordinator 정지
 //   좌표: 설정은 경기장(arena, m) — start_pose_arena 하나로 map으로 바꾼다 (mission_solver arena_to_map).
 //   판단(정렬·배정·할당·칸·판정)은 전부 mission_solver 순수 함수. 이 노드는 순서·기록·skill 요청만.
+#include <array>
 #include <functional>
 #include <deque>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -244,6 +246,7 @@ private:
   double barcode_height_m_ = 0.15;           // [m] 바코드 중심 높이 — 인지 높이가 이상할 때
   std::string peek_profile_ = "1920x1080x15", cam_profile_ = "640x360x15";
   bool peek_sent_ = false, peek_done_ = false, hires_on_ = false;
+  std::optional<std::array<double, 3>> cand_;  // 이번 관측에서 마지막으로 본 바코드 후보 (arena x, y, map z) — 안 보여도 gaze에 씀
   rclcpp::Time peek_at_{0, 0, RCL_ROS_TIME}, hires_at_{0, 0, RCL_ROS_TIME}, cam_info_at_{0, 0, RCL_ROS_TIME};
   uint32_t cam_width_ = 0;
   rclcpp::AsyncParametersClient::SharedPtr cam_params_;
