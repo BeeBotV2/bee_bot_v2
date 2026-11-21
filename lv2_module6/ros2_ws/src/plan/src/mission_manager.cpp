@@ -174,6 +174,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
+  realign_tries_ = static_cast<int>(declare_parameter<int64_t>("place_realign_tries", 2));
+  loc_any_.assign(loc_boxes_.size(), std::nullopt);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
@@ -368,7 +370,14 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
           // 장소 상자 가운데 = 윗면 정중앙 태그 (perception) — 태그를 읽은 관측이면 잘려도 됨
           if (o.class_name != "location_box") continue;
           const std::string tag = detail(o, "tag");
-          if (tag.empty()) continue;
+          if (tag.empty()) {  // 태그 못 읽음 — 윗면이 잘리지 않았으면 도면 장소 0.35 m 안의 것을 그 장소 상자로 (진입점 다시 잡기용)
+            if (detail(o, "cut") == "true") continue;
+            const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y);
+            for (size_t li = 0; li < loc_boxes_.size() && li < loc_any_.size(); ++li)
+              if (std::hypot(a.x - loc_boxes_[li].x, a.y - loc_boxes_[li].y) < 0.35)
+                loc_any_[li] = LocSeen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+            continue;
+          }
           loc_whole_[tag] = LocSeen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
         }
       for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
@@ -2007,47 +2016,57 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       go_near(box, px, py, done, k + 1, poses);
     };
   if (to[0] != 'L' || realign_m_ <= 0.0) { run({stow(), nav(m), dock(f)}, after); return; }
-  // 장소 상자: Nav2 도착(±0.15 m · ±40°) 뒤 상자 쪽으로 돌아 보고, 인지 상자 정면에서 옆으로 realign_m 넘게 벗어났으면
-  //   인지 가운데 기준 진입점으로 Nav2 한 번 더 (11-22 사용자 · 실기 nav_1122_030435 L3: 진입점이 도면 기준이라 13 cm + Nav2 오차 12.6 cm
-  //   → 정면에서 26 cm 옆에서 approach를 시작해 비스듬히 붙음). 상자 쪽으로 먼저 도는 건 방향 오차로 상자가 화면 밖일 수 있어서
-  run({stow(), nav(m)}, [this, box, to, m, f, n, cx, cy, after, nav, dock](bool ok, const std::string & why) {
-    if (!ok) { after(false, why); return; }
-    Pose2 r;
-    if (!robot_map(r)) { run({dock(f)}, after); return; }
-    const auto bm = to_map(cx, cy);
-    const double face = std::atan2(bm.y - r.y, bm.x - r.x);
-    const rclcpp::Time t_turn = now();
-    run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("turn")},
-        [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn](bool, const std::string &) {
-      realign_timer_ = create_wall_timer(std::chrono::duration<double>(realign_wait_s_), [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn]() {
-        realign_timer_->cancel();
-        const size_t li = static_cast<size_t>(std::stoi(to.substr(1)) - 1);
-        const auto it = li < loc_tags_.size() ? loc_whole_.find(str(loc_tags_[li])) : loc_whole_.end();
-        Pose2 r;
-        if (it == loc_whole_.end() || it->second.t < t_turn || !robot_arena(r)) {
-          RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 장소 태그를 못 읽음, 그대로 approach", to.c_str());
-          run({dock(f)}, after);
-          return;
-        }
-        double mx, my;
-        spot_map(*tf_buffer_, it->second.s, mx, my, 1e9);
-        const Pose2 a = to_arena(mx, my, 0.0);
-        const double lat = -(r.x - a.x) * std::sin(n.yaw) + (r.y - a.y) * std::cos(n.yaw);  // 변 법선에서 옆으로
-        if (std::abs(lat) <= realign_m_) {
-          RCLCPP_INFO(get_logger(), "%s 진입점 — 인지 상자 정면에서 옆 %.3f m, 그대로 approach", to.c_str(), lat);
-          run({dock(f)}, after);
-          return;
-        }
-        const double dx = a.x - cx, dy = a.y - cy;
-        const auto m2 = to_map(n.x + dx, n.y + dy, n.yaw);
-        const auto bf = to_arena(f.x, f.y, f.yaw);
-        const auto f2 = to_map(bf.x + dx, bf.y + dy, bf.yaw);
-        RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 상자 정면에서 옆 %.3f m (> %.2f) · 상자가 진입 기준에서 (%+.1f, %+.1f) cm → 진입점 다시",
-                    to.c_str(), lat, realign_m_, dx * 100, dy * 100);
-        run({nav(m2), dock(f2)}, after);
+  // 장소 상자 (11-22 사용자): Nav2 → 상자 쪽으로 돌아 봄 → 인지 상자 정면에서 옆으로 realign_m 넘게 벗어났으면 인지 가운데 기준
+  //   진입점으로 Nav2 다시 (realign_tries번까지) → 직선 도킹. 인지 = 장소 태그(윗면 정중앙)를 읽은 관측, 없으면 잘리지 않은 location_box
+  //   (실기 06:51: L3를 도면 진입점으로 가 상자가 12~20 cm 옆 → 대각선으로 꺾다 막힘 · L2 Nav2 도착 옆 11 cm → 51° 틀어져 막힘)
+  const size_t li = static_cast<size_t>(std::stoi(to.substr(1)) - 1);
+  const Pose2 f_a = to_arena(f.x, f.y, f.yaw);
+  auto step = std::make_shared<std::function<void(const Pose2 &, const Pose2 &, double, double, int)>>();
+  *step = [this, step, to, li, n, cx, cy, f_a, after, nav, dock](const Pose2 & mm, const Pose2 & ff, double bx, double by, int tries) {
+    run({stow(), nav(mm)}, [this, step, to, li, n, cx, cy, f_a, after, dock, ff, bx, by, tries](bool ok, const std::string & why) {
+      if (!ok) { after(false, why); return; }
+      Pose2 r;
+      if (!robot_map(r)) { run({dock(ff)}, after); return; }
+      const auto bm = to_map(bx, by);
+      const double face = std::atan2(bm.y - r.y, bm.x - r.x);
+      const rclcpp::Time t_turn = now();
+      run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("turn")},
+          [this, step, to, li, n, cx, cy, f_a, after, dock, ff, tries, t_turn](bool, const std::string &) {
+        realign_timer_ = create_wall_timer(std::chrono::duration<double>(realign_wait_s_),
+                                           [this, step, to, li, n, cx, cy, f_a, after, dock, ff, tries, t_turn]() {
+          realign_timer_->cancel();
+          const LocSeen * o = nullptr;
+          const char * src = "태그";
+          if (li < loc_tags_.size()) {
+            const auto it = loc_whole_.find(str(loc_tags_[li]));
+            if (it != loc_whole_.end() && it->second.t >= t_turn) o = &it->second;
+          }
+          if (!o && li < loc_any_.size() && loc_any_[li] && loc_any_[li]->t >= t_turn) { o = &*loc_any_[li]; src = "상자"; }
+          Pose2 r;
+          if (!o || !robot_arena(r)) {
+            RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 상자를 못 봄, 그대로 approach", to.c_str());
+            run({dock(ff)}, after);
+            return;
+          }
+          double mx, my;
+          spot_map(*tf_buffer_, o->s, mx, my, 1e9);
+          const Pose2 a = to_arena(mx, my, 0.0);
+          const double lat = -(r.x - a.x) * std::sin(n.yaw) + (r.y - a.y) * std::cos(n.yaw);  // 변 법선에서 옆으로
+          if (std::abs(lat) <= realign_m_ || tries >= realign_tries_) {
+            RCLCPP_INFO(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m%s, approach", to.c_str(), src, lat,
+                        std::abs(lat) <= realign_m_ ? "" : " (다시 잡기 다 씀)");
+            run({dock(ff)}, after);
+            return;
+          }
+          const double dx = a.x - cx, dy = a.y - cy;  // 처음 진입 기준 가운데에서 인지 가운데까지
+          RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m (> %.2f) · 상자가 기준에서 (%+.1f, %+.1f) cm → 진입점 다시 (%d/%d)",
+                      to.c_str(), src, lat, realign_m_, dx * 100, dy * 100, tries + 1, realign_tries_);
+          (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1);
+        });
       });
     });
-  });
+  };
+  (*step)(m, f, cx, cy, 0);
 }
 
 // ---------- 장소 상자 — 칸은 인지한 상자 가운데(윗면 정중앙 태그) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
