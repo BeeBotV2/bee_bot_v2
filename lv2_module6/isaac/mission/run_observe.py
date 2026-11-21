@@ -59,7 +59,7 @@ def main():
         f = c.call_async(Trigger.Request())
         rclpy.spin_until_future_complete(n, f, timeout_sec=10.0)
         log.info(f'적재함 장부: {f.result().message if f.result() else "응답 없음"}')
-    st = {'phase': None, 'last': None, 'last0': None, 'started': False, 'running': False, 'done': None, 'msg': None, 'qr': None, 't': 0}
+    st = {'phase': None, 'last': None, 'last0': None, 'started': False, 'running': False, 'done': None, 'msg': None, 'qr': None, 't': 0, 'decoded': None}
 
     def on_state(msg):
         st['phase'], st['msg'] = msg.phase, msg
@@ -80,6 +80,8 @@ def main():
             log.info(f'바코드 인지: {msg.data!r}')
 
     def on_signal(msg):
+        if msg.ok:   # 해독기가 확정한 마지막 답 (미션이 받기 전에 끝나도 결과에 보여 줌)
+            st['decoded'] = (msg.red, msg.yellow, msg.green, msg.raw)
         if st['started']:
             log.info(f'신호 사이클: {msg.raw or "-"} · R{msg.red} Y{msg.yellow} G{msg.green} · ok={msg.ok}'
                      + (f' · {msg.error}' if msg.error else '') + f' · 연속 {msg.cycles}')
@@ -87,6 +89,7 @@ def main():
     n.create_subscription(MissionState, '/mission/state', on_state, latched)
     n.create_subscription(String, '/mission/qr', on_qr, latched)
     n.create_subscription(MissionSignal, '/mission/signal_status', on_signal, 10)
+    n.create_subscription(MissionSignal, '/mission/signal', on_signal, latched)   # 시작 전에 확정된 답 (latched)
 
     def tick():
         st['t'] += 1
@@ -122,17 +125,32 @@ def main():
         sys.exit(1)
 
     s = st['msg']
-    got = (s.count_r, s.count_y, s.count_g) if s else (0, 0, 0)
+    mission = (s.count_r, s.count_y, s.count_g) if s and (s.count_r or s.count_y or s.count_g) else None
+    dec = st['decoded']
+    got = mission or (dec[:3] if dec else None)
     ok_sig = want is None or got == want
-    ok_code = not a.code or a.only == 'signal' or (s and s.barcode == a.code)
-    print('\n=== 관측 결과 ===')
-    print(f'단계 끝: {st["done"]}' + (f' · 오류 {s.error}' if s and s.error else ''))
-    if a.only != 'signal':
-        print(f'바코드: {s.barcode if s else ""!r}' + (f'  (기대 {a.code} → {"맞음" if ok_code else "틀림"})' if a.code else ''))
-    print(f'신호: R{got[0]} Y{got[1]} G{got[2]}' + (f'  (기대 {a.expect.upper()} → {"맞음" if ok_sig else "틀림"})' if want else ''))
-    print(f'L1~L3 그룹: {s.order if s and s.order else "-"}')
-    sys.exit(0 if st['done'] == 'DONE' and ok_sig and ok_code else 1)
+    code = (s.barcode if s and s.barcode else '') or (st['qr'] or '')
+    ok_code = not a.code or a.only == 'signal' or code == a.code
 
+    def judge(ok, have):
+        return '맞음' if ok else ('틀림' if have else '못 읽음')
+    print('\n=== 관측 결과 ===')
+    print(f'결과: {"성공" if st["done"] == "DONE" else "실패"} ({st["done"]})' + (f' · 이유 {s.error}' if s and s.error else ''))
+    if a.only != 'signal':
+        line = f'바코드: {code or "(못 읽음)"}'
+        if code and not (s and s.barcode):
+            line += '  [인지는 읽었지만 미션이 받기 전에 끝남]'
+        print(line + (f'  · 기대 {a.code} → {judge(ok_code, bool(code))}' if a.code else ''))
+    if got:
+        src = '미션' if mission else '해독기 확정 (미션이 받기 전에 끝남)'
+        raw = f'  [{dec[3]}]' if dec and dec[3] else ''
+        line = f'신호: R{got[0]} Y{got[1]} G{got[2]}{raw}  · 출처 {src}'
+    else:
+        line = '신호: (확정 못 함)'
+    print(line + (f'  · 기대 {a.expect.upper()} → {judge(ok_sig, bool(got))}' if want else ''))
+    print(f'L1~L3 그룹: {s.order if s and s.order else "-"}')
+    print('미션 기록: Jetson ~/.ros/mission/ 가장 최근 폴더 (signal.json · error.json · photos/)')
+    sys.exit(0 if st['done'] == 'DONE' and ok_sig and ok_code else 1)
 
 if __name__ == '__main__':
     main()

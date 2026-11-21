@@ -413,7 +413,9 @@ private:
   rclcpp::Subscription<perception::msg::TrackedObjectArray>::SharedPtr objects_sub_;
   rclcpp::Subscription<plan::msg::BasketState>::SharedPtr basket_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr photo_sub_;
-  rclcpp::TimerBase::SharedPtr timer_, markers_timer_;
+  rclcpp::TimerBase::SharedPtr timer_, markers_timer_, cam_timer_;
+  rclcpp::Time cam_req_at_{0, 0, RCL_ROS_TIME};
+  int cam_tries_ = 0;
   diagnostic_updater::Updater diag_{this};
 };
 

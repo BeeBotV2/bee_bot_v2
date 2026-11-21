@@ -506,7 +506,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     barcode_height_m: 0.15 # [m] 바코드 중심 높이 — 인지한 높이가 0.03~0.8 m 밖일 때만 씀 (11-12 gaze 화면 가운데 기준 추정)
     arm_sag_rad: 0.25 # [rad] gaze 유지 중 관절이 도착 값에서 이만큼 넘게 벗어나면 팔 처짐으로 보고 정지 (0 = 끔)
     motor_error_stop: true # OpenCR 모터 에러(과부하 등) 진단이 뜨면 미션 바로 정지 (motor_error: … — ~/reboot_motors 뒤 다시)
-    signal_preroll_s: 30.0 # [s] 관측 시작 이만큼 전까지 끝난 신호 사이클도 받음 (해독기는 미션 전부터 읽음 · 한 사이클 약 27 s)
+    signal_preroll_s: 60.0 # 11-21 30 → 60: 실기 21:43 시작 31 s 전 확정을 1 s 차이로 버림 · [s] 관측 시작 이만큼 전까지 끝난 신호 사이클도 받음 (해독기는 미션 전부터 읽음 · 한 사이클 약 27 s)
     signal_timeout_s: 150.0 # [s] 관측(BARCODE) 시작부터 신호 확정까지 — 바코드와 같이 봄 (한 사이클 약 27초 · 12개 한 번이면 확정)
     signal_read_min_s: 60.0 # [s] 바코드에 시간을 다 써도 READ에 들어온 뒤 최소 이만큼은 신호를 봄
     light_check_s: 8.0 # [s] 관측 시작 뒤 이만큼 pole_front_cam에 신호등이 안 보이면 경고 (방향·팔 가림)
