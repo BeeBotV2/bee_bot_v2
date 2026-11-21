@@ -95,20 +95,23 @@ TEST(BoxTodo, PicksNewAndMovedPucksOnly) {
   EXPECT_TRUE(plan::box_todo(false, true, false));  // 다른 상자로 알던 퍽 (S6의 퍽 5)
 }
 
-TEST(FreeSpot, CentreThenEmptyRingPoint) {
-  // 상자 위 다른 퍽 없음 → 가운데
-  auto p = plan::free_spot(1.0, 2.0, {}, 0.05, 0.065);
-  EXPECT_DOUBLE_EQ(p.first, 1.0);
-  EXPECT_DOUBLE_EQ(p.second, 2.0);
-  // 가운데 옆 2 cm에 퍽 → 둘레 8방향 중 그 퍽에서 6.5 cm 넘는 첫 점
-  const std::vector<std::pair<double, double>> one = {{1.02, 2.0}};
-  p = plan::free_spot(1.0, 2.0, one, 0.05, 0.065);
-  EXPECT_GE(std::hypot(p.first - 1.02, p.second - 2.0), 0.065);
-  EXPECT_NEAR(std::hypot(p.first - 1.0, p.second - 2.0), 0.05, 1e-9);
-  // 빈 곳이 없으면 다른 퍽에서 가장 먼 점
-  const std::vector<std::pair<double, double>> crowd = {{1.0, 2.0}, {1.03, 2.03}, {0.97, 1.97}, {1.03, 1.97}, {0.97, 2.03}};
-  p = plan::free_spot(1.0, 2.0, crowd, 0.05, 0.065);
-  double d = 1e9;
-  for (const auto & o : crowd) d = std::min(d, std::hypot(o.first - p.first, o.second - p.second));
-  EXPECT_GT(d, 0.03);
+TEST(FreeSpot, NearRobotOnBoxAwayFromOthers) {
+  // 로봇 (0, 0) 앞(+x) · 상자 가운데 (0.25, 0.02) 반지름 한도 0.0625 · 바라는 앞 0.21
+  const double lim = 0.0625;
+  auto p = plan::free_spot(0, 0, 0, 0.25, 0.02, lim, 0.21, {}, 0.05, 0.065);
+  EXPECT_NEAR(p.first, 0.21, 1e-9);  // 다른 퍽 없음 → 로봇 앞 0.21 · 옆은 상자 가운데 줄
+  EXPECT_NEAR(p.second, 0.02, 1e-9);
+  // 그 자리 옆에 퍽 → 옆으로 옮긴 빈 곳 · 상자 윗면 안 · 로봇 쪽(앞 0.21 아래)으로는 안 감
+  const std::vector<std::pair<double, double>> one = {{0.215, 0.0}};
+  p = plan::free_spot(0, 0, 0, 0.25, 0.02, lim, 0.21, one, 0.05, 0.065);
+  EXPECT_GE(std::hypot(p.first - 0.215, p.second - 0.0), 0.065);
+  EXPECT_LE(std::hypot(p.first - 0.25, p.second - 0.02), lim + 1e-9);
+  EXPECT_GE(p.first, 0.21 - 1e-9);
+  // 바라는 점이 상자 밖(상자가 멀리) → 윗면 안으로 당김
+  p = plan::free_spot(0, 0, 0, 0.40, 0.0, lim, 0.21, {}, 0.05, 0.065);
+  EXPECT_NEAR(p.first, 0.40 - lim, 1e-9);
+  // 빈 곳이 없으면 다른 퍽에서 가장 먼 후보 (상자 윗면 안)
+  const std::vector<std::pair<double, double>> crowd = {{0.21, 0.02}, {0.23, 0.07}, {0.23, -0.03}, {0.27, 0.02}};
+  p = plan::free_spot(0, 0, 0, 0.25, 0.02, lim, 0.21, crowd, 0.05, 0.065);
+  EXPECT_LE(std::hypot(p.first - 0.25, p.second - 0.02), lim + 1e-9);
 }

@@ -91,9 +91,11 @@ const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedOb
 //   다른 상자 퍽으로 알던 퍽은 할 일 (떨어뜨렸거나 옮겨짐)
 inline bool box_todo(bool in_basket, bool known, bool same_box) { return !in_basket && (!known || !same_box); }
 
-// 못 실은 퍽을 상자에 되돌릴 자리 (test_mission_memory): 가운데 → 가운데에서 ring 떨어진 8방향 중 다른 퍽(others)에서 clear 넘게 떨어진
-//   첫 점 · 그런 점이 없으면 가장 먼 점 — 11-21 실기 S2: 본 자리로 되돌린 퍽 9가 퍽 0과 5 cm라 퍽 0 pick이 퍽 9에 얹혀 막힘
-std::pair<double, double> free_spot(double cx, double cy, const std::vector<std::pair<double, double>> & others, double ring, double clear);
+// 못 실은 퍽을 상자에 되돌릴 자리 (test_mission_memory): 로봇(rx, ry, ryaw) 앞 want_x · 옆은 상자 가운데 줄인 점을 상자 윗면 안
+//   (가운데 cx, cy에서 lim)으로 당기고, 거기서 옆 → 조금 앞 순서로 ring만큼 옮긴 후보 중 다른 퍽(others)에서 clear 넘게 떨어진 첫 점 ·
+//   없으면 가장 먼 점. 로봇 쪽으로는 안 옮김 — 11-21 실기: S2 5 cm 옆에 되돌린 퍽에 다음 pick이 얹힘 · 상자 가운데는 팔 끝(0.25 m)에 걸림
+std::pair<double, double> free_spot(double rx, double ry, double ryaw, double cx, double cy, double lim, double want_x,
+                                    const std::vector<std::pair<double, double>> & others, double ring, double clear);
 
 class MissionManager : public rclcpp::Node {
 public:
@@ -302,7 +304,7 @@ private:
   std::set<int> on_box_;                                  // 지금 시작 박스 위에 있는 퍽 tag (집으면 빠지고, 되돌려 놓은 게 확인되면 다시)
   // 못 실은 퍽을 상자 빈 자리에 되돌리고 inspect로 다시 봄 → next(놓았나)
   void put_back(size_t b, int tag, const std::string & why, std::function<void(bool)> next);
-  double put_back_ring_m_ = 0.05, put_back_clear_m_ = 0.065;  // free_spot ring · clear (plan.yaml put_back_ring_m · put_back_clear_m)
+  double put_back_ring_m_ = 0.05, put_back_clear_m_ = 0.065, put_back_x_m_ = 0.21;  // free_spot (plan.yaml put_back_*)
   plan::msg::BasketState::ConstSharedPtr basket_;  // 적재함 장부 — coordinator가 씀 (/coordinator/basket), 여기선 읽기만
   int basket_slot_of(int tag) const;   // 그 tag가 실린 칸 (없으면 −1)
   bool basket_has_room() const;        // 빈 칸이 있나 (장부를 아직 못 받았으면 있다고 봄)
