@@ -131,6 +131,12 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
     RCLCPP_WARN(get_logger(), "start_box_retreat %zu개 ≠ 박스 %zu개 — 무시", retreat.size(), start_boxes_.size());
   else
     for (size_t i = 0; i < retreat.size(); ++i) start_boxes_[i].retreat = retreat[i];
+  // 장소 상자도 같은 방식 (11-22 사용자) — exit_turn_clear_m(회전 여유) 위에 상자마다 더 물러날 거리 [L1, L2, L3]
+  const auto loc_retreat = declare_parameter<std::vector<double>>("location_box_retreat", std::vector<double>{});
+  if (!loc_retreat.empty() && loc_retreat.size() != loc_boxes_.size())
+    RCLCPP_WARN(get_logger(), "location_box_retreat %zu개 ≠ 장소 %zu개 — 무시", loc_retreat.size(), loc_boxes_.size());
+  else
+    for (size_t i = 0; i < loc_retreat.size(); ++i) loc_boxes_[i].retreat = loc_retreat[i];
   puck_dx_ = declare_parameter<std::vector<double>>("puck_offsets_x", {-0.040, 0.040});
   box_top_z_ = declare_parameter<double>("box_top_z", 0.070);
   puck_h_ = declare_parameter<double>("puck_height", 0.060);
@@ -2010,7 +2016,9 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   0.109 m만 물러나 면까지 0.228 m < 뒤 모서리 회전 반경 0.288 → 복귀 회전에서 상자에 걸림)
       if (ok) {
         creep_used_ = 0.0; backed_ = 0.0;
-        const double b = std::max(std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0), exit_turn_clear_ - gap);
+        //   start_box_retreat · location_box_retreat는 첫 진입 면에서 그 위에 더 (회전 여유를 채운 뒤에도 더 물러날 상자)
+        const double extra = k == 0 ? box.retreat : 0.0;
+        const double b = std::max(std::hypot(cx - n.x, cy - n.y) - box.half - gap, exit_turn_clear_ - gap) + extra;
         back_ = fmt("%.3f", b);
         done(true, "");
         return;
