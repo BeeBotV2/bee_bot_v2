@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 주행 디버깅용 rosbag 녹화 (PC) — 가벼운 토픽만 (영상·점구름 제외: Wi-Fi로 받으면 RViz·Jetson 송신이 막힘)
+# 주행 · 매니퓰레이터 디버깅용 rosbag 녹화 (PC) — 가벼운 토픽만 (영상·점구름 제외: Wi-Fi로 받으면 RViz·Jetson 송신이 막힘)
 #   켜 두면 운행 시작을 기다렸다가 녹화: 새 /task/sub_goals(미션·approach 계획) 또는 첫 /plan이 오는 순간부터.
 #   그 전(RViz만 켜 둔 시간)은 버림. Ctrl-C(또는 start.sh가 RViz 끌 때)로 끝내면 파일을 닫음.
 #   ./record.sh                         # → ~/bee_bags/nav_<월일_시분초>/
@@ -20,7 +20,15 @@ TOPICS=(/tf /tf_static /odom /odometry/filtered /cuvslam/odom /imu /joint_states
         /collision_monitor_state /collision_monitor/triggering_points /polygon_approach
         /navigate_to_pose/_action/feedback /skills/navigate/_action/feedback
         /task/status /task/sub_goals /state/collision /state/operation_mode /arena/correction /tracked_objects /rosout
-        /mission/state /arena/walls_cloud /lookahead_point /lookahead_collision_arc)  # 11-18: 미션 단계 · 도면 벽 점(collision_monitor 입력) · RPP carrot·충돌 검사 호
+        /mission/state /arena/walls_cloud /lookahead_point /lookahead_collision_arc  # 11-18: 미션 단계 · 도면 벽 점(collision_monitor 입력) · RPP carrot·충돌 검사 호
+        # 11-21 매니퓰레이터: 관절 전류는 /joint_states effort · 막힘·과부하 이벤트 · 손 카메라 상대 위치 · skill 단계 · 팔 궤적 · 보정 정책
+        /arm_safety_event /hand_relative /hand_relative/target /skill_context /rl_arm_correction/debug
+        /arm_controller/controller_state /arm_controller/joint_trajectory /display_planned_path /trajectory_execution_event
+        /execute_trajectory/_action/feedback /gripper_controller/gripper_cmd/_action/feedback /attached_collision_object
+        /state/devices/arm /state/devices/gripper /arena/correction /localization/wall_fit /localization/map_to_odom
+        /skills/pick/_action/feedback /skills/pick_far/_action/feedback /skills/load/_action/feedback /skills/unload/_action/feedback
+        /skills/place/_action/feedback /skills/inspect/_action/feedback /skills/pose/_action/feedback /skills/stand/_action/feedback
+        /skills/stand_pick/_action/feedback /skills/approach/_action/feedback /task/current_plan)
 OUT="${RVIZ_BAG_DIR:-$HOME/bee_bags}/nav_$(date +%m%d_%H%M%S)"
 mkdir -p "$(dirname "$OUT")"
 
