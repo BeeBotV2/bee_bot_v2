@@ -131,7 +131,6 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   else
     for (size_t i = 0; i < retreat.size(); ++i) start_boxes_[i].retreat = retreat[i];
   puck_dx_ = declare_parameter<std::vector<double>>("puck_offsets_x", {-0.040, 0.040});
-  survey_recheck_ = declare_parameter<bool>("survey_recheck", survey_recheck_);
   box_top_z_ = declare_parameter<double>("box_top_z", 0.070);
   puck_h_ = declare_parameter<double>("puck_height", 0.060);
   grid_step_ = declare_parameter<double>("grid_step", 0.060);
@@ -390,7 +389,6 @@ void MissionManager::on_command(const std::string & cmd) {
   puck_seen_.clear();
   box_seen_.clear();
   on_box_.clear();
-  rechecked_.clear();
   alloc_.clear();
   jobs_.clear();
   order_.clear();
@@ -863,7 +861,7 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
     run_retry(goals, [this, b, box, cx, cy](bool ok2, const std::string & why2) {
       if (!ok2) RCLCPP_WARN(get_logger(), "시작 박스 %zu inspect 실패 (%s) — 본 것만", b + 1, why2.c_str());
       snap("box" + str(static_cast<int>(b) + 1));
-      auto found = collect(b, cx, cy, false);
+      auto found = collect(b, cx, cy);
       for (int missing = static_cast<int>(puck_dx_.size()) - static_cast<int>(found.size()); missing > 0; --missing)
         result("box " + str(static_cast<int>(b) + 1) + ": tag_unread");
       load(b, found, 0);
@@ -874,8 +872,8 @@ void MissionManager::survey(size_t k) {  // k = 방문 순서 인덱스 (survey_
 // 박스 윗면 위에서 tag를 읽은 퍽 전부 (자리 제한 없음) — 예전엔 발제 자리(X±40, Y=0)에서 4 cm(match_radius) 안만 봐서
 //   퍽이 비켜 있거나 위치 오차가 있으면 하나도 못 찾고 pick 없이 지나감 (실기 11-20 box4·box5). 집기는 원래 tag로 찾음.
 //   이미 아는 tag도 적재함에 없고 이 상자에 있다고 적혀 있지 않으면 할 일로 다시 적음 — 11-21 실기 S6: S4에서 되돌리지 못하고 들고 온
-//   퍽 5가 S6에 떨어져 퍽이 3개였는데 '아는 tag'라 건너뜀. again(다시 보기)이면 이 상자에 되돌려 둔 퍽(on_box_)은 BUILD 몫이라 건너뜀
-std::vector<int> MissionManager::collect(size_t b, double cx, double cy, bool again) {
+//   퍽 5가 S6에 떨어져 퍽이 3개였는데 '아는 tag'라 건너뜀
+std::vector<int> MissionManager::collect(size_t b, double cx, double cy) {
   const Box & box = start_boxes_[b];
   std::vector<int> found;
   if (objects_) for (const auto & o : objects_->objects) {
@@ -886,7 +884,7 @@ std::vector<int> MissionManager::collect(size_t b, double cx, double cy, bool ag
     if (std::count(found.begin(), found.end(), tag)) continue;  // 같은 tag 트랙 둘
     const auto at = puck_at_.find(tag);
     const bool known = at != puck_at_.end();
-    if (!box_todo(basket_slot_of(tag) >= 0, known, known && at->second.first == b, on_box_.count(tag) > 0, again)) continue;
+    if (!box_todo(basket_slot_of(tag) >= 0, known, known && at->second.first == b)) continue;
     const auto a = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
     const double dx = a.x - box.x, dy = a.y - box.y;
     if (!known) pucks_.push_back({tag, o.color, detail(o, "shape")});
@@ -905,24 +903,8 @@ std::vector<int> MissionManager::collect(size_t b, double cx, double cy, bool ag
   return found;
 }
 
-void MissionManager::recheck(size_t b) {
-  rechecked_.insert(b);
-  const auto [cx, cy] = here(box_seen_[b]);
-  note("시작 박스 " + str(static_cast<int>(b) + 1) + " 떠나기 전 다시 보기");
-  run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")},
-    [this, b, cx = cx, cy = cy](bool, const std::string &) {
-      const auto found = collect(b, cx, cy, true);
-      if (!found.empty()) result("box " + str(static_cast<int>(b) + 1) + ": recheck +" + str(static_cast<int>(found.size())));
-      load(b, found, 0);
-    });
-}
-
 void MissionManager::load(size_t b, std::vector<int> found, size_t k) {
-  if (k >= found.size()) {
-    if (survey_recheck_ && !rechecked_.count(b) && basket_has_room()) { recheck(b); return; }
-    survey(survey_k_ + 1);
-    return;
-  }
+  if (k >= found.size()) { survey(survey_k_ + 1); return; }
   if (!basket_has_room()) { load(b, found, found.size()); return; }  // 꽉 참 — 나머지는 BUILD 때 시작 박스에서 직접
   const int tag = found[k];
   ctx_ = "\"box\": " + str(static_cast<int>(b) + 1) + ", \"tag\": " + str(tag);
