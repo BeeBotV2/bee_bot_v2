@@ -65,3 +65,19 @@ TEST(LookPlan, NothingToSee) {
   Score s;
   EXPECT_FALSE(search({}, Params{}, q, s));
 }
+
+TEST(LookPlan, SearchCoversRobotSide) {
+  // 11-21 실기 S1: 도킹(상자 가운데 base_footprint 앞 약 0.22 m) 뒤 look에서 차체 쪽 퍽을 놓침 →
+  //   inspect가 퍽이 모자라면 본 퍽 + 상자 가운데 + 로봇 쪽으로 5 cm 당긴 점 둘(옆 ±4 cm)을 담는 자세를 찾음
+  const Params prm;
+  const std::vector<V3> tops = {{0.26, 0.04, 0.13}, {0.2215, 0.0, 0.13}, {0.1715, -0.04, 0.13}, {0.1715, 0.04, 0.13}};
+  Q5 q;
+  Score s;
+  ASSERT_TRUE(search(tops, prm, q, s, 0));
+  EXPECT_DOUBLE_EQ(s.cover, 1.0);
+  for (const auto & p : tops) {
+    double u, v, d;
+    ASSERT_TRUE(project(q, p, prm, u, v, d));
+    EXPECT_FALSE(u > prm.finger_u0 && u < prm.finger_u1 && v > prm.finger_v0);
+  }
+}
