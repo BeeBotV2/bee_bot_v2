@@ -2023,8 +2023,15 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   const Pose2 f_a = to_arena(f.x, f.y, f.yaw);
   auto step = std::make_shared<std::function<void(const Pose2 &, const Pose2 &, double, double, int)>>();
   *step = [this, step, to, li, n, cx, cy, f_a, after, nav, dock](const Pose2 & mm, const Pose2 & ff, double bx, double by, int tries) {
-    run({stow(), nav(mm)}, [this, step, to, li, n, cx, cy, f_a, after, dock, ff, bx, by, tries](bool ok, const std::string & why) {
-      if (!ok) { after(false, why); return; }
+    // 다시 잡을 때 진입점이 가까우면(0.4 m 안) Nav2 대신 approach 정밀 이동(drive_straight, 1 cm) — Nav2는 목표 허용 오차(약 15 cm) 안이면
+    //   '이미 도착'으로 안 움직임 (시뮬 11-22: L1 옆 5.9 cm를 Nav2로 두 번 다시 보내도 그대로)
+    Pose2 r0;
+    const bool near_entry = tries > 0 && robot_map(r0) && std::hypot(mm.x - r0.x, mm.y - r0.y) < 0.4;
+    const SubGoal go = near_entry ? SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", mm.x, mm.y, mm.yaw)).set__relation("drive_straight")
+                                  : nav(mm);
+    run({stow(), go}, [this, step, to, li, n, cx, cy, f_a, after, dock, ff, bx, by, tries](bool ok, const std::string & why) {
+      if (!ok && tries == 0) { after(false, why); return; }
+      if (!ok) RCLCPP_WARN(get_logger(), "%s 진입점 다시 서기 실패 (%s) — 그 자리에서 봄", to.c_str(), why.c_str());
       Pose2 r;
       if (!robot_map(r)) { run({dock(ff)}, after); return; }
       const auto bm = to_map(bx, by);
