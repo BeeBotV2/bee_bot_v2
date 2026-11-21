@@ -78,6 +78,8 @@ ArmIO::ArmIO(rclcpp::Node & node)
   fade_sag_ = node.create_client<std_srvs::srv::Trigger>("/rl_arm_correction/fade_sag");
   ctx_pub_ = node.create_publisher<ml::msg::SkillContext>("/skill_context", rclcpp::QoS(10).reliable());
   hand_pub_ = node.create_publisher<perception::msg::HandTarget>("/hand_relative/target", rclcpp::QoS(1).reliable().transient_local());
+  hr_sub_ = node.create_subscription<perception::msg::HandRelative>("/hand_relative", rclcpp::QoS(10),
+    [this](perception::msg::HandRelative::ConstSharedPtr m) { hr_ = m; });
   state_cache_ = ArmStateCache::for_node(node);
   safety_sub_ = node.create_subscription<control::msg::ArmSafetyEvent>("/arm_safety_event", rclcpp::QoS(10).reliable(),
     [this](control::msg::ArmSafetyEvent::ConstSharedPtr m) {
