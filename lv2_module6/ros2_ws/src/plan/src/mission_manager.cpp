@@ -163,7 +163,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   wall_clearance_ = declare_parameter<double>("wall_clearance", 0.22);
   place_tol_ = declare_parameter<double>("place_tol", 0.010);
   place_search_ = declare_parameter<double>("place_search", 0.05);
-  corr_max_ = declare_parameter<double>("tag_correction_max", 0.05);
+  corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
   wall_fit_ = declare_parameter<bool>("arena_corr_wall_fit", wall_fit_);
