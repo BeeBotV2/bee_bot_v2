@@ -15,6 +15,8 @@
 Ctrl+C = abort. 기록: ~/.ros/mission/<시각>/ (allocation.json · build.json · photos/)
 """
 import argparse
+import glob
+import json
 import os
 import re
 import sys
@@ -56,6 +58,7 @@ def main():
             f.write(f'slot {s} {PUCKS[t][1]} {PUCKS[t][0]} {t} 0\n')
         f.write('order ' + ' '.join(str(s) for s in sorted(slots)) + '\nheld - - -1\n')
     start = f'start:PLACE:{a.loc}:{a.code}:{a.counts.upper()}'
+    a_code, a_counts = a.code, a.counts.upper()
 
     ws = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ros2_ws')
     os.environ.setdefault('FASTDDS_DEFAULT_PROFILES_FILE', os.path.join(ws, 'fastdds.xml'))
@@ -74,7 +77,26 @@ def main():
     cmd = n.create_publisher(String, '/cmd/mission', 10)
     st = {'phase': None, 'last': None, 'last0': None, 'started': False, 'running': False, 'done': None, 'msg': None, 't': 0}
 
+    def show_plan():   # 미션이 정한 장소별 배정 (회차 폴더 allocation.json) — 같은 컴퓨터(Jetson)에서 실행할 때
+        runs = sorted(glob.glob(os.path.expanduser('~/.ros/mission/*/allocation.json')), key=os.path.getmtime)
+        if not runs:
+            log.warn('allocation.json 없음 — 배정 표를 못 찍음 (Jetson에서 실행했는지 확인)')
+            return
+        a = json.load(open(runs[-1]))
+        slot_of = {t: s for s, t in slots.items()}
+        log.info(f'=== 장소별 배정 (바코드 {a_code} · 신호 {a_counts} · {os.path.basename(os.path.dirname(runs[-1]))}) ===')
+        for loc, v in a.get('locations', {}).items():
+            pk = v.get('pucks', [])
+            items = ' · '.join(f"칸{p['cell']}←tag{p['tag']}(적재함 {slot_of.get(p['tag'], '?')}, {'/'.join(PUCKS.get(p['tag'], ('?', '?')))})"
+                               for p in pk)
+            log.info(f"{loc}: 그룹 {v.get('group')} = 주사위 {len(pk)} · {items}" + (f" · 빈 칸 {v['empty_cells']}" if v.get('empty_cells') else ''))
+        if not a.get('ok', True):
+            log.error(f"배정 실패: {a.get('why')}")
+
     def on_state(msg):
+        if msg.phase == 'BUILD' and not st.get('plan_shown'):
+            st['plan_shown'] = True
+            show_plan()
         st['phase'], st['msg'] = msg.phase, msg
         line = (msg.phase, msg.note, msg.error, msg.placed)
         if line != st['last']:
