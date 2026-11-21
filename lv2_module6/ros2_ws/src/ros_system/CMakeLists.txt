@@ -36,6 +36,11 @@ add_executable(grid_obstacle_cloud src/grid_obstacle_cloud.cpp)
 target_link_libraries(grid_obstacle_cloud rclcpp::rclcpp tf2_ros::tf2_ros ${nav_msgs_TARGETS} ${sensor_msgs_TARGETS})
 install(TARGETS grid_obstacle_cloud DESTINATION lib/${PROJECT_NAME})
 
+# 카메라 점구름에서 지도 벽 근처 점을 뺌 (src/wall_point_filter.cpp, 11-21) — 전역 costmap 칠하기 입력 ("벽은 지도, 상자는 카메라")
+add_executable(wall_point_filter src/wall_point_filter.cpp)
+target_link_libraries(wall_point_filter rclcpp::rclcpp tf2_ros::tf2_ros ${nav_msgs_TARGETS} ${sensor_msgs_TARGETS})
+install(TARGETS wall_point_filter DESTINATION lib/${PROJECT_NAME})
+
 # cuvslam_slam C++판 (src/cuvslam_slam.cpp, 11-16) — cuVSLAM C++ API(cuvslam2.h)를 바로 부름. 둘 다 있어야 빌드 (없으면 파이썬판만):
 #   헤더 = PyCuVSLAM 소스(v17.0.1, NVIDIA Community License라 저장소에 안 넣음) CUVSLAM_SRC_DIR/libs/cuvslam/cuvslam2.h
 #   라이브러리 = pip로 깐 cuvslam 패키지 안 libcuvslam.so (같은 소스로 빌드한 것 — documents/jetson-orin-nano/CUVSLAM.md)

@@ -458,6 +458,9 @@ def slam_nodes():
         # 노드 이름은 둘 다 cuvslam_slam (파라미터·진단·토픽 같음) — 실행 파일만 고름
         Node(package='ros_system', executable=cuvslam_exe, name='cuvslam_slam', output='screen', condition=on,
              parameters=[{'publish_map_tf': True,
+                          # 11-21: EKF yaw 회전속도에서 cuVSLAM 비중 ↑ (0.0025 → 0.001 — ekf.yaml 실측 64 → 81 %). 실기 nav_1121_160812: 2분 동안
+                          #   자이로 −503° · cuVSLAM −565° · 벽 정합 기준 −554° → cuVSLAM이 실제에 가까움, EKF(−531°)가 덜 돌아 map→odom이 계속 돎
+                          'angular_variance': 0.001,
                           'frame_skip': ParameterValue(LaunchConfiguration('cuvslam_frame_skip'), value_type=int),
                           'map_save_dir': ParameterValue(cuvslam_save, value_type=str),
                           'map_load_dir': ParameterValue(cuvslam_load, value_type=str),
@@ -471,6 +474,8 @@ def slam_nodes():
         Node(package='ros_system', executable='map_tf_relay', name='map_tf_relay', output='screen', condition=on),
         # 도면 벽(/arena/walls_only) → 로봇 주변 점구름 (src/grid_obstacle_cloud.cpp) — collision_monitor 두 번째 입력 (옆·뒤)
         Node(package='ros_system', executable='grid_obstacle_cloud', name='grid_obstacle_cloud', output='screen', condition=on),
+        # 카메라 점구름 − 지도 벽 0.15 m 안 점 (src/wall_point_filter.cpp, 11-21) → 전역 costmap 칠하기 입력 (벽은 지도로만 · 두꺼워지지 않게)
+        Node(package='ros_system', executable='wall_point_filter', name='wall_point_filter', output='screen', condition=on),
         Node(package='ros_system', executable='scan_cam_gate', name='pole_depth_gate', output='screen',
              condition=IfCondition(PythonExpression([*nvblox_any, ' and (not ', *one_proc, ' or ', *hcpp, ') and not ', *gate_cpp])),
              parameters=[gate_params('pole_front_cam')]),

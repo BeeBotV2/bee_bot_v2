@@ -216,12 +216,13 @@ local_costmap:
                              #   (0.02면 꼭대기 0.32 m라 "Sensor origin out of map bounds"로 지우기를 통째로 건너뜀 → 칠하기만 쌓임)
         z_voxels: 16         # VoxelLayer 최대 16
         max_obstacle_height: 0.3
-        mark_threshold: 2    # 0 → 2 (사용자 2026-11-20): 한 기둥에 높이 칸 3개(0.03 × 3 = 9 cm) 이상 차야 장애물 — 떠다니는 depth 잡음 점을 걸러 벽이 얇게
+        mark_threshold: 1    # 0 → 2 (사용자 2026-11-20): 한 기둥에 높이 칸 3개(0.03 × 3 = 9 cm) 이상 차야 장애물 — 떠다니는 depth 잡음 점을 걸러 벽이 얇게
+                             #   11-21 → 1 (사용자: 9 → 5 cm): 칸 2개(0.03 칸이라 5 cm에 가장 가까운 6 cm) — 지도에서 상자를 뺀 no_box에서 높이 7 cm 상자를 카메라로 칠하게
         observation_sources: pole_front_cam
         pole_front_cam:
           topic: /pole_front_cam/depth/color/points_filtered   # perception body_filter가 자기 몸 점을 뺀 것
           data_type: "PointCloud2"
-          min_obstacle_height: 0.06
+          min_obstacle_height: 0.02   # 11-21: 0.06 → 0.02 — 0.06이면 7 cm 상자는 윗 1 cm만 남아 칸 1개 → 못 칠함. 바닥 잡음은 mark_threshold(칸 2개)가 거름
           max_obstacle_height: 0.3
           marking: true
           clearing: true
@@ -264,13 +265,28 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: pole_front_cam
+        # 11-21 "벽은 지도에서, 상자는 카메라에서" — 칠하기는 지도 벽 0.15 m 안 점을 뺀 점구름(wall_point_filter), 지우기(광선)는 원래 점구름.
+        #   카메라가 위치 오차만큼 어긋난 자리에 지도 벽을 한 번 더 칠하면 광선으로 안 지워져 벽이 두꺼워지고 좁은 통로가 닫혔음
+        #   (실기 nav_1121_144601 S1 · 11-15 문틀 7 m 우회). 지도에 없는 것(no_box의 상자 · 떨어진 퍽)은 그대로 칠함
+        observation_sources: pole_front_cam pole_front_cam_clear
         pole_front_cam:
+          topic: /pole_front_cam/depth/color/points_offwall
+          data_type: "PointCloud2"
+          min_obstacle_height: 0.06   # 11-21: 0.04로 낮췄다가 되돌림 — 2D 층은 점 하나로 칸을 칠해 바닥 근처 잡음(4~6 cm)이 S4 진입점 둘레를 막음(실기 nav_1121_144601). 7 cm 상자는 윗면 점으로 이 띠에 들어옴
+          max_obstacle_height: 0.3
+          marking: true
+          clearing: false
+          obstacle_min_range: 0.0
+          obstacle_max_range: 0.8   # 11-21: 1.2 → 0.8 (칠하기만) — 회전 중 yaw 오차 ~10°면 1.2 m 앞 벽이 0.21 m 어긋나 칠해져 wall_point_filter(0.15)를 넘음
+                                    #   (실기 nav_1121_160812 2.9 s: 위쪽 벽 0.16~0.21 m 칸이 S1 짧은 길을 막아 6.4 m 우회). 0.8 m면 0.14 m
+          raytrace_min_range: 0.0
+          raytrace_max_range: 3.0
+        pole_front_cam_clear:   # 지우기 전용 — 벽 앞 칸도 광선으로 계속 지움
           topic: /pole_front_cam/depth/color/points_filtered
           data_type: "PointCloud2"
           min_obstacle_height: 0.06
           max_obstacle_height: 0.3
-          marking: true
+          marking: false
           clearing: true
           obstacle_min_range: 0.0
           obstacle_max_range: 1.2
