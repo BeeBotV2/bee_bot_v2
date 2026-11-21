@@ -100,6 +100,17 @@ Coordinator::Coordinator(const rclcpp::NodeOptions & options)
       res->success = true;
       res->message = "적재함 장부를 비웠습니다";
     });
+  basket_reload_srv_ = create_service<std_srvs::srv::Trigger>("/coordinator/basket_reload",
+    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>, std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+      // 장부 파일(basket_file)을 다시 읽음 — 시험 스크립트가 적재함에 손으로 실은 퍽을 적어 넣은 뒤 (run_place.py)
+      std::fill(basket_.begin(), basket_.end(), PuckInfo{});
+      basket_order_.clear();
+      held_ = PuckInfo{};
+      basket_load();
+      basket_changed();
+      res->success = true;
+      res->message = "적재함 장부를 파일에서 다시 읽었습니다: " + basket_file_;
+    });
   basket_load();
   basket_changed();
   // 단계 시간 제한 기본값 [s] — 실기 한 단계(팔 skill 약 13~20 s · 경기장 끝에서 끝 주행 약 40 s)의 몇 배. 시뮬 시계 기준

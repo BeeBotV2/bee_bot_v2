@@ -142,6 +142,7 @@ struct StartCmd {
   bool diag = false, from_survey = false, given = false;  // given = 바코드·신호를 받음
   std::string barcode;
   Counts counts;
+  int place_loc = -1;  // start:PLACE:L<n>:<바코드>:<신호> — 적재함에 다 실은 채 장소 L<n> 앞에서 BUILD부터 (0부터)
   std::vector<std::string> go_to;  // start:GOTO:S1,S2,L1 — 그 상자들에 미션처럼 다가가기만 (S1~S6 시작 박스 · L1~L3 장소)
 };
 bool parse_start(const std::string & cmd, StartCmd & out, std::string & why);

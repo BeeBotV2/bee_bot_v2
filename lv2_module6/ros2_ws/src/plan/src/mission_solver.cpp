@@ -437,6 +437,16 @@ bool parse_start(const std::string & cmd, StartCmd & out, std::string & why) {
     }
     return true;
   }
+  if (name == "PLACE") {  // start:PLACE:L1:<바코드>:<신호> — 장부의 퍽으로 배정 → 그 장소부터 BUILD (시험용)
+    if (t.size() != 5 || t[2].size() != 2 || t[2][0] != 'L' || t[2][1] < '1' || t[2][1] > '3') { why = "need_loc_barcode_signal"; return false; }
+    bool asc = false;
+    if (!parse_barcode(t[3], asc)) { why = "unknown_barcode"; return false; }
+    if (!parse_counts(t[4], out.counts, why)) return false;
+    out.place_loc = t[2][1] - '1';
+    out.barcode = t[3];
+    out.given = true;
+    return true;
+  }
   if (name != "DIAG" && name != "FROM_SURVEY" && name != "DIAG_FROM_SURVEY") { why = "unknown_command"; return false; }
   out.diag = name.rfind("DIAG", 0) == 0;
   out.from_survey = name != "DIAG";
