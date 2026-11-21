@@ -1183,7 +1183,9 @@ std::vector<int> PerceptionNode::fuse(const std::string & cam, const builtin_int
     if (!d.posture.empty()) tr.yaw_posture = d.posture;
     if (tr.class_name == "start_box" || tr.class_name == "location_box") {  // 상자: 잘림 · 로봇 쪽 면은 최신 관측
       tr.cut = d.cut;
-      if (d.face_pt) { tr.face_pt = d.face_pt; tr.face_dir = d.face_dir; }
+      if (d.face_pt && d.face_dir && take_face(tr.face_pt, tr.face_dir, *d.face_pt, *d.face_dir, d.cut)) {
+        tr.face_pt = d.face_pt; tr.face_dir = d.face_dir;
+      }
     }
   }
   for (size_t i = 0; i < dets.size(); ++i) {
