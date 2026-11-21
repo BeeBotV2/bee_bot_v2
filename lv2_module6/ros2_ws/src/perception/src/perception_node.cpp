@@ -427,6 +427,11 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions & options) : rclcpp::No
     det_pubs_[cam] = create_publisher<TrackedObjectArray>("/perception/" + cam + "/detections", 5);
     debug_pubs_[cam] = create_publisher<Image>("/perception/" + cam + "/debug_image", sensor_qos());
   }
+  grip_color_sub_ = create_subscription<Image>("/gripper_cam/color/image_raw", sensor_qos(), [this](Image::ConstSharedPtr m) {
+    if (m->width < 1280) return;  // 평소 640은 쌍(위)으로 읽음 — 고해상도(엿보기)만 따로
+    std::lock_guard<std::mutex> lk(mutex_);
+    grip_color_ = m;
+  });
   pub_ = create_publisher<TrackedObjectArray>("/tracked_objects", 5);
   diag_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 1);
   using std::chrono::duration;
@@ -1459,23 +1464,41 @@ void PerceptionNode::read_barcodes() {
         if (d) { d->content = hit.text; dets.push_back(*d); }
       }
       if (hit.text.empty()) continue;  // 위치 후보만 검출 — 디코딩 전에는 미션/QR을 갱신하지 않음
-      const double now_w = wall_s();
-      if (hit.text != qr_text_ || now_w - qr_seen_ > QR_GAP_S) {
-        qr_text_ = hit.text;
-        std_msgs::msg::String m;
-        m.data = hit.text;
-        qr_pub_->publish(m);
-        RCLCPP_INFO(get_logger(), "바코드 (%s): %s%s", cam.c_str(), hit.text.c_str(),
-                    barcode_once_ ? " — 이제 바코드는 안 읽음 (barcode_once)" : "");
-      }
-      qr_seen_ = now_w;
-      if (std::regex_match(hit.text, barcode_once_re_)) barcode_text_ = hit.text;  // 미등록 형식이면 계속 읽음
+      publish_barcode(cam, hit.text);
     }
     if (!dets.empty()) {
       std::lock_guard<std::mutex> lk(mutex_);
       fuse(cam, s.stamp, dets);
     }
   }
+  // 손 카메라 고해상도 컬러만 — 위 쌍(컬러·정렬 depth)이 1080p에서 거의 안 맞아 엿보기 사진에 바코드가 또렷해도 못 읽었음
+  //   (11-22 실기 00:02: 1080p 4장 모두 바코드 폭 약 200~400 px · 못 읽고 gaze로 다가가 70 s). 내용만 읽음 (위치는 안 냄)
+  Image::ConstSharedPtr gc;
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    gc.swap(grip_color_);
+  }
+  if (gc && now().seconds() - stamp_s(gc->header.stamp) <= 1.0) {
+    try {
+      for (const auto & hit : barcode_->read(image_to_mat(*gc, true)))
+        if (!hit.text.empty()) publish_barcode("gripper_cam 1080p", hit.text);
+    } catch (const std::exception & e) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "손 카메라 고해상도 바코드 읽기 실패: %s", e.what());
+    }
+  }
+}
+
+void PerceptionNode::publish_barcode(const std::string & cam, const std::string & text) {
+  const double now_w = wall_s();
+  if (text != qr_text_ || now_w - qr_seen_ > QR_GAP_S) {
+    qr_text_ = text;
+    std_msgs::msg::String m;
+    m.data = text;
+    qr_pub_->publish(m);
+    RCLCPP_INFO(get_logger(), "바코드 (%s): %s%s", cam.c_str(), text.c_str(), barcode_once_ ? " — 이제 바코드는 안 읽음 (barcode_once)" : "");
+  }
+  qr_seen_ = now_w;
+  if (std::regex_match(text, barcode_once_re_)) barcode_text_ = text;  // 미등록 형식이면 계속 읽음
 }
 
 void PerceptionNode::on_diag() {

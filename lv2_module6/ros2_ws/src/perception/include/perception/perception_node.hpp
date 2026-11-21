@@ -146,6 +146,9 @@ private:
   std::map<std::string, rclcpp::Publisher<Image>::SharedPtr> debug_pubs_;
   rclcpp::Publisher<Image>::SharedPtr dice_pub_, dice_raw_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr qr_pub_;
+  // 손 카메라 고해상도 컬러만 (정렬 depth 없이) — 1080p 엿보기 동안 컬러·depth 쌍이 거의 안 맞아 바코드 읽기에 안 들어가던 것 (11-22 실기)
+  rclcpp::Subscription<Image>::SharedPtr grip_color_sub_;
+  Image::ConstSharedPtr grip_color_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diag_pub_;
   std::vector<rclcpp::TimerBase::SharedPtr> timers_;
 
@@ -181,6 +184,7 @@ private:
                      const std::vector<Det> & dets, const std::vector<int> & tids);
   void on_publish();
   void read_barcodes();
+  void publish_barcode(const std::string & cam, const std::string & text);
   void on_capture_dice(const std_msgs::msg::Int32 & msg);
   void publish_dice(const cv::Mat & img, const Frame & s, const std::string & what, bool raw);
   void on_diag();
