@@ -2025,8 +2025,15 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       if (ok) {
         creep_used_ = 0.0; backed_ = 0.0;
         //   start_box_retreat · location_box_retreat는 첫 진입 면에서 그 위에 더 (회전 여유를 채운 뒤에도 더 물러날 상자)
-        const double extra = k == 0 ? box.retreat : 0.0;
-        const double b = std::max(std::hypot(cx - n.x, cy - n.y) - box.half - gap, exit_turn_clear_ - gap) + extra;
+        double b = std::max(std::hypot(cx - n.x, cy - n.y) - box.half - gap, exit_turn_clear_ - gap);
+        // 더 물러날 거리는 뒤 벽이 회전 여유(exit_turn_clear_m) 밖인 만큼만 — 면마다 뒤 벽 거리가 달라 (L3 +x면 0.42 m 물러나 동쪽 벽 0.19 m)
+        if (k == 0 && box.retreat > 0.0) {
+          const double c = std::cos(n.yaw), s = std::sin(n.yaw);
+          const double dx = cx - (box.half + gap) * c, dy = cy - (box.half + gap) * s;  // 붙은 자리
+          double e = 0.0;
+          while (e + 0.02 <= box.retreat + 1e-6 && wall_distance(dx - (b + e + 0.02) * c, dy - (b + e + 0.02) * s, walls_) >= exit_turn_clear_) e += 0.02;
+          b += e;
+        }
         back_ = fmt("%.3f", b);
         done(true, "");
         return;
