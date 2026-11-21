@@ -740,26 +740,14 @@ void MissionManager::hires(bool on) {
     RCLCPP_WARN(get_logger(), "손 카메라 파라미터 서비스 없음 — 해상도 %s 못 바꿈", prof.c_str());
     return;
   }
-  const auto t0 = now();
-  cam_params_->set_parameters({rclcpp::Parameter("rgb_camera.color_profile", prof)},
-    [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
-      const auto r = f.get();
-      const bool ok = !r.empty() && r[0].successful;
-      if (!ok) { RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s 실패: %s", prof.c_str(), r.empty() ? "응답 없음" : r[0].reason.c_str()); return; }
-      // realsense-ros는 켜진 스트림의 프로필을 바꾸면 "re-enable the stream for the change to take effect" — 껐다 켜야 적용
-      //   (11-21 실기: 프로필만 바꿔 640 px 그대로 → 엿보기 5 s 뒤 "고해상도 영상이 안 옴")
-      cam_params_->set_parameters({rclcpp::Parameter("enable_color", false)},
-        [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>>) {
-          cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)},
-            [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f2) {
-              const auto r2 = f2.get();
-              const bool ok2 = !r2.empty() && r2[0].successful;
-              if (ok2) RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s (스트림 다시 켬 · %.2f s)", prof.c_str(), (now() - t0).seconds());
-              else RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s — 스트림 다시 켜기 실패: %s", prof.c_str(),
-                               r2.empty() ? "응답 없음" : r2[0].reason.c_str());
-            });
-        });
-    });
+  // realsense-ros는 켜진 스트림의 프로필만 바꾸면 "re-enable the stream for the change to take effect"만 내고 그대로 —
+  //   껐다 켜야 적용 (11-21 실기: 640 px 그대로 → 엿보기 5 s 뒤 "고해상도 영상이 안 옴").
+  //   응답을 기다려 다음을 보내던 방식은 응답 콜백이 안 와 멈췄음(같은 실기 로그에 결과 줄이 없음) → 세 요청을 순서대로 바로 보냄
+  //   (realsense 노드가 한 줄로 처리 · 결과는 cam_info 폭으로 확인 — peek 쪽 hires_at_)
+  cam_params_->set_parameters({rclcpp::Parameter("rgb_camera.color_profile", prof)});
+  cam_params_->set_parameters({rclcpp::Parameter("enable_color", false)});
+  cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)});
+  RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s 요청 (프로필 → 스트림 껐다 켬)", prof.c_str());
 }
 
 void MissionManager::peek_end(const std::string & why) {
