@@ -24,7 +24,7 @@ public:
     drop_m_ = declare_parameter<double>("place_drop_m", 0.0);
     approach_m_ = declare_parameter<double>("place_approach_m", 0.08);        // moveit 방식: 위에서 내려오는 높이
     // sim 방식: 손 안 퍽 바닥이 면 위 이만큼에서 다가와 수직으로 내려감. 이웃 퍽(높이 60 mm)보다 높아야 옆으로 지나갈 때 안 침
-    //   (11/08 실기 주사위 5: 5 cm로 가운데 눈을 놓으러 가다 먼 줄 퍽을 넘어뜨림). 손이 못 닿으면 5 cm(CONTACT_ABOVE_M)로
+    //   (11/08 실기 주사위 5: 5 cm로 가운데 눈을 놓으러 가다 먼 줄 퍽을 넘어뜨림). 손이 못 닿으면 5 · 3 · 2 cm로
     above_m_ = declare_parameter<double>("place_above_m", 0.08);
     // 놓을 때 손가락 벌림 [m] — 0.036(시뮬 place_env release_gap)이면 사각 퍽(30 mm, 대각선 42 mm)이 손 안에서 조금만 기울어도
     //   손가락 사이에 끼어, 박스에 닿은 뒤 퍽을 쥔 채 다시 올라가 공중에서 돌다 떨어져 누움 (11-10 Isaac 퍽 정답 시간선 · 3회 재현).
@@ -96,11 +96,15 @@ private:
       auto above = down;
       above.pose.position.z += above_m_;
       {
+        // 먼 칸은 위 8 cm에서 팔이 안 닿음 (손 수직 — 손끝 z 0.22면 0.21 m · 0.16이면 0.277 m) → 닿는 높이까지 낮춤.
+        //   mission_manager가 먼 칸부터 놓아 그 칸과 로봇 사이엔 퍽이 없음 (11-22 사용자)
         ArmIO::Q5 now{}, q{};
-        if (arm_.arm_now(now) && !arm_.ik_ee_yaw(above, psi, now, q)) {
-          RCLCPP_WARN(get_logger(), "place: 놓을 자리 위 %.0f cm IK 실패 — %.0f cm로 (이웃 퍽을 칠 수 있음)", 100 * above_m_, 100 * CONTACT_ABOVE_M);
-          above.pose.position.z = down.pose.position.z + CONTACT_ABOVE_M;
-        }
+        if (arm_.arm_now(now))
+          for (const double h : {above_m_, CONTACT_ABOVE_M, 0.03, 0.02}) {
+            above.pose.position.z = down.pose.position.z + h;
+            if (arm_.ik_ee_yaw(above, psi, now, q)) break;
+            RCLCPP_WARN(get_logger(), "place: 놓을 자리 위 %.0f cm IK 실패 — 더 낮게", 100 * h);
+          }
       }
       arm_.hand_target("cell", -1, -1, down.pose.position.x, down.pose.position.y, top);
       stage("칸 위");
