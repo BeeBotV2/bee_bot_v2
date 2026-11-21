@@ -248,6 +248,10 @@ private:
   double barcode_height_m_ = 0.15;           // [m] 바코드 중심 높이 — 인지 높이가 이상할 때
   std::string peek_profile_ = "1920x1080x15", cam_profile_ = "640x360x15";
   bool peek_sent_ = false, peek_done_ = false, hires_on_ = false;
+  std::optional<std::array<double, 2>> light_;  // 이번 관측에서 본 신호등 (arena x, y) — 바코드는 그 왼쪽
+  bool scan_from_light_ = true, scan_ = false;
+  size_t scan_k_ = 0;
+  std::vector<double> scan_offsets_{0.15, 0.30, 0.45, 0.60};  // [rad] 신호등 방위에서 왼쪽으로 차례로 gaze
   std::optional<std::array<double, 3>> cand_;  // 이번 관측에서 마지막으로 본 바코드 후보 (arena x, y, map z) — 안 보여도 gaze에 씀
   rclcpp::Time peek_at_{0, 0, RCL_ROS_TIME}, hires_at_{0, 0, RCL_ROS_TIME}, cam_info_at_{0, 0, RCL_ROS_TIME};
   uint32_t cam_width_ = 0;

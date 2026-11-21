@@ -208,6 +208,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   barcode_gaze_after_signal_ = declare_parameter<bool>("barcode_gaze_after_signal", barcode_gaze_after_signal_);
   arm_sag_rad_ = declare_parameter<double>("arm_sag_rad", arm_sag_rad_);
   barcode_peek_ = declare_parameter<bool>("barcode_peek", barcode_peek_);
+  scan_from_light_ = declare_parameter<bool>("barcode_scan_from_light", scan_from_light_);
+  scan_offsets_ = declare_parameter<std::vector<double>>("barcode_scan_offsets", scan_offsets_);
   barcode_peek_s_ = declare_parameter<double>("barcode_peek_s", barcode_peek_s_);
   barcode_peek_switch_s_ = declare_parameter<double>("barcode_peek_switch_s", barcode_peek_switch_s_);
   barcode_height_m_ = declare_parameter<double>("barcode_height_m", barcode_height_m_);
@@ -541,6 +543,9 @@ void MissionManager::barcode_phase() {
   peek_sent_ = false;
   peek_done_ = !barcode_peek_;
   cand_.reset();
+  light_.reset();
+  scan_ = false;
+  scan_k_ = 0;
   peek_at_ = hires_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   returning_ = false;
   light_warned_ = false;
@@ -609,6 +614,20 @@ void MissionManager::barcode_phase() {
       double candidate_range = 0.0, candidate_z = barcode_height_m_;
       Pose2 base_arena;
       if (objects_ && robot_arena(base_arena)) {
+        // 신호등 방위 — 바코드는 신호등 왼쪽에 있음 (11-21 사용자). 오른쪽·먼 곳의 잘못 본 '바코드'(실기 20:43·21:02: 왼쪽 +0.61 rad ·
+        //   0.51 m를 바코드로 봐 그쪽을 엿보기·gaze)는 거르고, 바코드가 안 보이면 신호등에서 왼쪽으로 차례로 gaze (scan)
+        for (const auto & o : objects_->objects)
+          if (o.class_name == "traffic_light" && rclcpp::Time(o.last_seen, RCL_ROS_TIME) >= phase_started_) {
+            const auto l = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
+            light_ = std::array<double, 2>{l.x, l.y};
+          }
+        std::optional<double> light_yaw;
+        double light_range = 1.0;
+        if (scan_from_light_ && light_ && !scan_offsets_.empty()) {
+          const double dx = (*light_)[0] - base_arena.x, dy = (*light_)[1] - base_arena.y, yaw = std::atan2(dy, dx) - base_arena.yaw;
+          light_yaw = std::atan2(std::sin(yaw), std::cos(yaw));
+          light_range = std::hypot(dx, dy);
+        }
         for (const auto & o : objects_->objects) {
           if (o.class_name != "barcode" || rclcpp::Time(o.last_seen, RCL_ROS_TIME) < phase_started_) continue;
           const auto target = to_arena(o.pose.pose.position.x, o.pose.pose.position.y, 0.0);
@@ -616,7 +635,11 @@ void MissionManager::barcode_phase() {
           const double range = std::hypot(dx, dy);
           const double yaw = std::atan2(dy, dx) - base_arena.yaw;
           const double relative = std::atan2(std::sin(yaw), std::cos(yaw));
-          if (range >= 0.20 && range <= 4.0 && std::abs(relative) <= 0.65) {
+          // 신호등을 봤으면 그 왼쪽 부채꼴(신호등 −0.05 ~ 마지막 scan + 0.15 rad)의 바코드만
+          const bool left_of_light = !light_yaw ||
+            (relative > *light_yaw - 0.05 && relative < *light_yaw + scan_offsets_.back() + 0.15);
+          if (range >= 0.20 && range <= 4.0 && std::abs(relative) <= 0.65 && left_of_light) {
+            scan_ = false;
             candidate_yaw = relative;
             candidate_range = range;
             const double z = o.pose.pose.position.z;  // map 높이 (바닥 = 0) — 이상하면 barcode_height_m
@@ -633,6 +656,12 @@ void MissionManager::barcode_phase() {
           candidate_yaw = std::atan2(std::sin(yaw), std::cos(yaw));
           candidate_range = std::hypot(dx, dy);
           candidate_z = (*cand_)[2];
+        }
+        if (!candidate_yaw && light_yaw) {  // 바코드를 못 봄 — 신호등에서 왼쪽으로 scan_k_번째 방향
+          scan_ = true;
+          const double yaw = *light_yaw + scan_offsets_[std::min(scan_k_, scan_offsets_.size() - 1)];
+          candidate_yaw = std::atan2(std::sin(yaw), std::cos(yaw));
+          candidate_range = light_range;
         }
       }
       // ⓪ 엿보기 — 팔은 접은 채 손목만 바코드 쪽으로(joint1 방위 · joint4 높이) + 손 카메라를 잠깐 고해상도로
@@ -682,6 +711,14 @@ void MissionManager::barcode_phase() {
       const bool fresh = (now() - grip_front_at_).seconds() < 1.0;  // 1 s 넘게 depth가 안 오면 모름 → 안 다가감
       const bool room = fresh && grip_front_m_ > barcode_min_gap_m_ + barcode_advance_step_m_ * 0.5 &&
                         advanced_m_ + barcode_advance_step_m_ <= barcode_advance_max_m_ + 1e-6;
+      // 신호등 왼쪽 scan 중이면 다가가기 전에 다음 방향으로 (팔만 돌림 — 신호등은 pole 시야에 남음)
+      if (waited && !moving_ && scan_ && scan_k_ + 1 < scan_offsets_.size()) {
+        ++scan_k_;
+        gaze_sent_ = false;
+        gaze_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        note(fmt("바코드 안 읽힘 — 신호등 왼쪽 %.2f rad로 (scan %zu/%zu)", scan_offsets_[scan_k_], scan_k_ + 1, scan_offsets_.size()));
+        return;
+      }
       if (waited && !moving_ && room) {
         {
           moving_ = true;
@@ -740,26 +777,14 @@ void MissionManager::hires(bool on) {
     RCLCPP_WARN(get_logger(), "손 카메라 파라미터 서비스 없음 — 해상도 %s 못 바꿈", prof.c_str());
     return;
   }
-  const auto t0 = now();
-  cam_params_->set_parameters({rclcpp::Parameter("rgb_camera.color_profile", prof)},
-    [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f) {
-      const auto r = f.get();
-      const bool ok = !r.empty() && r[0].successful;
-      if (!ok) { RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s 실패: %s", prof.c_str(), r.empty() ? "응답 없음" : r[0].reason.c_str()); return; }
-      // realsense-ros는 켜진 스트림의 프로필을 바꾸면 "re-enable the stream for the change to take effect" — 껐다 켜야 적용
-      //   (11-21 실기: 프로필만 바꿔 640 px 그대로 → 엿보기 5 s 뒤 "고해상도 영상이 안 옴")
-      cam_params_->set_parameters({rclcpp::Parameter("enable_color", false)},
-        [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>>) {
-          cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)},
-            [this, prof, t0](std::shared_future<std::vector<rcl_interfaces::msg::SetParametersResult>> f2) {
-              const auto r2 = f2.get();
-              const bool ok2 = !r2.empty() && r2[0].successful;
-              if (ok2) RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s (스트림 다시 켬 · %.2f s)", prof.c_str(), (now() - t0).seconds());
-              else RCLCPP_WARN(get_logger(), "손 카메라 컬러 %s — 스트림 다시 켜기 실패: %s", prof.c_str(),
-                               r2.empty() ? "응답 없음" : r2[0].reason.c_str());
-            });
-        });
-    });
+  // realsense-ros는 켜진 스트림의 프로필만 바꾸면 "re-enable the stream for the change to take effect"만 내고 그대로 —
+  //   껐다 켜야 적용 (11-21 실기: 640 px 그대로 → 엿보기 5 s 뒤 "고해상도 영상이 안 옴").
+  //   응답을 기다려 다음을 보내던 방식은 응답 콜백이 안 와 멈췄음(같은 실기 로그에 결과 줄이 없음) → 세 요청을 순서대로 바로 보냄
+  //   (realsense 노드가 한 줄로 처리 · 결과는 cam_info 폭으로 확인 — peek 쪽 hires_at_)
+  cam_params_->set_parameters({rclcpp::Parameter("rgb_camera.color_profile", prof)});
+  cam_params_->set_parameters({rclcpp::Parameter("enable_color", false)});
+  cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)});
+  RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s 요청 (프로필 → 스트림 껐다 켬)", prof.c_str());
 }
 
 void MissionManager::peek_end(const std::string & why) {
