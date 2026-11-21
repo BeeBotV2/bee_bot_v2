@@ -77,6 +77,9 @@ def main():
     cmd = n.create_publisher(String, '/cmd/mission', 10)
     st = {'phase': None, 'last': None, 'last0': None, 'started': False, 'running': False, 'done': None, 'msg': None, 't': 0}
 
+    def out(text=''):   # 사람이 읽는 줄 — 로거 머리말([INFO] [시각] [노드]) 없이
+        print(text, flush=True)
+
     def show_plan():   # 미션이 정한 장소별 배정 (회차 폴더 allocation.json) — 같은 컴퓨터(Jetson)에서 실행할 때
         runs = sorted(glob.glob(os.path.expanduser('~/.ros/mission/*/allocation.json')), key=os.path.getmtime)
         if not runs:
@@ -84,14 +87,17 @@ def main():
             return
         a = json.load(open(runs[-1]))
         slot_of = {t: s for s, t in slots.items()}
-        log.info(f'=== 장소별 배정 (바코드 {a_code} · 신호 {a_counts} · {os.path.basename(os.path.dirname(runs[-1]))}) ===')
+        out(f'\n{"─" * 14} 장소별 배정 {"─" * 14}')
+        out(f'바코드 {a_code} · 신호 {a_counts} · 회차 {os.path.basename(os.path.dirname(runs[-1]))}')
         for loc, v in a.get('locations', {}).items():
             pk = v.get('pucks', [])
-            items = ' · '.join(f"칸{p['cell']}←tag{p['tag']}(적재함 {slot_of.get(p['tag'], '?')}, {'/'.join(PUCKS.get(p['tag'], ('?', '?')))})"
-                               for p in pk)
-            log.info(f"{loc}: 그룹 {v.get('group')} = 주사위 {len(pk)} · {items}" + (f" · 빈 칸 {v['empty_cells']}" if v.get('empty_cells') else ''))
+            out(f"\n{loc}  그룹 {v.get('group')} · 주사위 {len(pk)}" + (f"  (빈 칸 {v['empty_cells']})" if v.get('empty_cells') else ''))
+            for p in pk:
+                color, shape = PUCKS.get(p['tag'], ('?', '?'))
+                out(f"    칸 {p['cell']}  ←  tag {p['tag']:>2}   적재함 {slot_of.get(p['tag'], '?'):>2} · {color}/{shape}")
         if not a.get('ok', True):
-            log.error(f"배정 실패: {a.get('why')}")
+            out(f"\n배정 실패: {a.get('why')}")
+        out('─' * 40 + '\n')
 
     def on_state(msg):
         if msg.phase == 'BUILD' and not st.get('plan_shown'):
@@ -101,7 +107,12 @@ def main():
         line = (msg.phase, msg.note, msg.error, msg.placed)
         if line != st['last']:
             st['last'] = line
-            log.info(f'[{msg.phase}] {msg.note} · 놓음 {msg.placed}/{msg.total}' + (f' · 오류 {msg.error}' if msg.error else ''))
+            if msg.phase != st.get('shown_phase'):   # 단계가 바뀌면 빈 줄 + 머리줄
+                st['shown_phase'] = msg.phase
+                out(f'\n[{msg.phase}]')
+            t = n.get_clock().now().nanoseconds * 1e-9 - st.setdefault('t0', n.get_clock().now().nanoseconds * 1e-9)
+            placed = f'  (놓음 {msg.placed}/{msg.total})' if msg.total else ''
+            out(f'  {int(t) // 60:02d}:{int(t) % 60:02d}  {msg.note}{placed}' + (f'\n         ⚠ 오류 {msg.error}' if msg.error else ''))
         if st['started'] and msg.phase not in IDLE:
             st['running'] = True
         if st['running'] and msg.phase in ('DONE', 'ERROR'):
@@ -141,12 +152,16 @@ def main():
         sys.exit(1)
 
     s = st['msg']
-    print('\n=== 놓기 결과 ===')
-    print(f'결과: {st["done"]}' + (f' · 이유 {s.error}' if s and s.error else ''))
+    print(f'\n{"─" * 16} 놓기 결과 {"─" * 16}')
+    print(f'결과      {st["done"]}' + (f'  (이유 {s.error})' if s and s.error else ''))
     if s:
-        print(f'놓음 {s.placed}/{s.total} · 장소 그룹 {s.order}')
-        for r in s.results:
-            print(f'  {r}')
+        print(f'놓음      {s.placed}/{s.total}')
+        print(f'장소 그룹  L1 {s.order[:1] or "-"} · L2 {s.order[1:2] or "-"} · L3 {s.order[2:3] or "-"}')
+        if s.results:
+            print('\n실패·기록')
+            for r in s.results:
+                print(f'  - {r}')
+    print('─' * 42)
     sys.exit(0 if st['done'] == 'DONE' else 1)
 
 
