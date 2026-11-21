@@ -380,7 +380,7 @@ private:
   bool verify_in_place_ = true;   // 장소의 마지막 퍽을 놓은 그 자리에서 바로 재검증 (11-15) · false = 다 놓은 뒤 L3·L2·L1 다시 감
   std::set<size_t> verified_;     // 이번 회차에 재검증한 장소
   int docked_loc_ = -1;          // BUILD에서 도킹해 붙어 있는 장소 (back_가 있을 때만 유효 · go_near 시작 때 -1)
-  double place_reuse_lat_m_ = 0.07;  // 같은 장소 다음 칸이 지금 자리에서 옆으로 이 안이면 다시 도킹 안 함
+  double place_reuse_lat_m_ = 0.20;  // 같은 장소 다음 칸이 지금 자리에서 옆으로 이 안이면 다시 도킹 안 함
   int last_place_loc_ = -1;       // 마지막으로 놓기를 시작한 장소 (= 로봇이 그 앞에 섬)
   std::string stop_;              // 로봇이 지금 선 곳 (start · S1~S6 · L1~L3, 모르면 '') — navigate에 'leg:<여기>_<갈 곳>'을 붙임 (움직임 정답표, 11-15)
   std::string leg_to(const std::string & to) const { return stop_.empty() || to.empty() ? "" : " leg:" + stop_ + "_" + to; }
