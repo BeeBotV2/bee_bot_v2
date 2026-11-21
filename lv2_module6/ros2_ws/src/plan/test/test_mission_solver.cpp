@@ -558,12 +558,11 @@ TEST(MissionFlow, ParseGoto) {  // start:GOTO:<목록> — 실기 이동 시험
   EXPECT_FALSE(parse_start("start:GOTO:L4", sc, why));
 }
 
-TEST(MissionSolver, BoxCellFollowsPerceivedBox) {  // 칸은 도면이 아니라 인지한 상자 위
+TEST(MissionSolver, BoxCellFollowsPerceivedBox) {  // 칸은 도면이 아니라 인지한 상자 가운데 기준 · 방향은 지도 +Y 고정
   auto [x, y] = box_cell({1.0, 2.0, 0.0}, 4);                       // 가운데 칸 = 상자 가운데
   EXPECT_NEAR(x, 1.0, 1e-9); EXPECT_NEAR(y, 2.0, 1e-9);
-  std::tie(x, y) = box_cell({1.0, 2.0, M_PI / 2}, 0);              // 90° 돈 상자 = 같은 칸 (번호는 경기장 축)
+  std::tie(x, y) = box_cell({1.0, 2.0, 0.3}, 0);                   // 상자가 돌아가 있어도 칸은 안 돎 (발제 §4 회전 대체 불가)
   EXPECT_NEAR(x, 0.94, 1e-9); EXPECT_NEAR(y, 2.06, 1e-9);
-  std::tie(x, y) = box_cell({1.0, 2.0, 0.2}, 2);                   // 0.2 rad 돈 상자 — 칸도 같이 돎
-  EXPECT_NEAR(x, 1.0 + 0.06 * std::cos(0.2) - 0.06 * std::sin(0.2), 1e-9);
-  EXPECT_NEAR(y, 2.0 + 0.06 * std::sin(0.2) + 0.06 * std::cos(0.2), 1e-9);
+  std::tie(x, y) = box_cell({1.0, 2.0, 0.0}, 8);
+  EXPECT_NEAR(x, 1.06, 1e-9); EXPECT_NEAR(y, 1.94, 1e-9);
 }

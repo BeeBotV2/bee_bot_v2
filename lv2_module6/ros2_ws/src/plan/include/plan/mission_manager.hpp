@@ -336,12 +336,14 @@ private:
   std::map<int, char> alloc_;
   struct Job { int tag; size_t loc; int cell; };
   std::vector<Job> jobs_;
-  std::vector<std::optional<Pose2>> loc_pose_;  // 장소마다 인지한 상자 (가운데 · 변 방향, arena) — 칸은 이 위에 (없으면 놓지 않음)
+  std::vector<std::optional<Pose2>> loc_pose_;
+  std::vector<std::optional<Spot>> loc_fix_;  // 장소마다 처음 정한 상자 가운데 (odom) — 회차 동안 고정 · 퍽마다 다시 재면 몇 cm씩 튀어 모양이 무너짐 (11-22)  // 장소마다 인지한 상자 (가운데 · 변 방향, arena) — 칸은 이 위에 (없으면 놓지 않음)
   // 장소 상자(location_box) 마지막 관측 — tag별 · 안 잘린 것과 아무거나 (correct: 붙은 뒤엔 상자가 늘 잘리거나 목록에서 빠짐, 11-22 실기)
   //   odom으로 적어 둠 (Spot) — 그사이 벽 정합이 map→odom을 옮겨도 상자는 odom에선 그대로 (11-22 실기: 붙어 있는 동안 3~5 cm씩)
-  struct LocSeen { Spot s; rclcpp::Time t; double yaw_odom = 0.0; bool has_yaw = false; };
-  std::map<std::string, LocSeen> loc_whole_, loc_any_;
-  double loc_keep_s_ = 60.0, place_reach_m_ = 0.25;
+  struct LocSeen { Spot s; rclcpp::Time t; };
+  std::map<std::string, LocSeen> loc_whole_;
+  double loc_keep_s_ = 60.0, place_reach_m_ = 0.25, realign_m_ = 0.08, realign_wait_s_ = 0.8;
+  rclcpp::TimerBase::SharedPtr realign_timer_;
   // 도면 보정 — 인지한 시작 박스·장소 상자(윗면 가운데)를 도면 상자와 짝지어 arena → map 변환을 고침 (출발 자세 · 도면 오차)
   //   켜면 to_map · to_arena 전부에 들어감 (다가설 자리 · 장소 · 복귀 · /arena/walls). 회차 시작마다 0부터
   struct Mark { double qx = 0, qy = 0; int hits = 0; };  // 도면 상자 하나에 짝지은 인지 위치 (map, 지수 평균)

@@ -171,6 +171,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_search_ = declare_parameter<double>("place_search", 0.05);
   loc_keep_s_ = declare_parameter<double>("loc_box_keep_s", loc_keep_s_);
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
+  realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
+  realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
@@ -362,19 +364,9 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
       for (const auto & o : m->objects)
         if (o.class_name == "location_box" && !detail(o, "tag").empty()) {
-          LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
-          if (!detail(o, "yaw_period").empty()) {  // 윗면 변 방향을 구한 관측 — map yaw를 odom yaw로
-            const auto & q = o.pose.pose.orientation;
-            double mo = 0.0;
-            try {
-              const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
-              mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
-              seen.yaw_odom = std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) - mo;
-              seen.has_yaw = true;
-            } catch (const std::exception &) {}
-          }
-          loc_any_[detail(o, "tag")] = seen;
-          if (detail(o, "cut") != "true") loc_whole_[detail(o, "tag")] = seen;
+          const LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+          // 윗면을 다 찾은 관측만 (corners · 안 잘림) — 윗면 없이 태그만 본 관측은 위치가 태그 자리(가운데에서 최대 약 10 cm)
+          if (detail(o, "cut") != "true" && !detail(o, "corners").empty()) loc_whole_[detail(o, "tag")] = seen;
         }
       for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
         it = (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() > back_recent_s_ ? recent_pucks_.erase(it) : std::next(it);
@@ -452,6 +444,7 @@ void MissionManager::on_command(const std::string & cmd) {
   seen_tags_.clear();
   lying_.clear();
   loc_pose_.assign(locations_.size(), std::nullopt);
+  loc_fix_.assign(locations_.size(), std::nullopt);
   marks_.assign(start_boxes_.size() + loc_boxes_.size(), Mark{});
   acorr_seen_.clear();
   acorr_used_.clear();
@@ -1416,7 +1409,9 @@ void MissionManager::bring(size_t i) {
     at_box(true, "");
     return;
   }
-  go_near(box, tx, ty, at_box);
+  // go_near는 점을 도면 기준으로 받아 인지 상자 가운데(near_c_)만큼 옮김 — 인지 상자 위 칸(tx, ty)을 주면 두 번 옮겨짐
+  const auto [hx, hy] = cell_offset(job.cell, grid_step_);
+  go_near(box, locations_[job.loc].first + hx, locations_[job.loc].second + hy, at_box);
 }
 
 void MissionManager::job_done(size_t i, bool ok) {
@@ -1870,6 +1865,18 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       }
       return blocked;
     }), poses.end());
+    // 장소 상자: 칸(px, py)에 팔이 닿는 변 먼저 — 붙은 자리(가운데에서 반 변 + gap)에서 칸이 place_reach_m 안인지.
+    //   한 변에선 먼 줄(0.28 m)이 안 닿음 → 반대 변에서 (11-22 사용자). 안 닿는 변은 뒤로 (대신 시도 · 붙은 뒤 place_unreachable)
+    if (box_label(box)[0] == 'L') {
+      const double reach_d = box.half + (box.gap >= 0.0 ? box.gap : approach_gap_);
+      const auto dock_d = [&](const Pose2 & p) {
+        return std::hypot(near_c_.first - reach_d * std::cos(p.yaw) - px, near_c_.second - reach_d * std::sin(p.yaw) - py);
+      };
+      std::stable_partition(poses.begin(), poses.end(), [&](const Pose2 & p) { return dock_d(p) <= place_reach_m_; });
+      if (!poses.empty())
+        RCLCPP_INFO(get_logger(), "%s 칸 점 (%.3f, %.3f) — 첫 변에서 %.3f m%s", box_label(box).c_str(), px, py, dock_d(poses[0]),
+                    dock_d(poses[0]) <= place_reach_m_ ? "" : " (닿는 변 없음)");
+    }
   }
   if (k >= poses.size() || static_cast<int>(k) >= approach_tries_) { done(false, "approach_failed"); return; }
   // Nav2로 변 앞 standoff까지 → approach로 approach_gap까지 직선으로 붙음 (Nav2 원형 footprint로는 못 붙는 거리)
@@ -1895,12 +1902,16 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   const double t_start = wall_s();
   // navigate "look"(도착 전 팔 올리기)은 안 씀 (11-13 headless: 팔이 pole_front_cam을 가려 보던 상자를 잃고, 0.25 m에선 gripper_cam에 잘려 보임)
   const std::string to = box_label(box);
-  run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near" + leg_to(to)),
-       // 상자 도킹: 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12).
-       //   11-16: f도 같은 가운데(cx, cy — 인지 평균 또는 도면) 기준이라 Nav2 목표 · 힌트 · 인지가 한 상자를 가리킴
-       SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", f.x, f.y, f.yaw) + fmt(",%.4f,%.4f", gap, box.half) +
-                     (box.face_stop > 0.0 ? fmt(",%.4f", box.face_stop) : std::string()))
-         .set__relation("dock_box")},
+  const auto nav = [this, to](const Pose2 & mm) {
+    return SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", mm.x, mm.y, mm.yaw)).set__relation("near" + leg_to(to));
+  };
+  // 상자 도킹: 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12).
+  //   11-16: f도 같은 가운데(cx, cy — 인지 평균 또는 도면) 기준이라 Nav2 목표 · 힌트 · 인지가 한 상자를 가리킴
+  const auto dock = [gap, half = box.half, stop = box.face_stop](const Pose2 & ff) {
+    return SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", ff.x, ff.y, ff.yaw) + fmt(",%.4f,%.4f", gap, half) +
+                                                        (stop > 0.0 ? fmt(",%.4f", stop) : std::string())).set__relation("dock_box");
+  };
+  const std::function<void(bool, const std::string &)> after =
     [this, box, px, py, done, k, poses, push, n, t_start, retried, cx, cy, to, gap](bool ok, const std::string & why) {
       stop_ = ok ? to : "";  // 붙었으면 그 상자 앞 (exit으로 같은 자리로 물러난 뒤 다음 구간 표가 시작) · 실패면 모름
       // 출발하자마자 navigate 실패(5 s 안)는 경로·자리 탓이 아니라 일시 오류 — 같은 자리로 한 번 더 (11-15 실기 S3: 출발 0.4 s 만에
@@ -1924,11 +1935,53 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
         return;
       }
       go_near(box, px, py, done, k + 1, poses);
+    };
+  if (to[0] != 'L' || realign_m_ <= 0.0) { run({stow(), nav(m), dock(f)}, after); return; }
+  // 장소 상자: Nav2 도착(±0.15 m · ±40°) 뒤 상자 쪽으로 돌아 보고, 인지 상자 정면에서 옆으로 realign_m 넘게 벗어났으면
+  //   인지 가운데 기준 진입점으로 Nav2 한 번 더 (11-22 사용자 · 실기 nav_1122_030435 L3: 진입점이 도면 기준이라 13 cm + Nav2 오차 12.6 cm
+  //   → 정면에서 26 cm 옆에서 approach를 시작해 비스듬히 붙음). 상자 쪽으로 먼저 도는 건 방향 오차로 상자가 화면 밖일 수 있어서
+  run({stow(), nav(m)}, [this, box, to, m, f, n, cx, cy, after, nav, dock](bool ok, const std::string & why) {
+    if (!ok) { after(false, why); return; }
+    Pose2 r;
+    if (!robot_map(r)) { run({dock(f)}, after); return; }
+    const auto bm = to_map(cx, cy);
+    const double face = std::atan2(bm.y - r.y, bm.x - r.x);
+    const rclcpp::Time t_turn = now();
+    run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("drive_straight")},
+        [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn](bool, const std::string &) {
+      realign_timer_ = create_wall_timer(std::chrono::duration<double>(realign_wait_s_), [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn]() {
+        realign_timer_->cancel();
+        const size_t li = static_cast<size_t>(std::stoi(to.substr(1)) - 1);
+        const auto it = li < loc_tags_.size() ? loc_whole_.find(str(loc_tags_[li])) : loc_whole_.end();
+        Pose2 r;
+        if (it == loc_whole_.end() || it->second.t < t_turn || !robot_arena(r)) {
+          RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 상자 윗면을 다 못 봄, 그대로 approach", to.c_str());
+          run({dock(f)}, after);
+          return;
+        }
+        double mx, my;
+        spot_map(*tf_buffer_, it->second.s, mx, my, 1e9);
+        const Pose2 a = to_arena(mx, my, 0.0);
+        const double lat = -(r.x - a.x) * std::sin(n.yaw) + (r.y - a.y) * std::cos(n.yaw);  // 변 법선에서 옆으로
+        if (std::abs(lat) <= realign_m_) {
+          RCLCPP_INFO(get_logger(), "%s 진입점 — 인지 상자 정면에서 옆 %.3f m, 그대로 approach", to.c_str(), lat);
+          run({dock(f)}, after);
+          return;
+        }
+        const double dx = a.x - cx, dy = a.y - cy;
+        const auto m2 = to_map(n.x + dx, n.y + dy, n.yaw);
+        const auto bf = to_arena(f.x, f.y, f.yaw);
+        const auto f2 = to_map(bf.x + dx, bf.y + dy, bf.yaw);
+        RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 상자 정면에서 옆 %.3f m (> %.2f) · 상자가 진입 기준에서 (%+.1f, %+.1f) cm → 진입점 다시",
+                    to.c_str(), lat, realign_m_, dx * 100, dy * 100);
+        run({nav(m2), dock(f2)}, after);
+      });
     });
+  });
 }
 
 // ---------- 장소 상자 — 칸은 인지한 상자(가운데 · 변 방향) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
-//   안 잘린 마지막 관측 우선 (붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고, 목록에서 빠지기도 함 — 실기 nav_1122_023039)
+//   윗면을 다 찾은(안 잘린) 마지막 관측만 (붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고, 목록에서 빠지기도 함 — 실기 nav_1122_023039)
 //   관측은 odom 점으로 기억 → 쓸 때 지금 map으로 (붙어 있는 동안 벽 정합이 map→odom을 3~5 cm씩 옮김)
 void MissionManager::correct(size_t li) {
   if (li >= loc_tags_.size() || li >= loc_boxes_.size() || li >= loc_pose_.size()) return;
@@ -1938,30 +1991,24 @@ void MissionManager::correct(size_t li) {
     const auto it = m.find(k);
     return it != m.end() && (now() - it->second.t).seconds() <= loc_keep_s_ ? &it->second : nullptr;
   };
-  const LocSeen * o = fresh(loc_whole_, tag);
-  const bool whole = o != nullptr;
-  if (!o) o = fresh(loc_any_, tag);
   loc_pose_[li].reset();
-  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
-  double mx, my, mo = 0.0;
-  spot_map(*tf_buffer_, o->s, mx, my, 1e9);  // odom 점을 지금 map으로 (odom은 짧은 동안 안 튐)
-  try {
-    const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
-    mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
-  } catch (const std::exception &) {}
-  // 변 방향: 이 관측에 없으면 안 잘린 관측의 것 · 둘 다 없으면 경기장 축 (가운데만 인지)
-  const LocSeen * yw = o->has_yaw ? o : fresh(loc_whole_, tag);
-  const bool has_yaw = yw && yw->has_yaw;
-  const Pose2 a = to_arena(mx, my, has_yaw ? yw->yaw_odom + mo : 0.0);
+  // 장소마다 상자 가운데는 한 번만 정함 (처음으로 윗면을 다 본 관측) — 그 뒤 퍽들은 같은 가운데 (면이 바뀌어도)
+  if (!loc_fix_[li]) {
+    const LocSeen * o = fresh(loc_whole_, tag);
+    if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 윗면을 다 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
+    loc_fix_[li] = o->s;
+  }
+  double mx, my;
+  spot_map(*tf_buffer_, *loc_fix_[li], mx, my, 1e9);  // odom 점을 지금 map으로 (odom은 짧은 동안 안 튐)
+  const Pose2 a = to_arena(mx, my, 0.0);
   const double off = std::hypot(a.x - b.x, a.y - b.y);
   if (off > corr_max_) {
     RCLCPP_WARN(get_logger(), "L%zu 상자 도면에서 %.0f cm (> %.0f) — 다른 것을 본 것으로 보고 안 씀", li + 1, off * 100, corr_max_ * 100);
+    loc_fix_[li].reset();
     return;
   }
-  loc_pose_[li] = Pose2{a.x, a.y, has_yaw ? a.yaw : 0.0};
-  RCLCPP_INFO(get_logger(), "L%zu 상자 (%+.1f, %+.1f) mm · 방향 %+.1f° — %s %.1f s 전%s", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000,
-              has_yaw ? std::remainder(a.yaw, M_PI / 2) * 180 / M_PI : 0.0, whole ? "안 잘린 관측" : "잘린 관측", (now() - o->t).seconds(),
-              has_yaw ? "" : " · 방향 모름(경기장 축)");
+  loc_pose_[li] = Pose2{a.x, a.y, 0.0};
+  RCLCPP_INFO(get_logger(), "L%zu 상자 가운데 (도면에서 %+.1f, %+.1f mm) — 고정", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000);
 }
 
 std::pair<double, double> MissionManager::cell_target(size_t li, int cell) const {
