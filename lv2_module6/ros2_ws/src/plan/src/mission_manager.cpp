@@ -1397,6 +1397,25 @@ void MissionManager::build(size_t i) {
     finish(true);
     return;
   }
+  // 장소 상자에 붙어 있으면 그 장소 남은 칸 중 지금 자리에서 팔이 닿는 칸 먼저 (11-22 사용자: 자꾸 exit) — 닿는 칸 중엔 먼 칸부터
+  //   (놓인 퍽 위로 손이 안 지나게). 한 변에선 가까운 두 줄만 닿아 R4 · G6은 변이 둘 필요 — 변 옮김을 장소마다 한 번으로
+  if (!back_.empty() && !stop_.empty() && stop_[0] == 'L') {
+    const size_t li = static_cast<size_t>(std::stoi(stop_.substr(1)) - 1);
+    Pose2 r;
+    if (jobs_[i].loc == li && robot_arena(r)) {
+      size_t best = i;
+      double best_d = -1.0;
+      for (size_t j = i; j < jobs_.size() && jobs_[j].loc == li; ++j) {
+        const auto c = cell_target(li, jobs_[j].cell);
+        const double d = std::hypot(c.first - r.x, c.second - r.y);
+        if (d <= place_reach_m_ && d > best_d) { best = j; best_d = d; }
+      }
+      if (best != i) {
+        RCLCPP_INFO(get_logger(), "L%zu 칸 %d를 먼저 (지금 자리에서 %.3f m — 칸 %d는 나중에)", li + 1, jobs_[best].cell, best_d, jobs_[i].cell);
+        std::swap(jobs_[i], jobs_[best]);
+      }
+    }
+  }
   const Job job = jobs_[i];
   note("퍽 " + str(job.tag) + " → L" + str(static_cast<int>(job.loc) + 1) + " 칸 " + str(job.cell) +
        " (" + str(static_cast<int>(i) + 1) + "/" + str(static_cast<int>(jobs_.size())) + ")");
