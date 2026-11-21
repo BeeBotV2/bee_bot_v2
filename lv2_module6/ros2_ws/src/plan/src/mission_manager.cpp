@@ -215,6 +215,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   scan_from_light_ = declare_parameter<bool>("barcode_scan_from_light", scan_from_light_);
   scan_offsets_ = declare_parameter<std::vector<double>>("barcode_scan_offsets", scan_offsets_);
   scan_range_m_ = declare_parameter<double>("barcode_scan_range_m", scan_range_m_);
+  hires_settle_s_ = declare_parameter<double>("barcode_hires_settle_s", hires_settle_s_);
   barcode_peek_s_ = declare_parameter<double>("barcode_peek_s", barcode_peek_s_);
   barcode_peek_switch_s_ = declare_parameter<double>("barcode_peek_switch_s", barcode_peek_switch_s_);
   barcode_height_m_ = declare_parameter<double>("barcode_height_m", barcode_height_m_);
@@ -328,6 +329,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   //   BARCODE(관측 — 손 카메라 바코드 + pole_front_cam 신호 동시) 동안에도 받음
   //   오류 사이클은 팔·바퀴가 멈춰 있을 때만 셈 (움직이는 동안은 팔이 가리거나 흐려서 생긴 오류일 수 있음 — 다음 사이클을 봄)
   const auto on_signal = [this](const perception::msg::MissionSignal & m) {
+    if (m.ok) last_ok_signal_ = m;  // 관측 밖에서도 기억 — 해독기는 같은 답을 다시 안 내서, 시작 전 확정을 여기서 안 잡으면 사라졌음 (11-22 실기)
     const bool barcode = phase_ == Phase::BARCODE;
     if ((phase_ != Phase::READ && !barcode) || signal_ready_ || !signal_error_.empty()) return;
     // 시작 직전(signal_preroll_s 안)에 끝난 사이클도 받음 — 해독기는 미션 전부터 읽고 있어 방금 확정된 답을 버리면 한 사이클(약 27 s) 더 기다렸음
@@ -544,6 +546,7 @@ void MissionManager::barcode_phase() {
   signal_error_.clear();
   read_started_ = phase_started_;
   signal_window_ = true;
+  take_recent_signal();
   gaze_sent_ = false;
   peek_sent_ = false;
   peek_done_ = !barcode_peek_;
@@ -720,7 +723,9 @@ void MissionManager::barcode_phase() {
       }
       if (peek_sent_ && !peek_done_ && peek_at_.nanoseconds() > 0) {
         const bool hi = cam_width_ >= 1280 && cam_info_at_ > peek_at_;  // 도착 뒤 고해상도 영상이 실제로 들어옴
-        if (hi && hires_at_.nanoseconds() == 0) {
+        // 스트림을 다시 켠 직후 몇 장은 자동 노출이 안 잡혀 어두움 (11-22 실기 첫 방향 사진) → barcode_hires_settle_s 뒤부터 셈
+        if (hi && hires_live_at_.nanoseconds() == 0) hires_live_at_ = now();
+        if (hi && hires_at_.nanoseconds() == 0 && (now() - hires_live_at_).seconds() >= hires_settle_s_) {
           hires_at_ = now();
           snap(fmt("barcode_peek_%+.2f", peek_yaw_));  // 고해상도 첫 장 (미션 기록 photos/)
         }
@@ -822,9 +827,20 @@ bool MissionManager::observe_still() const {
          (!peek_sent_ || gaze_sent_ || peek_at_.nanoseconds() > 0);
 }
 
+// 관측 시작 — 시작 signal_preroll_s 안에 확정된 신호가 있으면 바로 씀 (11-22 실기 00:12:48: 시작 20 s 전 확정을 못 써 27 s 더 기다림)
+void MissionManager::take_recent_signal() {
+  if (!last_ok_signal_ || signal_ready_) return;
+  const rclcpp::Time t(last_ok_signal_->header.stamp, RCL_ROS_TIME);
+  if (t < read_started_ - rclcpp::Duration::from_seconds(signal_preroll_s_)) return;
+  signal_ = *last_ok_signal_;
+  signal_ready_ = true;
+  RCLCPP_INFO(get_logger(), "신호 — 관측 시작 %.0f s 전에 확정된 것 씀 (%s)", (read_started_ - t).seconds(), signal_.raw.c_str());
+}
+
 void MissionManager::hires(bool on) {
   if (on == hires_on_) return;
   hires_on_ = on;
+  hires_live_at_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   const auto & prof = on ? peek_profile_ : cam_profile_;
   if (!cam_params_->service_is_ready()) {
     RCLCPP_WARN(get_logger(), "손 카메라 파라미터 서비스 없음 — 해상도 %s 못 바꿈", prof.c_str());
@@ -894,6 +910,7 @@ void MissionManager::read_phase() {
     signal_error_.clear();
     read_started_ = now();
     signal_window_ = true;
+    take_recent_signal();
   }
   read_phase_at_ = now();
   note(signal_ready_ ? "신호 — 관측(바코드) 중에 이미 확정" : "신호 12회 관측 중 (바코드 뒤 팔 접고 계속)");
