@@ -846,12 +846,13 @@ void Coordinator::place(const SubGoal & g) {
 }
 
 void Coordinator::inspect(const SubGoal & g) {
-  // skill_inspect는 look 자세 하나 (11-21) — 상자 보기(relation "box")는 퍽 2개를, 나머지(칸 · 퍽)는 1개를 기대
+  // skill_inspect는 look 자세 하나 (11-21) — 4번째 값이 있으면 그만큼, 없으면 상자 보기(relation "box")는 퍽 2개를, 나머지(칸 · 퍽)는 1개를 기대
   Skill::Goal sg;
   sg.target = "box";
-  if (const auto v = parse_numbers(g.target); v.size() == 3) {  // 좌표 inspect — 상자 가운데 · 칸 (퍽 윗면 높이)
+  if (const auto v = parse_numbers(g.target); v.size() == 3 || v.size() == 4) {  // 좌표 inspect — 상자 가운데 · 칸 (퍽 윗면 높이)
     sg.pose = map_pose(v[0], v[1], v[2]);
-    if (g.relation != "box") sg.values = {1.0};
+    if (v.size() == 4) sg.values = {v[3]};  // 기대 퍽 수 (mission: 그 상자에 남은 퍽 · 11-22)
+    else if (g.relation != "box") sg.values = {1.0};
     send("inspect", sg, [this](const Skill::Result &) { next(); });
     return;
   }
