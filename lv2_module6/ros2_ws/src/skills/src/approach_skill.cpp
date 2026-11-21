@@ -65,6 +65,9 @@ public:
     box_alpha_ = declare_parameter<double>("box_alpha", 0.3);       // 새 측정을 섞는 비율
     box_rate_mps_ = declare_parameter<double>("box_rate_mps", 0.02);  // 목표를 옮기는 최대 속도 [m/s]
     box_rate_dps_ = declare_parameter<double>("box_rate_dps", 3.0);   // 목표 방향을 돌리는 최대 속도 [deg/s]
+    // 방향도 위치처럼 — 지금 추정과 이만큼 넘게 다른 방향이 box_rejump_s 넘게 이어지면 그쪽으로 다시 잡음 (11-22 실기 nav_1122_030435 L3:
+    //   시작 전 기억 측정의 방향이 −29°(실제 +3°) → 3°/s로만 따라가 붙을 때까지 다 못 돌아 15° 비스듬히 도킹)
+    box_yaw_jump_deg_ = declare_parameter<double>("box_yaw_jump_deg", 10.0);
     box_min_side_ = declare_parameter<double>("box_min_side_m", 0.19);  // 윗면 짧은 변이 이보다 작으면 잘린 것 — 버림
     box_freeze_m_ = declare_parameter<double>("box_freeze_m", 0.10);  // 목표까지 이보다 가까우면 목표 고정
     face_slow_m_ = declare_parameter<double>("face_slow_m", 0.10);    // 앞면 정지(values[2]) 도킹: 인지 앞면 거리가 이 안이면 approach_min_speed로
@@ -135,7 +138,7 @@ private:
     started_ = progress_ = last_meas_ = now();
     done_ = done;
     box_mode_ = g.values.size() >= 2;
-    have_box_ = frozen_ = jumping_ = false;
+    have_box_ = frozen_ = jumping_ = yjumping_ = false;
     face_ = box_mode_ ? 1 : 0;
     if (box_mode_) {
       gap_ = g.values[0];
@@ -266,6 +269,17 @@ private:
         return;
       }
       jumping_ = false;
+      if (has_yaw && std::abs(std::remainder(h - bh_, 2 * M_PI)) > box_yaw_jump_deg_ * M_PI / 180.0) {
+        if (!yjumping_ || std::abs(std::remainder(h - yj_, 2 * M_PI)) > box_yaw_jump_deg_ * M_PI / 180.0) { yjumping_ = true; yj_ = h; yjump_since_ = t; }
+        if ((t - yjump_since_).seconds() >= box_rejump_s_) {
+          RCLCPP_WARN(get_logger(), "상자 방향이 %.1f s 넘게 %.0f° 다름 — 방향을 다시 잡음", box_rejump_s_,
+                      std::remainder(h - bh_, 2 * M_PI) * 180.0 / M_PI);
+          yjumping_ = false;
+          bh_ = std::remainder(h, 2 * M_PI);
+        }
+      } else {
+        yjumping_ = false;
+      }
       double sx = box_alpha_ * dx, sy = box_alpha_ * dy;
       const double n = std::hypot(sx, sy), lim = box_rate_mps_ * dt;
       if (n > lim) { sx *= lim / n; sy *= lim / n; }
@@ -561,6 +575,9 @@ private:
   double jx_ = 0.0, jy_ = 0.0, box_rejump_s_ = 1.0;
   rclcpp::Time jump_since_{0, 0, RCL_ROS_TIME};
   double gap_ = 0, half_ = 0, hint_x_ = 0, hint_y_ = 0, bx_ = 0, by_ = 0, bh_ = 0;
+  double box_yaw_jump_deg_ = 10.0, yj_ = 0.0;
+  bool yjumping_ = false;
+  rclcpp::Time yjump_since_;
   double face_slow_m_ = 0.10, face_shift_max_ = 0.03, face_stop_ = 0.0, face_shift_ = 0.0, face_m_ = 0.0;
   bool face_ok_ = false;
   rclcpp::Subscription<perception::msg::TrackedObjectArray>::SharedPtr objects_sub_;
