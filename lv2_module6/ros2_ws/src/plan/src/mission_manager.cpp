@@ -1434,34 +1434,10 @@ void MissionManager::place_check(size_t i, int tries) {
   };
   attempt_ = tries;
   last_place_loc_ = static_cast<int>(job.loc);  // 장소 앞에 섬 (go_near 성공 뒤에만 옴)
-  run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [this, i, tries, tx, ty, next](bool ok, const std::string & why) {
-    if (!ok) { next(false, "place_failed " + why); return; }
-    const rclcpp::Time t0 = now();  // 놓은 뒤에 실제로 본 것만
-    run({SubGoal().set__skill("inspect").set__target(point(tx, ty, box_top_z_ + puck_h_))}, [this, i, tries, tx, ty, t0, next](bool, const std::string &) {
-      const Job job = jobs_[i];
-      const auto m = to_map(tx, ty);
-      const TrackedObject * best = nullptr;  // 칸 근처에서 이번에 본 퍽 — tag가 맞거나 못 읽은 것
-      double err = place_search_;
-      if (objects_) for (const auto & o : objects_->objects) {
-        if (!is_puck(o) || rclcpp::Time(o.last_seen, RCL_ROS_TIME) < t0) continue;
-        const std::string tag = detail(o, "tag");
-        if (!tag.empty() && tag != str(job.tag)) continue;
-        const double d = std::hypot(o.pose.pose.position.x - m.x, o.pose.pose.position.y - m.y);
-        if (d < err) { err = d; best = &o; }
-      }
-      snap("L" + str(static_cast<int>(job.loc) + 1) + "_cell" + str(job.cell) + "_tag" + str(job.tag));
-      const bool lying = best && best->class_name == "puck_lying";
-      if (best && !lying && err <= place_tol_) { next(true, fmt("err %.0fmm", err * 1000)); return; }
-      const std::string why = !best ? "place_unseen" : lying ? "place_lying" : fmt("place_off %.0fmm", err * 1000);
-      if (!best || tries >= retries_) { next(false, why); return; }
-      RCLCPP_WARN(get_logger(), "퍽 %d %s — 다시 놓기 (%d/%d)", job.tag, why.c_str(), tries + 1, retries_);
-      const auto again = [this, i, tries, next, why](bool ok2, const std::string & why2) {
-        if (!ok2) { next(false, why + " · re-pick_failed " + why2); return; }
-        place_check(i, tries + 1);
-      };
-      if (lying) stand_up(best->id, best->pose.pose.position.x, best->pose.pose.position.y, 0, again);  // 칸에서 누움 → 세워서 다시 집기
-      else pick_near(best->id, again);
-    });
+  (void)tries;
+  // 11-22 사용자: 놓은 뒤 확인·다시 놓기 없음 (1 cm 기준으로 다시 집어도 오차가 안 줄고 퍽마다 약 22 s · 장소마다 마지막에 보기만 — verify_at)
+  run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [next](bool ok, const std::string & why) {
+    next(ok, ok ? "placed" : "place_failed " + why);
   });
 }
 
