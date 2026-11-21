@@ -53,6 +53,8 @@ public:
     carrot_m_ = declare_parameter<double>("approach_carrot_m", 0.05);    // sim: 목표 직선 위 이만큼 앞 점을 향해 조향
     v_max_ = declare_parameter<double>("approach_v_max", 0.06);          // sim: 전진 상한 [m/s]
     w_max_ = declare_parameter<double>("approach_w_max", 0.5);           // sim: 회전 상한 [rad/s]
+    face_start_ = declare_parameter<double>("approach_face_deg", 15.0) * M_PI / 180.0;  // 상자 도킹: 시작 때 면 방향과 이만큼 넘게 틀어졌으면 먼저 제자리 회전
+    face_done_ = declare_parameter<double>("approach_face_done_deg", 4.0) * M_PI / 180.0;  // 그 회전을 이 안에서 끝냄
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     box_match_m_ = declare_parameter<double>("box_match_m", 0.45);  // 상자 도킹: 힌트(도면) 상자 가운데에서 이만큼 안의 상자만
     box_wait_s_ = declare_parameter<double>("box_wait_s", 8.0);     // 첫 측정까지 기다림 (그동안 정지)
@@ -128,6 +130,7 @@ private:
     done_ = done;
     box_mode_ = g.values.size() >= 2;
     have_box_ = frozen_ = false;
+    face_ = box_mode_ ? 1 : 0;
     if (box_mode_) {
       gap_ = g.values[0];
       half_ = g.values[1];
@@ -153,6 +156,7 @@ private:
   void start_exit(const SkillGoal & g, Done done) {
     double x, y, yaw;
     frame_ = "odom";
+    face_ = 0;
     if (!robot_pose(x, y, yaw)) { done(false, "approach_no_tf"); return; }
     const double d = g.values.empty() ? exit_m_ : g.values[0];
     if (!(d > 0.0) || d > 1.0) { done(false, "approach_bad_target"); return; }
@@ -384,7 +388,13 @@ private:
     const double cx = gx - lead * std::cos(gyaw), cy = gy - lead * std::sin(gyaw);
     const double head_c = std::atan2(cy, cx);
     double v = 0.0, w = 0.0;
-    if (pos_done_) {
+    // 11-21 실기 S1: Nav2가 상자를 47° 비스듬히 본 채 끝남(도착 방향 허용 40°) → 곡선으로 휘어 들어가 물러날 때 들어온 길과
+    //   다른 선으로 빠지고 그 자리에서 돌다 벽에 걸림 → 상자 도킹은 먼저 제자리에서 면 방향(gyaw — 인지 상자 윗면)으로 돈 뒤 다가감
+    if (face_ == 1) face_ = std::abs(gyaw) > face_start_ ? 2 : 0;
+    if (face_ == 2 && std::abs(gyaw) < face_done_) face_ = 0;
+    if (face_ == 2) {
+      w = std::clamp(3.0 * gyaw, -w_max_, w_max_);
+    } else if (pos_done_) {
       w = std::clamp(3.0 * gyaw, -w_max_, w_max_);
       // 방향을 맞추다 tol_m 밖(release 안)으로 밀리면 갇힘 (11-14: 남은 11 mm · v 0 · approach_blocked)
       //   → 방향이 거의 맞으면 목표 방향 직선으로만 앞뒤 (당근 조향 없음 — 1~2 cm에서 돌던 문제 안 생김)
@@ -420,7 +430,7 @@ private:
       return;
     }
     double dv = 0.0, dw = 0.0;
-    if (!exit_ && along >= -0.003) residual(x, y, yaw, dv, dw);  // 학습 보정은 전진으로만 배움 · exit은 보정 없음
+    if (!exit_ && face_ != 2 && along >= -0.003) residual(x, y, yaw, dv, dw);  // 학습 보정은 전진으로만 배움 · exit은 보정 없음
     // 정책 보정이 마지막 몇 mm의 최소 전진을 지우면 멈춰서 approach_blocked (11-13: 남은 13 mm에서 0.001 m/s)
     send(v >= min_speed_ ? std::max(v + dv, min_speed_) : v + dv, w + dw);
   }
@@ -487,6 +497,8 @@ private:
   double gx_ = 0, gy_ = 0, gyaw_ = 0, tol_m_ = 0.01, tol_yaw_ = 0.026, hold_s_ = 0.5, limit_s_ = 25.0;
   double best_ = 1e9, still_s_ = 0, act0_ = 0, act1_ = 0, last_v_ = 0, last_w_ = 0;
   int stage_ = 0;
+  int face_ = 0;  // 상자 도킹 먼저 돌기: 1 = 첫 틱에 판단 · 2 = 도는 중 · 0 = 안 함/끝
+  double face_start_ = 0.26, face_done_ = 0.07;
   rclcpp::Time started_{0, 0, RCL_ROS_TIME}, progress_{0, 0, RCL_ROS_TIME};
   Done done_;
   rclcpp::TimerBase::SharedPtr timer_;
