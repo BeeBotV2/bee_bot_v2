@@ -10,6 +10,8 @@
   ⑥ 전역 costmap은 통째로 비우지 않는다 (11-20 실기 bag nav_1120_141156) — 장애물은 안 비킨다고 본다. 208(길 없음)에 전체를 비우면
      등 뒤라 다시 못 본 장애물을 잊고 짧은 길로 되돌아가, 다시 보면 긴 길 → 비움 → 짧은 길을 2.5 s마다 반복하며 120 s 제자리에서 13바퀴 돎.
      이제 208은 비우지 않고 바로 실패(→ mission이 다른 면으로), 205·206(유령 점으로 출발·목표 칸 막힘)만 로봇 둘레 0.6 m의 카메라 층만 비움.
+     205·206은 비우기 전에 2 s 기다림 (11-20 nav_bench 동적 cross: 지나가는 장애물이 목표 0.23 m 옆에 있는 동안 바로 비우고 다시 계획해
+     여전히 막혀 206으로 실패 — 기다리면 비킨 뒤 계획함)
      우회로가 있으면 ValidatePath가 통과하는 한 재계획이 없어 그 길로 끝까지 간다.
   ③ goal checker = general_goal_checker (통과 지점이라 넓게).
   ④ BT ID를 Nav2 기본 파일과 다르게 — 같은 ID면 bt_navigator가 "conflicting BT XML"로 하나를 건너뜀.
@@ -53,6 +55,7 @@
             </Fallback>
             <Sequence>
               <AreErrorCodesPresent error_code="{compute_path_error_code}" error_codes_to_check="205;206"/>
+              <Wait wait_duration="2.0" error_code_id="{wait_error_code}" error_msg="{wait_error_msg}"/>
               <ClearCostmapAroundRobot name="ClearGlobalAroundRobot-Context" service_name="global_costmap/clear_around_global_costmap" reset_distance="0.6" plugins="obstacle_layer"/>
             </Sequence>
           </RecoveryNode>

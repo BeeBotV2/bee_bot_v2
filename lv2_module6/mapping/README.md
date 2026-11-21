@@ -140,7 +140,12 @@ sudo apt install zstd
 
 ## 실행 — 실기 (Jetson + PC)
 
-Jetson은 센서 · 바퀴 스택만 띄우고, 녹화 · 매핑은 PC에서 한다. Jetson에 nvblox가 없어도 되고 Jetson 부하도 그대로다. PC 명령은 `--real`을 붙이면 Jetson과 같은 `ros2_ws/fastdds.xml`(SHM + UDP)로 붙는다 (`drive_test.py --real`과 같음).
+Jetson은 센서 · 바퀴 스택만 띄우고, 매핑은 PC에서 bag 재생으로 한다. Jetson에 nvblox가 없어도 되고 Jetson 부하도 그대로다.
+
+**DDS는 Jetson과 같아야 한다.** Jetson이 CycloneDDS(`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` · `CYCLONEDDS_URI`)로 떠 있으면 PC 터미널도 모두 같은 RMW · `ROS_DOMAIN_ID`(start.sh 기본 88)로 맞춘다. `--real`은 Fast DDS 프로파일(`ros2_ws/fastdds.xml`)만 넣으므로 Cyclone에는 효과가 없다. 섞이면 토픽 · publisher는 보이는데 데이터가 안 오고, RViz는 `Message Filter dropping message`만 낸다.
+
+- PC `cyclonedds.xml`의 `<Peer address>`는 Jetson IP다 (Wi-Fi는 멀티캐스트가 막힘). DHCP로 바뀌므로 `getent hosts bee.local`로 확인한다.
+- PC의 `SocketReceiveBufferSize min`이 커널 한도(`net.core.rmem_max`)보다 크면 `rmw_create_node: failed to create domain`으로 죽는다. 한도 아래(예: `8MB`)로 둔다.
 
 ### 1. 녹화
 
@@ -149,20 +154,24 @@ Jetson은 센서 · 바퀴 스택만 띄우고, 녹화 · 매핑은 PC에서 한
    ```bash
    ./ros2_ws/start.sh map:=none operation:=MANUAL
    ```
-3. PC: 터미널 3개.
+3. 녹화는 **Jetson에서** 한다 (Wi-Fi 기준 — 아래 "녹화 위치"). 텔레옵만 PC에서.
    ```bash
-   mapping/mapping.sh rviz --real
-   mapping/mapping.sh record --real lap1   # ~/.ros/beebot_bags/lap1
-   mapping/mapping.sh teleop --real
+   mapping/mapping.sh record --real lap1   # Jetson: ~/.ros/beebot_bags/lap1
+   mapping/mapping.sh teleop --real        # PC
    ```
-   출발 자리에서 몇 초 서 있다가 천천히 한 바퀴 돌아 출발 자리로 돌아온다. 녹화 터미널에서 Ctrl+C.
+   출발 자리에서 몇 초 서 있다가 천천히 한 바퀴 돌아 출발 자리로 돌아온다. 녹화 터미널에서 Ctrl+C. 1분에 약 1 GB가 쌓이니 Jetson 디스크 여유(`df -h ~`)를 먼저 본다.
+   PC RViz(`mapping/mapping.sh rviz --real`)는 녹화 중엔 끄거나 점구름 표시를 끈다. 이때는 `map:=none`이라 `map` frame이 없으므로 Fixed Frame을 `odom`으로 바꿔야 보인다.
 4. 위치추정 시험용으로 다른 출발 자리에서 `lap2`를 짧게 하나 더 녹화한다.
 5. 영상이 빠지지 않았는지 본다. 15 Hz × 녹화 초 수에 가까워야 한다.
    ```bash
    ros2 bag info ~/.ros/beebot_bags/lap1
    ```
+6. bag 폴더를 PC로 옮긴다 (PC에 같은 이름 폴더가 있으면 먼저 치운다).
+   ```bash
+   scp -r <jetson>:~/.ros/beebot_bags/lap1 ~/.ros/beebot_bags/
+   ```
 
-PC 녹화는 Jetson → PC 네트워크로 영상을 받는다. pole_front_cam 640×360 15 Hz면 컬러 · depth 합쳐 초당 약 17 MB(약 140 Mbps)다. Wi-Fi에서는 프레임이 빠질 수 있으니 유선을 권한다. 5번 메시지 수가 크게 모자라면 Jetson에서 직접 녹화하고(Jetson에서도 `mapping/mapping.sh record --real lap1` — `--real` = start.sh와 같은 `fastdds.xml`) bag 폴더를 PC로 옮긴다.
+**녹화 위치.** 녹화 토픽은 원본 영상이라 pole_front_cam 640×360 15 Hz에서 컬러 691 KB + depth 461 KB = 장당 1.15 MB, 초당 약 17 MB(약 140 Mbps)다. Wi-Fi로 PC에서 녹화하면 링크가 막힌다 — 실측(11-19) 약 1분에 2.4 MB만 받았고 Jetson ping이 600 ms · 60 % 손실로 튀어 RViz · 텔레옵까지 멈췄다. 컬러 한 장이 IP 패킷 약 470개라 하나만 빠져도 장 전체가 버려지거나 재전송된다. 그래서 Wi-Fi면 Jetson에서 녹화하고, PC 녹화는 유선(1 Gbps)일 때만 한다.
 
 ### 2. 매핑 (PC에서 재생)
 
