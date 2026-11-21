@@ -538,3 +538,13 @@ TEST(Core, BoxFaceDistCornersFaces) {
   few.pts = {{0.4, 0.0}, {0.41, 0.0}};
   EXPECT_FALSE(box_face_dist(few, {0.0, 0.0}, 0.0, 0.069));
 }
+
+TEST(Core, KeepTrackYaw) {  // 트랙 방향을 덜 아는 관측으로 덮지 않음 (fuse)
+  const double pi = M_PI;
+  EXPECT_TRUE(perception::keep_track_yaw(2 * pi, "", pi / 2, ""));              // 장소 상자 태그 360° ← 윗면 90°
+  EXPECT_TRUE(perception::keep_track_yaw(pi, "lying", pi / 2, ""));             // 누운 퍽 축 180° ← 자세 모르는 태그 90°
+  EXPECT_FALSE(perception::keep_track_yaw(pi, "lying", pi / 2, "standing"));    // 세운 뒤 선 퍽 방향은 덮음 (11-15)
+  EXPECT_FALSE(perception::keep_track_yaw(pi, "lying", pi, "lying"));           // 같은 주기 — 새 축
+  EXPECT_FALSE(perception::keep_track_yaw(pi / 2, "standing", pi / 2, ""));     // 선 퍽끼리
+  EXPECT_FALSE(perception::keep_track_yaw(pi / 2, "lying", pi, "lying"));       // 90° 트랙을 누운 축 180°로 고침
+}

@@ -808,6 +808,12 @@ std::optional<double> axis_yaw(const std::vector<cv::Vec2d> & pts, int min_point
   return std::atan2(v.at<double>(0, 1), v.at<double>(0, 0));
 }
 
+bool keep_track_yaw(double track_period, const std::string & track_posture, double det_period, const std::string & det_posture) {
+  if (det_period >= track_period) return false;
+  if (track_period > PI + 1e-6) return true;  // 장소 상자 360°
+  return track_posture == "lying" && det_posture.empty() && track_period > PI / 2 + 1e-6;  // 누운 퍽 180° ← 자세 모르는 90°
+}
+
 // ---------- 상자
 std::vector<BoxTop> find_box_tops(const cv::Mat1f & depth_m, const cv::Matx33d & rot, const cv::Vec3d & trans, double fx,
                                   double fy, double cx, double cy, double floor_z, std::pair<double, double> h_range,
