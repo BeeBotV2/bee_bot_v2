@@ -23,9 +23,11 @@
 //     → READ 12회 점멸 — signal_status가 ok(두 사이클 같은 답)면 확정 · unconfirmed면 기다림 ·
 //              count·unknown·range가 signal_error_cycles번 이어지면 ERROR (발제: 추정 금지 → 안전 정지) · signal_timeout_s 넘어도 ERROR
 //     → SURVEY 시작 박스 6곳 전부: 퍽 두 자리 inspect(tag·색·모양) → pick → load next (적재함 12칸)
+//              퍽마다 다 실을 때까지: pick 실패 → inspect → 다시 pick · load 실패 → 상자 빈 자리에 되돌림 → inspect → pick → load
+//              (survey_load_tries번) — 그래도 못 실은 퍽은 BUILD 전에 그 상자에 한 번 더 옴 (11-21 사용자 · 들고 다니지 않음)
 //              적재함 장부(칸 → tag)는 coordinator 하나만 씀 — 여기선 /coordinator/basket을 읽어 "그 tag가 실린 칸"을 찾음
 //              → 12개 한 번에 할당 (mission_solver allocate)
-//     → BUILD 퍽마다: 장소 앞 → 장소 태그로 칸 위치 보정 → [적재함 칸에서 꺼냄 | 못 실은 퍽은 시작 박스에서 직접 집어 옴]
+//     → BUILD 퍽마다: 장소 앞 → 장소 태그로 칸 위치 보정 → 적재함 칸에서 꺼냄 (못 실은 퍽은 not_loaded — 직접 운반 안 함)
 //              (적재함이면 unload <칸>) → place 칸 "x,y,z" → 내려다보고 10 mm 밖·쓰러짐이면 다시 집어 놓기
 //     → VERIFY 장소마다 새로 본 퍽만으로 칸별 판정 (verify_in_place: 장소의 마지막 퍽을 놓은 그 자리에서 · 못 한 장소만 다시 감) + 12개 중복·누락 → RETURN 출발 구역 가운데 → 외곽이 구역 안인지
 //              확인·보정 → home_hold_s 정지 → DONE
@@ -89,6 +91,10 @@ const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedOb
 //   다른 상자 퍽으로 알던 퍽은 할 일 (떨어뜨렸거나 옮겨짐)
 inline bool box_todo(bool in_basket, bool known, bool same_box) { return !in_basket && (!known || !same_box); }
 
+// 못 실은 퍽을 상자에 되돌릴 자리 (test_mission_memory): 가운데 → 가운데에서 ring 떨어진 8방향 중 다른 퍽(others)에서 clear 넘게 떨어진
+//   첫 점 · 그런 점이 없으면 가장 먼 점 — 11-21 실기 S2: 본 자리로 되돌린 퍽 9가 퍽 0과 5 cm라 퍽 0 pick이 퍽 9에 얹혀 막힘
+std::pair<double, double> free_spot(double cx, double cy, const std::vector<std::pair<double, double>> & others, double ring, double clear);
+
 class MissionManager : public rclcpp::Node {
 public:
   explicit MissionManager(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
@@ -122,12 +128,21 @@ private:
   void survey(size_t box);
   std::vector<std::string> goto_;  // start:GOTO 목록 (S1~S6 · L1~L3)
   void goto_seq(size_t k);         // 목록 k번째 상자에 SURVEY처럼 다가감 → 다음 · 끝나면 RETURN
-  void load(size_t box, std::vector<int> found, size_t k);  // 찾은 퍽(tag)을 적재함에 — 트랙 id는 집기 직전에 다시 찾음
+  // 시작 박스 b에 가서 inspect → 할 일 퍽을 다 실을 때까지 → then. revisit: 1차에 못 실은 퍽(leftover_)을 다시 하러 온 것
+  void visit_box(size_t b, bool revisit, std::function<void()> then);
+  void revisit(std::vector<size_t> boxes, size_t k);  // 1차 SURVEY 뒤 못 실은 퍽이 있는 상자만 다시 → BUILD 배정
+  void load(size_t box, std::vector<int> found, size_t k, std::function<void()> then);  // 찾은 퍽(tag)을 차례로 load_one
+  // 퍽 하나를 적재함에: grab → load. load 실패면 상자에 되돌리고(put_back) 다시 grab → load (survey_load_tries번까지)
+  void load_one(size_t b, int tag, int load_try, std::function<void()> next);
+  void give_up(size_t b, int tag, const std::string & why);  // 1차면 leftover_에 (place 전에 다시 옴) · 2차면 not_loaded
+  std::map<size_t, std::vector<int>> leftover_;  // 시작 박스 → 1차에 못 실은 퍽 tag
+  bool second_pass_ = false;                     // revisit 중 (못 실으면 더 안 옴)
+  int load_tries_ = 3;                           // survey_load_tries — 퍽 하나 load 시도 수 (실패마다 상자에 되돌리고 다시 집음)
   // 상자 윗면 위 tag 퍽 중 할 일 (처음 본 퍽 · 다른 상자 자리로 기억했는데 여기 있는 퍽)을 이 상자로 적고 돌려줌
   std::vector<int> collect(size_t b, double cx, double cy);
   void solve_allocation();
   void build(size_t i);
-  void bring(size_t i);                          // 그 퍽을 장소 앞에서 손에 쥘 때까지 (적재함 · 시작 박스)
+  void bring(size_t i);                          // 그 퍽을 장소 앞에서 적재함 칸에서 꺼내 손에 쥘 때까지
   void place_check(size_t i, int tries);         // 놓기 → 내려다보고 확인 → 벗어났으면 다시
   void verify(size_t k);   // k = 재확인 순서 (build_location_order 거꾸로) — 그 자리에서 이미 한 장소는 건너뜀
   void verify_at(size_t li, std::function<void()> then);  // 지금 선 자리에서 장소 li 재검증 (가서 서는 건 부르는 쪽)
@@ -144,7 +159,8 @@ private:
   void pick_near(uint32_t id, Done done);  // 박스에 붙은 뒤 퍽이 수직 pick 한계 밖이면 그만큼만 전진 → pick
   // 퍽(tag) 트랙을 지금 찾음 — 목록에 없으면 조사한 자리(puck_at_)를 inspect로 다시 보고 한 번 더 찾음 (그래도 없으면 nullptr)
   //   memory: 목록에 없을 때 먼저 마지막으로 본 트랙(last_seen_)을 줌 — 첫 시도만 (그 pick이 실패하면 다시 봄)
-  void locate(int tag, bool memory, std::function<void(const TrackedObject *)> cb);
+  //   fresh: 지금 목록에 있어도 그 자리를 먼저 inspect로 다시 봄 (pick 다시 시도 — 실패한 pick이 퍽을 밀었을 수 있음)
+  void locate(int tag, bool memory, std::function<void(const TrackedObject *)> cb, bool fresh = false);
 
   Pose2 to_map(double x, double y, double yaw = 0.0) const;  // 도면 보정(acorr_)까지 더함
   Pose2 to_arena(double mx, double my, double myaw = 0.0) const;
@@ -165,6 +181,11 @@ private:
     std::string phase, ctx;
   };
   StepLog step_log_;
+  // 지금 coordinator가 inspect 단계를 하는 중 — 태그는 이때 읽은 것만 믿음 (last_seen_)
+  bool inspecting() const {
+    return waiting_plan_ && step_log_.plan == waiting_plan_ && step_log_.cur < step_log_.goals.size() &&
+           step_log_.goals[step_log_.cur].skill == "inspect";
+  }
   int attempt_ = 0;                  // 다음 run()의 다시 시도 번호 (run_retry · grab · place_check · stand_up이 정함)
   std::string ctx_;                  // 지금 다루는 퍽·박스·장소 (JSON 필드 조각, 예 "\"tag\": 7, \"loc\": \"L1\"")
   double phase_t0_ = 0, mission_t0_ = 0;
@@ -279,7 +300,9 @@ private:
   std::map<size_t, Spot> box_seen_;  // 시작 박스 → 조사 때 기준으로 쓴 가운데 (인지 상자 · 없으면 도면)
   std::pair<double, double> here(const Spot & s) const;  // 지금 쓸 map 점
   std::set<int> on_box_;                                  // 지금 시작 박스 위에 있는 퍽 tag (집으면 빠지고, 되돌려 놓은 게 확인되면 다시)
-  void put_back(size_t b, int tag, const std::string & why, std::function<void()> next);  // 못 실은 퍽을 상자에 되돌리고 inspect로 확인
+  // 못 실은 퍽을 상자 빈 자리에 되돌리고 inspect로 다시 봄 → next(놓았나)
+  void put_back(size_t b, int tag, const std::string & why, std::function<void(bool)> next);
+  double put_back_ring_m_ = 0.05, put_back_clear_m_ = 0.065;  // free_spot ring · clear (plan.yaml put_back_ring_m · put_back_clear_m)
   plan::msg::BasketState::ConstSharedPtr basket_;  // 적재함 장부 — coordinator가 씀 (/coordinator/basket), 여기선 읽기만
   int basket_slot_of(int tag) const;   // 그 tag가 실린 칸 (없으면 −1)
   bool basket_has_room() const;        // 빈 칸이 있나 (장부를 아직 못 받았으면 있다고 봄)
