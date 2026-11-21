@@ -338,7 +338,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #   B2: 뒤가 넓음. 나머지는 첫 진입 면 뒤가 좁아 0 (B4·B5는 물러나면 뒤 벽 0.1 m 안)
     #   11-18 sim: B6 0.25 → 0 — 물러난 자리(다가설 자리 + 0.25)가 L2 받침대 6 cm 앞이라 어떤 목표로도 경로가 안 나옴(갇힘, 2회 재현)
     start_box_retreat: [0.0, 0.25, 0.0, 0.0, 0.0, 0.0]
-    location_box_retreat: [0.0, 0.0, 0.0] # [m] L1·L2·L3 — 물러날 때 회전 여유(exit_turn_clear_m) 위에 더 물러날 거리 (첫 진입 면, start_box_retreat와 같은 방식)
+    location_box_retreat: [0.0, 0.0, 0.20] # [m] L1·L2·L3 — 물러날 때 회전 여유(exit_turn_clear_m) 위에 더 물러날 거리 (첫 진입 면 · 뒤 벽이 exit_turn_clear_m 밖인 만큼만) — 11-22 실기 L3: 0.22 m만 물러나면 복귀 경로가 동쪽 벽 끝을 스쳐 collision_monitor에 12 s 막힘
     location_box_sides:
       ["-x@0.37 +x@0.37", "-y@0.37 +x@0.37 +y@0.37 -x@0.37", "-y@0.33 +x@0.32 +y@0.37"]
     #   11-22 사용자: 장소 상자 진입점 0.43~0.49 → 0.37 (L3 −y 0.33 실기 도킹 잘 됨 · 긴 직선 줄임) — 물러날 때는 exit_turn_clear_m까지 (회전 여유)
