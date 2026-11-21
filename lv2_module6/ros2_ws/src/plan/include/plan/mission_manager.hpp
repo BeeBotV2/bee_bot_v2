@@ -251,7 +251,8 @@ private:
   std::optional<std::array<double, 2>> light_;  // 이번 관측에서 본 신호등 (arena x, y) — 바코드는 그 왼쪽
   double peek_yaw_ = 0.0;
   double occlude_rad_ = 0.35, occlude_lost_s_ = 2.0, signal_preroll_s_ = 30.0;
-  bool occl_wait_ = false;  // 팔이 신호등을 가려 접음 — 신호 확정 뒤에 다시
+  bool occl_wait_ = false;
+  bool barcode_after_signal_ = true;  // 신호 확정(또는 signal_timeout_s) 뒤에 바코드 — 팔을 안 움직임  // 팔이 신호등을 가려 접음 — 신호 확정 뒤에 다시
   rclcpp::Time light_seen_at_{0, 0, RCL_ROS_TIME};  // 지금 엿보는 방위 [rad] (사진 이름)
   bool scan_from_light_ = true, scan_ = false, scan_only_ = false;  // scan_only_: 본 후보로 엿보기 실패 → 신호등 왼쪽만 훑음
   size_t scan_k_ = 0;

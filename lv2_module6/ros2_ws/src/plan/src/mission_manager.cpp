@@ -198,6 +198,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   signal_timeout_s_ = declare_parameter<double>("signal_timeout_s", 150.0);
   signal_preroll_s_ = declare_parameter<double>("signal_preroll_s", signal_preroll_s_);
   occlude_rad_ = declare_parameter<double>("barcode_occlude_rad", occlude_rad_);
+  barcode_after_signal_ = declare_parameter<bool>("barcode_after_signal", barcode_after_signal_);
   occlude_lost_s_ = declare_parameter<double>("barcode_occlude_lost_s", occlude_lost_s_);
   signal_error_cycles_ = static_cast<int>(declare_parameter<int64_t>("signal_error_cycles", 2));
   barcode_timeout_s_ = declare_parameter<double>("barcode_timeout_s", 20.0);
@@ -698,11 +699,12 @@ void MissionManager::barcode_phase() {
                               std::abs(std::remainder(*candidate_yaw - *light_yaw, 2 * M_PI)) < occlude_rad_;
       // 엿보기(팔 접고 손목만)는 신호와 병렬 — 가리지 않는 자세라 신호등 가까운 방향도 봄 (11-21 사용자 우선순위). 실제로 가리면 위 감시가 접음
       //   팔을 뻗는 gaze는 신호등 가까운 방향이면 신호 확정 뒤에만
-      const bool peek_hold = signal_open && occl_wait_;
+      // 11-21 사용자: 신호 먼저, 바코드는 그 뒤로 고정 (run_full 실기에서 팔이 신호등을 가려 신호가 늦거나 못 읽음) — 엿보기도 신호 확정 뒤
+      const bool peek_hold = signal_open && (occl_wait_ || barcode_after_signal_);
       const bool arm_hold = signal_open && (occl_wait_ || near_light);
       if (peek_hold && !arm_posed && !hold_noted_) {
         hold_noted_ = true;
-        note("신호 확정 기다림 (팔이 신호등을 가렸음) — 확정 뒤 바코드");
+        note(occl_wait_ ? "신호 확정 기다림 (팔이 신호등을 가렸음) — 확정 뒤 바코드" : "신호 먼저 확정 (팔 접은 채) — 확정 뒤 바코드");
       }
       if (!peek_done_ && !peek_sent_ && candidate_yaw && t > barcode_pole_s_ && !peek_hold) {
         peek_sent_ = true;
