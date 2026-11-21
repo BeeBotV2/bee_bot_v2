@@ -39,6 +39,7 @@ skill_approach:
     box_seed_s: 30.0         # [s] 첫 측정만 이만큼 지난 것도 받음 (시작 전 기억 포함 — map→odom은 관측 시각 것이라 오래돼도 맞음) — 시작하며 팔이 올라가 pole_front_cam이 가려져도 도착 직전 측정으로 시작 (11-13)
     box_stale_s: 1.0         # [s] last_seen이 이보다 오래된 측정은 버림
     box_jump_m: 0.08         # [m] 추정에서 이만큼 넘게 튄 측정은 버림
+    box_rejump_s: 1.0        # [s] 튄 측정이 서로 box_jump_m 안으로 이만큼 이어지면 추정을 그쪽으로 옮김 (첫 측정이 틀린 경우 — 실기 nav_1121_214753 S2 상자 밂)
     box_alpha: 0.3           # 새 측정을 섞는 비율
     box_rate_mps: 0.02       # [m/s] 목표를 옮기는 최대 속도 (11-12: 측정마다 1 cm → 8 cm/s로 목표가 움직여 상자 앞에서 크게 돎)
     box_rate_dps: 3.0        # [deg/s] 목표 방향을 돌리는 최대 속도

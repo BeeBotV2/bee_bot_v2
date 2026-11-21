@@ -459,6 +459,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     inspect_back_min_x: 0.17 # [m]
     inspect_back_want_x: 0.21 # [m] 가장 붙은 퍽이 이만큼 앞에 오게 물러남
     inspect_back_max_m: 0.08 # [m] 한 도킹에서 물러나는 최대 (exit 거리에서 그만큼 뺌)
+    inspect_back_recent_s: 8.0 # [s] 이만큼 안에 본 퍽도 셈 — 차체에 붙은 퍽은 인지 목록에서 빠짐 (실기 nav_1121_214753 S3 퍽 5: 0.14 m에서 보이다 사라져 물러나지 않음)
     creep_min_gap:
       0.095 # [m] 전진해도 base_footprint ~ 상자 변이 이 아래로는 안 감 (앞면 2.6 cm — 11-20 오전까지 쓰던 도킹 거리)
       #   11-20: 0.085 → 0.095 (+1 cm) — 도킹 때 가끔 상자를 밀고 더 들어감(상자 위치 추정이 멀게 잡히면 마지막 10 cm는 odom만 보고 감) → 1 cm 여유
