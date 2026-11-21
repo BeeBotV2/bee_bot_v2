@@ -304,16 +304,10 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
         if (d.size() != 8) return;
         wall_ok_ = true;
         wall_rms_ = d[4];
-        if (d[5] != 0.0 || d[6] != 0.0 || d[7] != 0.0) {
-          loc_last_ = wall_s();
-          const ArenaCorr step{d[5], d[6], d[7]};
-          for (auto & mk : marks_) {
-            if (!mk.hits) continue;
-            const auto q = unapply_corr(step, {mk.qx, mk.qy, 0.0});
-            mk.qx = q.x;
-            mk.qy = q.y;
-          }
-        }
+        // 상자 인지 위치(marks, map)는 옮기지 않음 — map→odom 보정은 map에서 벽·상자가 제자리에 있게 하는 것이라 perception의
+        //   map 좌표는 그대로 (11-21 실기 nav_1121_223313: 재방문 S2 인지 상자는 첫 방문과 같은 map 자리). 보정마다 marks를 따라 옮기면
+        //   상자를 다시 볼 때까지 148번 쌓여 S2가 50 cm 반대쪽 (도면 −29 cm · 실제 +21 cm) → 진입점이 상자 위 (lethal) · 다른 변으로
+        if (d[5] != 0.0 || d[6] != 0.0 || d[7] != 0.0) loc_last_ = wall_s();
         const ArenaCorr residual{d[0], d[1], d[2], static_cast<int>(d[3])};
         if (acorr_src_ != "walls" || corr_moved(residual, acorr_, loc_min_m_, loc_min_rad_) ||
             d[5] != 0.0 || d[6] != 0.0 || d[7] != 0.0)

@@ -133,7 +133,7 @@ private:
       RCLCPP_INFO(get_logger(), "Wall map->odom target: %.3f m, %.3f m, %.2f deg (step %.3f, %.3f, %.2f deg · RMS %.3f m · %d cells)",
                   mo.dx, mo.dy, mo.dth * 180 / M_PI, step.dx, step.dy, step.dth * 180 / M_PI, f.rms, f.inliers);
     }
-    // 남은 보정 · 맞은 칸 · RMS · 이번에 옮긴 조각 (mission_manager가 상자 marks를 같이 옮김)
+    // 남은 보정 · 맞은 칸 · RMS · 이번에 옮긴 조각 (mission_manager: 조각이 오면 loc_last_ — marks는 안 옮김)
     Message result;
     result.data = {residual.dx, residual.dy, residual.dth, static_cast<double>(residual.n),
                    f.rms, step.dx, step.dy, step.dth};
