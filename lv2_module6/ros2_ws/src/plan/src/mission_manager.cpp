@@ -175,6 +175,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
   realign_tries_ = static_cast<int>(declare_parameter<int64_t>("place_realign_tries", 2));
+  exit_turn_clear_ = declare_parameter<double>("exit_turn_clear_m", exit_turn_clear_);
   view_m_ = declare_parameter<double>("place_view_m", 0.80);
   loc_any_.assign(loc_boxes_.size(), std::nullopt);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
@@ -2005,7 +2006,15 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
       //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
       //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
-      if (ok) { creep_used_ = 0.0; backed_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
+      // 물러난 자리에서 제자리 회전할 수 있게 — 로봇 중심 ~ 상자 면이 exit_turn_clear_m 이상 (11-22 실기 L3: −y@0.33 · gap 0.119면
+      //   0.109 m만 물러나 면까지 0.228 m < 뒤 모서리 회전 반경 0.288 → 복귀 회전에서 상자에 걸림)
+      if (ok) {
+        creep_used_ = 0.0; backed_ = 0.0;
+        const double b = std::max(std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0), exit_turn_clear_ - gap);
+        back_ = fmt("%.3f", b);
+        done(true, "");
+        return;
+      }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남

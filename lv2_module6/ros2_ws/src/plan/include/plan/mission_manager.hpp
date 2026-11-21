@@ -345,6 +345,7 @@ private:
   std::map<std::string, LocSeen> loc_whole_;
   std::vector<std::optional<LocSeen>> loc_any_;  // 장소마다 태그 없이 본 location_box (윗면 안 잘림) — 진입점 다시 잡기용
   int realign_tries_ = 2;
+  double exit_turn_clear_ = 0.33;  // 상자에서 물러난 뒤 로봇 중심 ~ 상자 면 최소 [m] (뒤 모서리 회전 반경 0.288 + 여유)
   double view_m_ = 0.80;  // 장소 상자: 먼저 설 관측 자리 (상자 가운데에서 면 뒤로) — 0 = 바로 진입점
   bool build_nearest_ = true, use_given_order_ = false;  // BUILD 장소 순서: 적재가 끝난 자리에서 가까운 곳부터 (build_location_nearest)
   double loc_keep_s_ = 60.0, place_reach_m_ = 0.25, realign_m_ = 0.08, realign_wait_s_ = 0.8;
