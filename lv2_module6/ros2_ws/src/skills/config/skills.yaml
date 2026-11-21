@@ -85,6 +85,7 @@ skill_load:
                              #   pick 끝 손 안 퍽 바닥 = 박스 위 5 cm (pick_above_m) → +3 cm = 8 cm, 옆 퍽 윗면(6 cm)보다 2 cm 위 (11/08 5 cm는 너무 높음)
     load_end_pose: over      # 싣고 나서 칸 위 그대로 (11-15: stow는 다음 pick이 stow를 거쳐 감) — 다음 pick은 carry를 멈추지 않고 지나 퍽 위로 (pick_via_carry) · 주행 전 stow는 mission이 따로 보냄 · stow | carry | over
     jam_current_a: 0.3       # [A] 닿는 구간 막힘 기준 (arm_io) — load만 (pick 0.5): 11-15 bag 정상 load 끝 −0.21 ~ +0.06 A · 걸린 load +0.42 ~ +1.03 A (j3 21~48 mrad 못 따라감). 0.5는 +0.42/+0.45 걸림을 놓침 · 1.3은 더 놓침
+    jam_lag_rad: 0.015       # [rad] 막힘은 전류에 더해 joint2·3 추종 오차가 이만큼 넘을 때만 (arm_io) — load만 · 11-21 실기: 막힘 4건 18~44 mrad · 성공 20건 ≤ 11 mrad · 바닥에서 전류만 오른 1건 0.2 mrad (닿은 것)
     load_over_lift_m: 0.04   # [m] 옆 칸 위는 칸 위(q_over)보다 이만큼 높게 지나고 곧게 내려옴 — 손 안 퍽 바닥이 적재된 옆 퍽 윗면 위 약 4 cm (11/12 시뮬 옆 퍽 침) · 0 = 예전
 skill_unload:
   ros__parameters:

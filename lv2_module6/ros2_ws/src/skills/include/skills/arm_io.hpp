@@ -144,6 +144,7 @@ private:
   rclcpp::Subscription<perception::msg::HandRelative>::SharedPtr hr_sub_;
   perception::msg::HandRelative::ConstSharedPtr hr_;
   double jam_mean(double window_s) const;
+  bool jam_lagging(double & lag) const;  // jam_lag_rad 넘게 못 따라감 (꺼짐·값 없음이면 true) · lag = max |joint2|,|joint3| [rad]
   std::string contact_mode_ = "sim", grip_fail_;
   uint64_t gen_ = 0;
   uint32_t run_ = 0;
