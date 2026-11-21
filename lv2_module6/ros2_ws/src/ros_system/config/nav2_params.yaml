@@ -216,12 +216,13 @@ local_costmap:
                              #   (0.02면 꼭대기 0.32 m라 "Sensor origin out of map bounds"로 지우기를 통째로 건너뜀 → 칠하기만 쌓임)
         z_voxels: 16         # VoxelLayer 최대 16
         max_obstacle_height: 0.3
-        mark_threshold: 2    # 0 → 2 (사용자 2026-11-20): 한 기둥에 높이 칸 3개(0.03 × 3 = 9 cm) 이상 차야 장애물 — 떠다니는 depth 잡음 점을 걸러 벽이 얇게
+        mark_threshold: 1    # 0 → 2 (사용자 2026-11-20): 한 기둥에 높이 칸 3개(0.03 × 3 = 9 cm) 이상 차야 장애물 — 떠다니는 depth 잡음 점을 걸러 벽이 얇게
+                             #   11-21 → 1 (사용자: 9 → 5 cm): 칸 2개(0.03 칸이라 5 cm에 가장 가까운 6 cm) — 지도에서 상자를 뺀 no_box에서 높이 7 cm 상자를 카메라로 칠하게
         observation_sources: pole_front_cam
         pole_front_cam:
           topic: /pole_front_cam/depth/color/points_filtered   # perception body_filter가 자기 몸 점을 뺀 것
           data_type: "PointCloud2"
-          min_obstacle_height: 0.06
+          min_obstacle_height: 0.02   # 11-21: 0.06 → 0.02 — 0.06이면 7 cm 상자는 윗 1 cm만 남아 칸 1개 → 못 칠함. 바닥 잡음은 mark_threshold(칸 2개)가 거름
           max_obstacle_height: 0.3
           marking: true
           clearing: true
@@ -268,7 +269,7 @@ global_costmap:
         pole_front_cam:
           topic: /pole_front_cam/depth/color/points_filtered
           data_type: "PointCloud2"
-          min_obstacle_height: 0.06
+          min_obstacle_height: 0.04   # 11-21: 0.06 → 0.04 — 지도에서 상자를 뺀 no_box에서 7 cm 상자 옆면(4~7 cm)을 경로 costmap에 칠함 (2D 층이라 칸 수 거름 없음 → 바닥 잡음 때문에 0.02까지는 안 내림)
           max_obstacle_height: 0.3
           marking: true
           clearing: true
