@@ -4,6 +4,7 @@
 #
 #   isaac/standalone/isaac_mission.sh map     # 처음 한 번: 장면 매핑 → ros2_ws/map/maze_map_1711/ (Isaac 창을 닫거나 Ctrl+C로 끄면 저장)
 #   isaac/standalone/isaac_mission.sh         # 미션: 저장 지도 maze_map_1711으로 위치추정 · 신호등 자동 점멸 · Play 자동
+#   ISAAC_MAP_NAME=no_box isaac/standalone/isaac_mission.sh   # 상자를 뺀 지도 (상자는 카메라로만 장애물)
 #   BEE_BLINK_SEQ=RGYRGRYGRGYR BEE_BARCODE=P2-02 isaac/standalone/isaac_mission.sh   # 신호(기본 blink.py SEED) · 바코드(기본 장면 값 P2-01)
 #   BEE_BLINK_SEED=7 isaac/standalone/isaac_mission.sh                               # 랜덤 신호 — 장면 퍽으로 풀리는 조합만 (blink.py)
 #   다른 Isaac 환경변수(ISAAC_HEADLESS · BEE_SIM_NOISE · OPENCR_TWIST_SCALE …)는 isaac_sim.sh 그대로
@@ -21,7 +22,7 @@
 # ros2_ws/map은 .gitignore — 여기 만든 시뮬 지도는 Jetson의 실기 지도(같은 이름 maze_map_1711)와 섞이지 않는다.
 HERE=$(dirname "$(realpath "$0")")
 MAP_DIR=$(realpath -m "$HERE/../../ros2_ws/map")
-NAME=maze_map_1711
+NAME="${ISAAC_MAP_NAME:-maze_map_1711}"  # ISAAC_MAP_NAME=no_box — 상자 없는 지도 (11-21)
 COMMON="map_dir:=$MAP_DIR map_name:=$NAME use_pole_back_cam:=false operation:=AUTO use_perception:=auto arena_map:=none"
 export BEE_BACK_CAM=false  # camera_adapter도 앞 · 손 카메라만
 
@@ -31,7 +32,7 @@ case "${1:-mission}" in
     export ISAAC_ROS_ARGS="map:=slam $COMMON"
     ;;
   mission)
-    [ -f "$MAP_DIR/$NAME/nvblox.nvblx" ] || { echo "저장 지도 없음: $MAP_DIR/$NAME/nvblox.nvblx — 먼저 $0 map"; exit 1; }
+    [ -f "$MAP_DIR/$NAME/nvblox.nvblx" ] || [ -f "$MAP_DIR/$NAME/map.yaml" ] || { echo "저장 지도 없음: $MAP_DIR/$NAME/ (nvblox.nvblx · map.yaml) — 먼저 $0 map"; exit 1; }
     export ISAAC_ROS_ARGS="map:=saved perception:=true $COMMON ${ISAAC_EXTRA_ROS_ARGS:-}"  # e.g. ISAAC_EXTRA_ROS_ARGS=map_backend:=nvblox
     export BEE_BLINK=1
     ;;
