@@ -175,6 +175,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
   realign_tries_ = static_cast<int>(declare_parameter<int64_t>("place_realign_tries", 2));
+  view_m_ = declare_parameter<double>("place_view_m", 0.80);
   loc_any_.assign(loc_boxes_.size(), std::nullopt);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
@@ -2021,15 +2022,22 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   //   (실기 06:51: L3를 도면 진입점으로 가 상자가 12~20 cm 옆 → 대각선으로 꺾다 막힘 · L2 Nav2 도착 옆 11 cm → 51° 틀어져 막힘)
   const size_t li = static_cast<size_t>(std::stoi(to.substr(1)) - 1);
   const Pose2 f_a = to_arena(f.x, f.y, f.yaw);
-  auto step = std::make_shared<std::function<void(const Pose2 &, const Pose2 &, double, double, int)>>();
-  *step = [this, step, to, li, n, cx, cy, f_a, after, nav, dock](const Pose2 & mm, const Pose2 & ff, double bx, double by, int tries) {
+  // tries −1 = 관측 자리 (place_view_m): 상자를 먼저 보고 그 가운데 기준으로 진입점을 정함 — 상자가 옮겨져 도면 진입점이 상자와 겹쳐도
+  //   (시뮬 11-22: L2를 20 cm 옮긴 뒤 도면 진입점 세 변 모두 Nav2 nav_no_progress). 못 보면 도면 진입점으로 (지금과 같음)
+  auto step = std::make_shared<std::function<void(const Pose2 &, const Pose2 &, double, double, int, bool)>>();
+  *step = [this, step, to, li, n, m, f, cx, cy, f_a, after, nav, dock](const Pose2 & mm, const Pose2 & ff, double bx, double by, int tries, bool precise) {
     // 다시 잡을 때 진입점이 가까우면(0.4 m 안) Nav2 대신 approach 정밀 이동(drive_straight, 1 cm) — Nav2는 목표 허용 오차(약 15 cm) 안이면
     //   '이미 도착'으로 안 움직임 (시뮬 11-22: L1 옆 5.9 cm를 Nav2로 두 번 다시 보내도 그대로)
     Pose2 r0;
-    const bool near_entry = tries > 0 && robot_map(r0) && std::hypot(mm.x - r0.x, mm.y - r0.y) < 0.4;
+    const bool near_entry = precise && robot_map(r0) && std::hypot(mm.x - r0.x, mm.y - r0.y) < 0.4;
     const SubGoal go = near_entry ? SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", mm.x, mm.y, mm.yaw)).set__relation("drive_straight")
                                   : nav(mm);
-    run({stow(), go}, [this, step, to, li, n, cx, cy, f_a, after, dock, ff, bx, by, tries](bool ok, const std::string & why) {
+    run({stow(), go}, [this, step, to, li, n, m, f, cx, cy, f_a, after, dock, ff, bx, by, tries](bool ok, const std::string & why) {
+      if (!ok && tries < 0) {  // 관측 자리에 못 감 — 도면 진입점으로
+        RCLCPP_WARN(get_logger(), "%s 관측 자리 못 감 (%s) — 도면 진입점으로", to.c_str(), why.c_str());
+        (*step)(m, f, cx, cy, 0, false);
+        return;
+      }
       if (!ok && tries == 0) { after(false, why); return; }
       if (!ok) RCLCPP_WARN(get_logger(), "%s 진입점 다시 서기 실패 (%s) — 그 자리에서 봄", to.c_str(), why.c_str());
       Pose2 r;
@@ -2038,9 +2046,9 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       const double face = std::atan2(bm.y - r.y, bm.x - r.x);
       const rclcpp::Time t_turn = now();
       run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("turn")},
-          [this, step, to, li, n, cx, cy, f_a, after, dock, ff, tries, t_turn](bool, const std::string &) {
+          [this, step, to, li, n, m, f, cx, cy, f_a, after, dock, ff, tries, t_turn](bool, const std::string &) {
         realign_timer_ = create_wall_timer(std::chrono::duration<double>(realign_wait_s_),
-                                           [this, step, to, li, n, cx, cy, f_a, after, dock, ff, tries, t_turn]() {
+                                           [this, step, to, li, n, m, f, cx, cy, f_a, after, dock, ff, tries, t_turn]() {
           realign_timer_->cancel();
           const LocSeen * o = nullptr;
           const char * src = "태그";
@@ -2049,6 +2057,20 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
             if (it != loc_whole_.end() && it->second.t >= t_turn) o = &it->second;
           }
           if (!o && li < loc_any_.size() && loc_any_[li] && loc_any_[li]->t >= t_turn) { o = &*loc_any_[li]; src = "상자"; }
+          if (tries < 0) {  // 관측 자리에서 본 상자 기준으로 진입점 (못 봤으면 도면 진입점)
+            if (!o) {
+              RCLCPP_INFO(get_logger(), "%s 관측 자리 — 상자를 못 봄, 도면 진입점으로", to.c_str());
+              (*step)(m, f, cx, cy, 0, false);
+              return;
+            }
+            double vx, vy;
+            spot_map(*tf_buffer_, o->s, vx, vy, 1e9);
+            const Pose2 av = to_arena(vx, vy, 0.0);
+            const double dx = av.x - cx, dy = av.y - cy;
+            RCLCPP_INFO(get_logger(), "%s 관측 자리 — 인지 %s가 기준에서 (%+.1f, %+.1f) cm → 그 정면 진입점으로", to.c_str(), src, dx * 100, dy * 100);
+            (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), av.x, av.y, 0, true);
+            return;
+          }
           Pose2 r;
           if (!o || !robot_arena(r)) {
             RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 상자를 못 봄, 그대로 approach", to.c_str());
@@ -2068,12 +2090,19 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
           const double dx = a.x - cx, dy = a.y - cy;  // 처음 진입 기준 가운데에서 인지 가운데까지
           RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m (> %.2f) · 상자가 기준에서 (%+.1f, %+.1f) cm → 진입점 다시 (%d/%d)",
                       to.c_str(), src, lat, realign_m_, dx * 100, dy * 100, tries + 1, realign_tries_);
-          (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1);
+          (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1, true);
         });
       });
     });
   };
-  (*step)(m, f, cx, cy, 0);
+  // 관측 자리 = 상자 가운데에서 면 법선 뒤로 place_view_m (벽에 가까우면 진입점 쪽으로 줄임) — 0이면 바로 진입점
+  double vd = view_m_;
+  const double nd = std::hypot(n.x - cx, n.y - cy);
+  while (vd > nd + 0.05 && wall_distance(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), walls_) < wall_clearance_) vd -= 0.05;
+  if (view_m_ > 0.0 && vd > nd + 0.05)
+    (*step)(to_map(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), n.yaw), f, cx, cy, -1, false);
+  else
+    (*step)(m, f, cx, cy, 0, false);
 }
 
 // ---------- 장소 상자 — 칸은 인지한 상자 가운데(윗면 정중앙 태그) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
