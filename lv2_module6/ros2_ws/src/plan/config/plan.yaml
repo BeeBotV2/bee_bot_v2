@@ -360,6 +360,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
       ] # 시작 박스 1~6 중심
     box_half: 0.1025 # 205 박스 반 변
     puck_offsets_x: [-0.040, 0.040] # 박스 위 퍽 두 개 — 중심 X±40
+    survey_recheck: true # 시작 박스에서 싣기를 다 한 뒤 떠나기 전 한 번 더 봄 — 처음 못 본 퍽 · 다른 상자에서 떨어뜨린 퍽을 할 일로 (11-21 실기 S6: 퍽 3개 중 1개 놓침)
     locations: [3.714, 0.965, 2.275, 3.661, 3.659, 5.289] # L1·L2·L3 격자 중심 (11-15 실측: 상자 가운데)
     location_boxes: [
         3.714,

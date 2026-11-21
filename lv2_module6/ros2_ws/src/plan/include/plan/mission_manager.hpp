@@ -85,6 +85,14 @@ struct Box {  // arena [m] — 정사각 박스 (윗면 = box_top_z)
 const perception::msg::TrackedObject * puck_for(const perception::msg::TrackedObjectArray * objs, int tag,
                                                 const double * spot_xy, double radius);
 
+// 상자 위에 보인 tag 퍽이 할 일인지 (test_mission_memory): 적재함에 있으면 아님 · 처음 보면 할 일 · 이 상자 퍽으로 이미 적혔으면
+//   첫 보기는 아님(중복), 다시 보기는 되돌려 둔 것(on_box)만 아님(BUILD 몫) — 손에서 떨어져 놓친 퍽은 할 일 · 다른 상자로 알던 퍽은 할 일
+inline bool box_todo(bool in_basket, bool known, bool same_box, bool on_box, bool again) {
+  if (in_basket) return false;
+  if (!known || !same_box) return true;
+  return again && !on_box;
+}
+
 class MissionManager : public rclcpp::Node {
 public:
   explicit MissionManager(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
@@ -119,6 +127,9 @@ private:
   std::vector<std::string> goto_;  // start:GOTO 목록 (S1~S6 · L1~L3)
   void goto_seq(size_t k);         // 목록 k번째 상자에 SURVEY처럼 다가감 → 다음 · 끝나면 RETURN
   void load(size_t box, std::vector<int> found, size_t k);  // 찾은 퍽(tag)을 적재함에 — 트랙 id는 집기 직전에 다시 찾음
+  // 상자 윗면 위 tag 퍽 중 할 일 (처음 본 퍽 · 다른 상자 자리로 기억했는데 여기 있는 퍽 · 다시 보기면 손에서 떨어진 퍽)을 이 상자로 적고 돌려줌
+  std::vector<int> collect(size_t b, double cx, double cy, bool again);
+  void recheck(size_t b);  // 싣기를 다 하고 상자를 떠나기 전 한 번 더 봄 (survey_recheck)
   void solve_allocation();
   void build(size_t i);
   void bring(size_t i);                          // 그 퍽을 장소 앞에서 손에 쥘 때까지 (적재함 · 시작 박스)
@@ -272,6 +283,8 @@ private:
   std::map<int, Spot> puck_seen_;  // tag → 조사 때 본 자리 — 적재함에 못 실은 퍽을 되돌려 놓을 곳
   std::map<size_t, Spot> box_seen_;  // 시작 박스 → 조사 때 기준으로 쓴 가운데 (인지 상자 · 없으면 도면)
   std::pair<double, double> here(const Spot & s) const;  // 지금 쓸 map 점
+  std::set<size_t> rechecked_;  // 다시 본 시작 박스
+  bool survey_recheck_ = true;
   std::set<int> on_box_;                                  // 지금 시작 박스 위에 있는 퍽 tag (집으면 빠지고, 되돌려 놓은 게 확인되면 다시)
   void put_back(size_t b, int tag, const std::string & why, std::function<void()> next);  // 못 실은 퍽을 상자에 되돌리고 inspect로 확인
   plan::msg::BasketState::ConstSharedPtr basket_;  // 적재함 장부 — coordinator가 씀 (/coordinator/basket), 여기선 읽기만
