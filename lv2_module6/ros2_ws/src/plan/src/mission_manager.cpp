@@ -373,8 +373,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
               seen.has_yaw = true;
             } catch (const std::exception &) {}
           }
-          loc_any_[detail(o, "tag")] = seen;
-          if (detail(o, "cut") != "true") loc_whole_[detail(o, "tag")] = seen;
+          // 윗면을 다 찾은 관측만 (corners · 안 잘림) — 윗면 없이 태그만 본 관측은 위치가 태그 자리(가운데에서 최대 약 10 cm)
+          if (detail(o, "cut") != "true" && !detail(o, "corners").empty()) loc_whole_[detail(o, "tag")] = seen;
         }
       for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
         it = (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() > back_recent_s_ ? recent_pucks_.erase(it) : std::next(it);
@@ -1928,7 +1928,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
 }
 
 // ---------- 장소 상자 — 칸은 인지한 상자(가운데 · 변 방향) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
-//   안 잘린 마지막 관측 우선 (붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고, 목록에서 빠지기도 함 — 실기 nav_1122_023039)
+//   윗면을 다 찾은(안 잘린) 마지막 관측만 (붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고, 목록에서 빠지기도 함 — 실기 nav_1122_023039)
 //   관측은 odom 점으로 기억 → 쓸 때 지금 map으로 (붙어 있는 동안 벽 정합이 map→odom을 3~5 cm씩 옮김)
 void MissionManager::correct(size_t li) {
   if (li >= loc_tags_.size() || li >= loc_boxes_.size() || li >= loc_pose_.size()) return;
@@ -1939,28 +1939,24 @@ void MissionManager::correct(size_t li) {
     return it != m.end() && (now() - it->second.t).seconds() <= loc_keep_s_ ? &it->second : nullptr;
   };
   const LocSeen * o = fresh(loc_whole_, tag);
-  const bool whole = o != nullptr;
-  if (!o) o = fresh(loc_any_, tag);
   loc_pose_[li].reset();
-  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
+  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 윗면을 다 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
   double mx, my, mo = 0.0;
   spot_map(*tf_buffer_, o->s, mx, my, 1e9);  // odom 점을 지금 map으로 (odom은 짧은 동안 안 튐)
   try {
     const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
     mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
   } catch (const std::exception &) {}
-  // 변 방향: 이 관측에 없으면 안 잘린 관측의 것 · 둘 다 없으면 경기장 축 (가운데만 인지)
-  const LocSeen * yw = o->has_yaw ? o : fresh(loc_whole_, tag);
-  const bool has_yaw = yw && yw->has_yaw;
-  const Pose2 a = to_arena(mx, my, has_yaw ? yw->yaw_odom + mo : 0.0);
+  const bool has_yaw = o->has_yaw;  // 없으면 경기장 축 (가운데만 인지)
+  const Pose2 a = to_arena(mx, my, has_yaw ? o->yaw_odom + mo : 0.0);
   const double off = std::hypot(a.x - b.x, a.y - b.y);
   if (off > corr_max_) {
     RCLCPP_WARN(get_logger(), "L%zu 상자 도면에서 %.0f cm (> %.0f) — 다른 것을 본 것으로 보고 안 씀", li + 1, off * 100, corr_max_ * 100);
     return;
   }
   loc_pose_[li] = Pose2{a.x, a.y, has_yaw ? a.yaw : 0.0};
-  RCLCPP_INFO(get_logger(), "L%zu 상자 (%+.1f, %+.1f) mm · 방향 %+.1f° — %s %.1f s 전%s", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000,
-              has_yaw ? std::remainder(a.yaw, M_PI / 2) * 180 / M_PI : 0.0, whole ? "안 잘린 관측" : "잘린 관측", (now() - o->t).seconds(),
+  RCLCPP_INFO(get_logger(), "L%zu 상자 (%+.1f, %+.1f) mm · 방향 %+.1f° — 윗면 관측 %.1f s 전%s", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000,
+              has_yaw ? std::remainder(a.yaw, M_PI / 2) * 180 / M_PI : 0.0, (now() - o->t).seconds(),
               has_yaw ? "" : " · 방향 모름(경기장 축)");
 }
 
