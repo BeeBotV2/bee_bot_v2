@@ -444,8 +444,8 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     # 테스트를 위해서 좀더 큰 변화 테스트 20261119 변경
     # 기록을 위해서 여기에 남김
     approach_gap:
-      0.144 # [m] 그다음 approach로 base_footprint ~ 박스 변을 이만큼까지 (로봇 앞면 0.069 → 7.5 cm) — 11-20 실기: 5 cm도 바짝 붙음
-      #   11-20: 시뮬에서는 먼 줄 퍽(0.287 m > pick_far 0.285)이 안 닿았음 — 실기에서 먼 퍽 pick 확인. 안 되면 0.13(6 cm)
+      0.119 # [m] 그다음 approach로 base_footprint ~ 박스 변을 이만큼까지 (로봇 앞면 0.069 → 5 cm) — 11-21 실기: 7.5 cm는 멀어서 좁힘
+      #   11-21: 먼 퍽은 pick_near가 닿을 만큼 전진 (이 gap − creep_min_gap = 최대 2.4 cm) · 11-20: 0.095(2.6 cm)는 바짝 붙음
     # 도킹 뒤 퍽이 멀면 팔이 닿게 조금 전진 (pick_near, 11-20) — 로봇 중심 ~ 퍽이 pick_reach_m 안에 들 만큼만 · 상자 앞 gap creep_min_gap까지
     pick_reach_m: 0.25 # [m] 수직 pick 한계 약 0.256 (시뮬 팔 범위) − 여유
     creep_min_gap: 0.095 # [m] 전진해도 base_footprint ~ 상자 변이 이 아래로는 안 감 (앞면 2.6 cm — 11-20 오전까지 쓰던 도킹 거리)
