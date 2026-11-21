@@ -1409,6 +1409,13 @@ void MissionManager::bring(size_t i) {
     at_box(true, "");
     return;
   }
+  // 붙은 상자에서 다른 변으로 돌려면 상자 가운데를 알아야 함 — 모르면(도면 기준) Nav2가 실제 상자를 지나는 길로 몰아 박음
+  //   (11-22 실기 nav_1122_033953 L3: 도면에서 18.5 cm인 상자를 도면 기준으로 돌다 상자를 밀며 계속 감) → 이 칸은 안 놓음
+  if (!back_.empty() && stop_ == box_label(box) && !loc_fix_[job.loc]) {
+    RCLCPP_WARN(get_logger(), "%s 칸 %d — 이 변에선 안 닿고 상자 가운데를 몰라 다른 변으로 안 돎", stop_.c_str(), job.cell);
+    skip("place_unreachable");
+    return;
+  }
   // go_near는 점을 도면 기준으로 받아 인지 상자 가운데(near_c_)만큼 옮김 — 인지 상자 위 칸(tx, ty)을 주면 두 번 옮겨짐
   const auto [hx, hy] = cell_offset(job.cell, grid_step_);
   go_near(box, locations_[job.loc].first + hx, locations_[job.loc].second + hy, at_box);
@@ -1819,6 +1826,17 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   }
   if (poses.empty()) {
     near_c_ = near_center(box);  // 인지 평균 또는 도면 — 점(px, py)도 같이 옮김 (장소 칸 등 박스 기준 점)
+    {  // 장소 상자는 고정한 가운데(loc_fix_)가 있으면 그것 — 다가설 자리 · Nav2 목표가 실제 상자 기준
+      const std::string lb = box_label(box);
+      const size_t li = lb[0] == 'L' ? static_cast<size_t>(std::stoi(lb.substr(1)) - 1) : loc_fix_.size();
+      if (li < loc_fix_.size() && loc_fix_[li]) {
+        double mx, my;
+        spot_map(*tf_buffer_, *loc_fix_[li], mx, my, 1e9);
+        const auto a = to_arena(mx, my, 0.0);
+        near_c_ = {a.x, a.y};
+        RCLCPP_INFO(get_logger(), "%s 다가설 자리 — 고정한 상자 가운데 (도면에서 %+.1f, %+.1f cm)", lb.c_str(), (a.x - box.x) * 100, (a.y - box.y) * 100);
+      }
+    }
     px += near_c_.first - box.x;
     py += near_c_.second - box.y;
     poses = approach_poses(near_c_.first, near_c_.second, box.half, px, py, standoff_);
