@@ -991,6 +991,14 @@ void MissionManager::revisit(std::vector<size_t> boxes, size_t k) {
   visit_box(boxes[k], true, [this, boxes, k]() { revisit(boxes, k + 1); });
 }
 
+// 상자 보기 inspect — 그 상자에 남은 퍽 수(on_box_ · 조사한 상자)를 4번째 값으로 (11-22 실기: 재방문에 1개 남았는데 2개를 기대해 inspect_partial 3번)
+//   모르면(아직 조사 전 · 퍽을 못 봄) 2
+SubGoal MissionManager::box_inspect(size_t b, double x, double y) const {
+  int n = 0;
+  for (const int t : on_box_) if (const auto it = puck_at_.find(t); it != puck_at_.end() && it->second.first == b) ++n;
+  return SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", x, y, box_top_z_ + puck_h_) + "," + str(n > 0 ? n : 2)).set__relation("box");
+}
+
 void MissionManager::visit_box(size_t b, bool again, std::function<void()> then) {
   const Box box = start_boxes_[b];
   ctx_ = "\"box\": " + str(static_cast<int>(b) + 1);
@@ -1018,7 +1026,7 @@ void MissionManager::visit_box(size_t b, bool again, std::function<void()> then)
     box_seen_[b] = make_spot(*tf_buffer_, cx, cy);
     // 상자 한 번 보기 (look 자세 → 퍽이 모자라거나 태그를 못 읽으면 본 퍽을 담는 자세로 다시) — 퍽 자리마다 따로 보던 것 (11/07)
     const std::vector<SubGoal> goals = {
-      SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")};
+      box_inspect(b, cx, cy)};
     run_retry(goals, [this, b, cx, cy, goals, again, left, then](bool ok2, const std::string & why2) {
       if (!ok2) RCLCPP_WARN(get_logger(), "시작 박스 %zu inspect 실패 (%s) — 본 것만", b + 1, why2.c_str());
       // 차체에 붙은 퍽(tag 못 읽음 · 팔이 접히는 자리) — look 자세로 물러나 다시 본 뒤 셈
@@ -1121,7 +1129,7 @@ void MissionManager::back_off(size_t b, double cx, double cy, int tries, std::fu
         creep_used_ -= step;
         if (ok && !back_.empty()) back_ = fmt("%.3f", std::max(0.0, std::stod(back_) - step));
         if (!ok) RCLCPP_WARN(get_logger(), "물러나기 실패 (%s) — 그 자리에서 inspect", why.c_str());
-        run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", cx, cy, box_top_z_ + puck_h_)).set__relation("box")},
+        run({box_inspect(b, cx, cy)},
             [this, b, cx, cy, tries, then](bool, const std::string &) { back_off(b, cx, cy, tries + 1, then); });
       });
 }
@@ -1207,7 +1215,7 @@ void MissionManager::put_back(size_t b, int tag, const std::string & why, std::f
       puck_seen_[tag] = make_spot(*tf_buffer_, px, py);
       on_box_.insert(tag);
       const rclcpp::Time t0 = now();
-      run({SubGoal().set__skill("inspect").set__target(fmt("%.4f,%.4f,%.4f", px, py, box_top_z_ + puck_h_)).set__relation("box")},
+      run({box_inspect(b, px, py)},
         [this, b, tag, bx, by, head, next, t0](bool, const std::string &) {
           // 이 inspect 동안 그 tag를 상자 윗면 안(가운데에서 half)에서 봤나 — 끝난 순간의 목록이 아니라 inspect 중 마지막 모습 (last_seen_).
           //   실기 170024 S5: 놓은 퍽 6을 look에서 봤는데 '다시 담기'로 카메라가 돌아가 2 s 뒤 트랙이 지워져 끝에서는 못 찾음
