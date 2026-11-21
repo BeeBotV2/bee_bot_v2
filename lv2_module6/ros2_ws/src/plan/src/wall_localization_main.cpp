@@ -48,6 +48,8 @@ public:
     range_ = declare_parameter<double>("arena_corr_wall_range", range_);
     stride_ = static_cast<size_t>(std::max<int64_t>(1, declare_parameter<int64_t>("arena_corr_wall_stride", 4)));
     cloud_period_ = declare_parameter<double>("arena_corr_wall_cloud_period", cloud_period_);
+    hold_m_ = declare_parameter<double>("arena_corr_wall_hold_m", hold_m_);
+    hold_rad_ = declare_parameter<double>("arena_corr_wall_hold_rad", hold_rad_);
     const double wall_period = declare_parameter<double>("arena_corr_wall_period", 2.0);
     const auto cloud = declare_parameter<std::string>("arena_corr_wall_cloud", "/pole_front_cam/depth/color/points_filtered");
     if (!enabled || segs_.empty()) return;
@@ -72,7 +74,7 @@ private:
   // depth 점 → odom (그 영상 시각의 TF) → 높이 띠 안만 5 cm 칸에 (칸마다 마지막 본 시각)
   void on_cloud(const sensor_msgs::msg::PointCloud2 & m) {
     const double t = now_s();
-    if (t - last_cloud_ < cloud_period_) return;
+    if (holding_ || t - last_cloud_ < cloud_period_) return;
     geometry_msgs::msg::TransformStamped o;
     try {
       o = tf_buffer_->lookupTransform("odom", m.header.frame_id, m.header.stamp);
@@ -89,15 +91,34 @@ private:
       const tf2::Vector3 w = tf * tf2::Vector3(*x, *y, *z);
       if (w.z() < z_min_ || w.z() > z_max_) continue;
       const long long key = std::lround(w.x() / res_) * 1000003LL + std::lround(w.y() / res_);
-      cells_[key] = {std::round(w.x() / res_) * res_, std::round(w.y() / res_) * res_, t};
+      cells_[key] = {std::round(w.x() / res_) * res_, std::round(w.y() / res_) * res_, t - held_};
+    }
+  }
+
+  bool robot_odom(Pose2 & r) const {
+    try {
+      const auto o = tf_buffer_->lookupTransform("odom", "base_footprint", tf2::TimePointZero).transform;
+      r = {o.translation.x, o.translation.y, 2 * std::atan2(o.rotation.z, o.rotation.w)};
+      return true;
+    } catch (const std::exception &) {
+      return false;
     }
   }
 
   void tick() {
     const double t = now_s();
+    // 11-22 실기 nav_1121_233425: 서서 팔만 움직일 때(stand·load) 칸이 600 → 170으로 줄며 fit이 20 cm · 2.3° 튐 → target이 끌려감.
+    //   바퀴가 안 돌면 odom이 틀어질 일이 없으니, 지난 fit 뒤 로봇이 hold 안이면 fit을 새로 안 함 (조금씩 움직이면 쌓여서 넘음).
+    //   서 있는 동안은 칸도 안 받고 나이도 안 먹음(held_) — 다시 움직일 때 선 자리에서 본 칸만 남아 같은 점프가 나지 않게
+    Pose2 r;
+    holding_ = robot_odom(r) && have_fit_pose_ && std::hypot(r.x - fit_pose_.x, r.y - fit_pose_.y) < hold_m_ &&
+               std::abs(std::remainder(r.yaw - fit_pose_.yaw, 2 * M_PI)) < hold_rad_;
+    if (holding_ && last_tick_ > 0) held_ += t - last_tick_;
+    last_tick_ = t;
+    const double mt = t - held_;  // 움직인 시간만 센 시계
     std::vector<std::pair<double, double>> pts;
     for (auto it = cells_.begin(); it != cells_.end();) {
-      if (t - it->second.t > keep_s_) { it = cells_.erase(it); continue; }  // odom이 서서히 틀어지니 최근 것만
+      if (mt - it->second.t > keep_s_) { it = cells_.erase(it); continue; }  // odom이 서서히 틀어지니 최근 것만
       pts.push_back({it->second.x, it->second.y});
       ++it;
     }
@@ -113,7 +134,8 @@ private:
       }
     }
     // odom 점을 도면 벽에 — 결과 c는 odom → 도면 보정 (c⁻¹ = map→odom). 시작값만 지난 결과, 측정은 map→odom과 무관
-    const auto f = fit_walls(segs_, pts, last_fit_, wall_gate_, wall_min_cells_, wall_min_eig_, max_shift_, max_rot_);
+    const auto f = holding_ && last_f_.ok ? last_f_
+                                          : fit_walls(segs_, pts, last_fit_, wall_gate_, wall_min_cells_, wall_min_eig_, max_shift_, max_rot_);
     if (!f.ok) {
       if (f.why != wall_why_) RCLCPP_INFO(get_logger(), "Wall fit unavailable: %s (%d cells)", f.why.c_str(), f.inliers);
       wall_why_ = f.why;
@@ -121,6 +143,7 @@ private:
     }
     wall_why_.clear();
     last_fit_ = f.c;
+    if (!holding_ && robot_odom(r)) { fit_pose_ = r; have_fit_pose_ = true; last_f_ = f; }
     ArenaCorr residual = corr_after_step(f.c, sent_), step;  // 낸 목표 기준 남은 보정 (mission_manager가 목표 계산에 씀)
     residual.n = f.inliers;
     if (apply_ && (std::hypot(residual.dx, residual.dy) >= min_m_ || std::abs(residual.dth) >= min_rad_)) {
@@ -148,6 +171,11 @@ private:
   int wall_min_cells_ = 60;
   double keep_s_ = 25.0, res_ = 0.05, z_min_ = 0.10, z_max_ = 0.30, range_ = 2.5, cloud_period_ = 0.5, last_cloud_ = 0;
   size_t stride_ = 4;
+  double hold_m_ = 0.02, hold_rad_ = 0.0175;  // 지난 fit 뒤 이만큼 안 움직였으면 fit 안 함
+  Pose2 fit_pose_;
+  bool have_fit_pose_ = false, holding_ = false;
+  double held_ = 0, last_tick_ = 0;  // 서 있던 시간 합 (칸 나이에서 뺌)
+  WallFit last_f_;
   ArenaCorr sent_, last_fit_;
   std::string wall_why_;  // 마지막 실패 이유 (바뀔 때만 로그)
   std::unordered_map<long long, Cell> cells_;  // odom 칸 → 마지막 본 시각
