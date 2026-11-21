@@ -2019,7 +2019,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
     const auto bm = to_map(cx, cy);
     const double face = std::atan2(bm.y - r.y, bm.x - r.x);
     const rclcpp::Time t_turn = now();
-    run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("drive_straight")},
+    run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("turn")},
         [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn](bool, const std::string &) {
       realign_timer_ = create_wall_timer(std::chrono::duration<double>(realign_wait_s_), [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn]() {
         realign_timer_->cancel();
