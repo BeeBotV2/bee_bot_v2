@@ -137,6 +137,11 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   grid_step_ = declare_parameter<double>("grid_step", 0.060);
   standoff_ = declare_parameter<double>("standoff", 0.25);
   approach_gap_ = declare_parameter<double>("approach_gap", 0.085);
+  // 장소 상자(L1~L3)만 더 바짝 · 앞면 거리로 멈춤 (11-21 사용자: place 때 4~5 cm) — 시작 상자는 approach_gap · odom 목표 그대로
+  {
+    const double g = declare_parameter<double>("place_approach_gap", -1.0), f = declare_parameter<double>("place_face_stop_m", 0.0);
+    for (auto & b : loc_boxes_) { b.gap = g; b.face_stop = f; }
+  }
   pick_reach_m_ = declare_parameter<double>("pick_reach_m", pick_reach_m_);
   creep_min_gap_ = declare_parameter<double>("creep_min_gap", creep_min_gap_);
   back_min_x_ = declare_parameter<double>("inspect_back_min_x", back_min_x_);
@@ -1726,8 +1731,9 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   }
   const auto m = to_map(n.x, n.y, n.yaw);
   // 다가설 자리 → 도킹 자리 거리 (변마다 다름 — "@d") · 붙은 뒤 exit도 이만큼 물러나 이 자리로
+  const double gap = box.gap >= 0.0 ? box.gap : approach_gap_;
   const double push = (cx - poses[k].x) * std::cos(poses[k].yaw) + (cy - poses[k].y) * std::sin(poses[k].yaw)
-                      - box.half - approach_gap_;
+                      - box.half - gap;
   const auto f = to_map(poses[k].x + push * std::cos(poses[k].yaw), poses[k].y + push * std::sin(poses[k].yaw), poses[k].yaw);
   const double t_start = wall_s();
   // navigate "look"(도착 전 팔 올리기)은 안 씀 (11-13 headless: 팔이 pole_front_cam을 가려 보던 상자를 잃고, 0.25 m에선 gripper_cam에 잘려 보임)
@@ -1735,9 +1741,10 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near" + leg_to(to)),
        // 상자 도킹: 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12).
        //   11-16: f도 같은 가운데(cx, cy — 인지 평균 또는 도면) 기준이라 Nav2 목표 · 힌트 · 인지가 한 상자를 가리킴
-       SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", f.x, f.y, f.yaw) + fmt(",%.4f,%.4f", approach_gap_, box.half))
+       SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", f.x, f.y, f.yaw) + fmt(",%.4f,%.4f", gap, box.half) +
+                     (box.face_stop > 0.0 ? fmt(",%.4f", box.face_stop) : std::string()))
          .set__relation("dock_box")},
-    [this, box, px, py, done, k, poses, push, n, t_start, retried, cx, cy, to](bool ok, const std::string & why) {
+    [this, box, px, py, done, k, poses, push, n, t_start, retried, cx, cy, to, gap](bool ok, const std::string & why) {
       stop_ = ok ? to : "";  // 붙었으면 그 상자 앞 (exit으로 같은 자리로 물러난 뒤 다음 구간 표가 시작) · 실패면 모름
       // 출발하자마자 navigate 실패(5 s 안)는 경로·자리 탓이 아니라 일시 오류 — 같은 자리로 한 번 더 (11-15 실기 S3: 출발 0.4 s 만에
       //   error 102 'Unable to transform goal pose' → 바로 반대 변(+y)으로 넘어가 상자를 빙 돌아 좁은 틈으로 감)
@@ -1750,7 +1757,7 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
       //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
       //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
-      if (ok) { creep_used_ = 0.0; backed_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - approach_gap_ + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
+      if (ok) { creep_used_ = 0.0; backed_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남

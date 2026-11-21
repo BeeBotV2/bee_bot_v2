@@ -765,11 +765,12 @@ void Coordinator::approach(const SubGoal & g) {
     send("approach", sg, [this](const Skill::Result &) { next(); });
     return;
   }
-  if (v.size() != 3 && v.size() != 5) { fail("approach_bad_target"); return; }
+  // 상자 도킹 "x,y,yaw,gap,half[,face_stop]" — face_stop: 인지 앞면 거리가 이만큼이면 멈춤 (장소 상자만, 11-21)
+  if (v.size() != 3 && v.size() != 5 && v.size() != 6) { fail("approach_bad_target"); return; }
   Skill::Goal sg;
   sg.target = g.relation;  // 주행 정책: dock_box(기본) · park_home · drive_arc · drive_straight
   sg.pose = map_pose(v[0], v[1], 0.0, v[2]);
-  if (v.size() == 5) sg.values = {v[3], v[4]};
+  if (v.size() >= 5) sg.values.assign(v.begin() + 3, v.end());
   send("approach", sg, [this](const Skill::Result &) { next(); });
 }
 

@@ -5,7 +5,7 @@
 //     도착 판정은 정책 meta의 tol_m · tol_deg · hold_s (시뮬 drive_env TASKS와 같음)
 //   approach_mode legacy: 예전 coordinator approach (목표 뒤 approach_pre_m로 → 돌기 → 직선)
 //   /cmd_vel_nav로 냄 (Nav2와 같은 입구 → twist_mux 비상정지·collision_monitor 그대로). 진행이 멈추면 approach_blocked
-//   상자 도킹 (goal.values = [gap_m, half_m] — mission_manager go_near): goal.pose는 도면 힌트일 뿐, 목표는 인지로 정함 (11-12 결정: 도면은 안 믿음)
+//   상자 도킹 (goal.values = [gap_m, half_m(, face_stop_m)] — mission_manager go_near · face_stop은 장소 상자만: update_face): goal.pose는 도면 힌트일 뿐, 목표는 인지로 정함 (11-12 결정: 도면은 안 믿음)
 //     시작하면 팔을 천천히 pose_look으로 (arm_velocity_scale, launch) · /tracked_objects에서 힌트 상자 가운데 box_match_m 안의
 //     start_box·location_box → 목표 = 상자 가운데 − (half + gap)·면 법선 (윗면 방향 90° 주기 중 힌트 방향에 가까운 것)
 //     첫 측정 전에는 안 움직임 (box_wait_s 넘으면 approach_box_unseen) · 측정은 지연·오차가 있어 그대로 안 씀:
@@ -66,6 +66,8 @@ public:
     box_rate_dps_ = declare_parameter<double>("box_rate_dps", 3.0);   // 목표 방향을 돌리는 최대 속도 [deg/s]
     box_min_side_ = declare_parameter<double>("box_min_side_m", 0.19);  // 윗면 짧은 변이 이보다 작으면 잘린 것 — 버림
     box_freeze_m_ = declare_parameter<double>("box_freeze_m", 0.10);  // 목표까지 이보다 가까우면 목표 고정
+    face_slow_m_ = declare_parameter<double>("face_slow_m", 0.10);    // 앞면 정지(values[2]) 도킹: 인지 앞면 거리가 이 안이면 approach_min_speed로
+    face_shift_max_ = declare_parameter<double>("face_shift_max_m", 0.03);  // 앞면 거리로 목표를 앞뒤로 옮기는 최대 [m] (그보다 크면 잘못 잰 것)
     for (const char * name : {"dock_box", "park_home", "drive_arc", "drive_straight"}) {
       Policy p;
       p.model = load_model(name);
@@ -103,7 +105,7 @@ private:
 
   void start(const SkillGoal & g, Done done) {
     double x, y, yaw;
-    box_mode_ = false;  // 이전 goal의 측정이 끼지 않게 (아래에서 다시 정함)
+    box_mode_ = face_ok_ = false;  // 이전 goal의 측정이 끼지 않게 (아래에서 다시 정함)
     exit_ = g.target == "exit";
     if (exit_) { start_exit(g, done); return; }
     frame_ = g.values.size() >= 2 ? "odom" : "map";
@@ -134,6 +136,9 @@ private:
     if (box_mode_) {
       gap_ = g.values[0];
       half_ = g.values[1];
+      face_stop_ = g.values.size() >= 3 ? g.values[2] : 0.0;
+      face_shift_ = 0.0;
+      face_ok_ = false;
       hint_x_ = gx_ + (half_ + gap_) * std::cos(gyaw_);  // 도면 상자 가운데 — 고를 상자를 찾는 데만 씀
       hint_y_ = gy_ + (half_ + gap_) * std::sin(gyaw_);
       bx_ = hint_x_;
@@ -185,6 +190,7 @@ private:
       if (is_box(o) && std::min(o.size.x, o.size.y) >= box_min_side_) seen_[o.id] = {o, rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
     for (auto it = seen_.begin(); it != seen_.end();)
       it = (t - it->second.second).seconds() > box_seed_s_ ? seen_.erase(it) : std::next(it);
+    if (box_mode_ && have_box_ && face_stop_ > 0.0 && timer_ && !timer_->is_canceled()) update_face(m.objects);
     if (!box_mode_ || frozen_ || !timer_ || timer_->is_canceled()) return;
     update_box(m.objects);
   }
@@ -238,9 +244,38 @@ private:
       bx_ += sx; by_ += sy;
       bh_ = std::remainder(bh_ + std::clamp(box_alpha_ * std::remainder(h - bh_, 2 * M_PI), -step, step), 2 * M_PI);
     }
-    gx_ = bx_ - (half_ + gap_) * std::cos(bh_);
-    gy_ = by_ - (half_ + gap_) * std::sin(bh_);
+    gx_ = bx_ - (half_ + gap_ - face_shift_) * std::cos(bh_);
+    gy_ = by_ - (half_ + gap_ - face_shift_) * std::sin(bh_);
     gyaw_ = bh_;
+  }
+
+  // 앞면 정지 도킹 (values[2], 장소 상자): 인지 앞면 거리(face_dist_m — 로봇 앞면 → 상자 로봇 쪽 면, 화면에 잘려도 · 안 보여도
+  //   마지막으로 잰 면에서 odom으로 계속)로 목표를 면 법선 방향으로만 옮김 — 상자 가운데 추정(고정 뒤엔 odom만)이 앞뒤로 1~2 cm
+  //   틀려도 면에서 face_stop에 섬 (11-21 사용자: place 때 4~5 cm). 잘린 관측도 씀 (가운데는 안 믿어도 앞 가장자리 거리는 잼)
+  void update_face(const std::vector<perception::msg::TrackedObject> & objects) {
+    double best = 0.15, fd = -1.0;
+    for (const auto & o : objects) {
+      if (!is_box(o)) continue;
+      double f = -1.0;
+      for (const auto & kv : o.details)
+        if (kv.key == "face_dist_m") f = std::stod(kv.value);
+      if (f < 0.0) continue;
+      double x = o.pose.pose.position.x, y = o.pose.pose.position.y, a = 0.0;
+      if (!from_map(rclcpp::Time(o.last_seen, RCL_ROS_TIME), x, y, a)) continue;
+      const double d = std::hypot(x - bx_, y - by_);
+      if (d < best) { best = d; fd = f; }
+    }
+    double x, y, yaw;
+    if (fd < 0.0 || !robot_pose(x, y, yaw)) return;
+    face_m_ = fd;
+    face_ok_ = true;
+    // 지금 목표까지 남은 길이(면 법선) vs 면 거리로 본 남은 길이 — 차이만큼 목표를 옮김 (누적 face_shift_max 안)
+    const double c = std::cos(gyaw_), s = std::sin(gyaw_);
+    const double along = (gx_ - x) * c + (gy_ - y) * s;
+    const double shift = std::clamp((fd - face_stop_) - along, -face_shift_max_ - face_shift_, face_shift_max_ - face_shift_);
+    face_shift_ += shift;
+    gx_ += shift * c;
+    gy_ += shift * s;
   }
 
   // 시작 직전(box_seed_s 안) 기억한 측정 중 힌트에 가장 가까운 것으로 첫 목표 (없으면 그대로 — 측정을 기다림)
@@ -412,12 +447,15 @@ private:
       v = std::clamp(1.5 * along, 0.0, v_max_) * std::max(0.0, std::cos(head_c));
       // 실기 바퀴는 약 2~3 cm/s 아래 명령엔 안 움직임 (데드밴드) — 도착 전이면 min_speed 아래로 안 내림 (develop 11-12)
       if (along > 0.003) v = std::max(v, min_speed_);
+      if (face_ok_ && face_m_ < face_slow_m_) v = std::min(v, min_speed_);  // 앞면 정지 도킹: 면 가까이는 데드밴드 위 최저 속도로
       w = std::clamp(3.0 * head_c, -w_max_, w_max_);
     }
     if (dist <= tol_m_ && std::abs(gyaw) < tol_yaw_) still_s_ += 0.05;
     else still_s_ = 0.0;
     if (still_s_ >= hold_s_) {
       RCLCPP_INFO(get_logger(), "approach 도착 — 앞 %.4f m · 옆 %.4f m · 방향 %.3f rad", gx, gy, gyaw);
+      if (box_mode_ && face_stop_ > 0.0)
+        RCLCPP_INFO(get_logger(), "앞면 정지 — 인지 앞면 %.3f m (목표 %.3f · 목표 옮김 %+.3f m)", face_ok_ ? face_m_ : -1.0, face_stop_, face_shift_);
       end(true, "");
       return;
     }
@@ -491,6 +529,8 @@ private:
   rclcpp::Time last_meas_{0, 0, RCL_ROS_TIME};
   bool box_mode_ = false, have_box_ = false, frozen_ = false;
   double gap_ = 0, half_ = 0, hint_x_ = 0, hint_y_ = 0, bx_ = 0, by_ = 0, bh_ = 0;
+  double face_slow_m_ = 0.10, face_shift_max_ = 0.03, face_stop_ = 0.0, face_shift_ = 0.0, face_m_ = 0.0;
+  bool face_ok_ = false;
   rclcpp::Subscription<perception::msg::TrackedObjectArray>::SharedPtr objects_sub_;
   std::map<std::string, Policy> policies_;
   Policy * pol_ = nullptr;
