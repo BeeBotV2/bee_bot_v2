@@ -1472,7 +1472,7 @@ void MissionManager::bring(size_t i) {
   Pose2 r;
   // 면 고정(place_fixed_side)이면 닿든 안 닿든 다른 변으로 안 돎 — 안 닿는 칸은 at_box가 꺼내지 않고 건너뜀
   if (!back_.empty() && stop_ == box_label(box) && robot_arena(r) &&
-      (place_fixed_side_ || std::hypot(tx - r.x, ty - r.y) <= place_reach_m_)) {
+      ((place_fixed_side_ && box.sides.size() <= 1) || std::hypot(tx - r.x, ty - r.y) <= place_reach_m_)) {
     RCLCPP_INFO(get_logger(), "%s 붙은 채 다음 칸 %d (%.3f m)", stop_.c_str(), job.cell, std::hypot(tx - r.x, ty - r.y));
     at_box(true, "");
     return;
@@ -1485,8 +1485,10 @@ void MissionManager::bring(size_t i) {
     return;
   }
   // go_near는 점을 도면 기준으로 받아 인지 상자 가운데(near_c_)만큼 옮김 — 인지 상자 위 칸(tx, ty)을 주면 두 번 옮겨짐
-  const auto [hx, hy] = cell_offset(job.cell, grid_step_);
-  go_near(box, locations_[job.loc].first + hx, locations_[job.loc].second + hy, at_box);
+  //   무늬를 돌렸으면(#116 loc_rot_) 도면 칸 점도 같이 돌림 — 안 돌리면 닿는 변을 엉뚱하게 고름
+  const auto [hx, hy] = box_cell({locations_[job.loc].first, locations_[job.loc].second,
+                                  loc_rot_[job.loc] ? *loc_rot_[job.loc] : 0.0}, job.cell, grid_step_);
+  go_near(box, hx, hy, at_box);
 }
 
 void MissionManager::job_done(size_t i, bool ok) {
