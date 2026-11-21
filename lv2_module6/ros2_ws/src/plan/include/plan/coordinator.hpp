@@ -170,7 +170,7 @@ private:
   PuckInfo stood_;                               // 마지막 stand로 세운 퍽 (stand_pick 성공이면 손에)
   std::string basket_file_;
   rclcpp::Publisher<plan::msg::BasketState>::SharedPtr basket_pub_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr basket_clear_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr basket_clear_srv_, basket_reload_srv_;
   std::string mode_ = "AUTO";
   bool estop_ = false, running_ = false;
   SubGoalArray plan_;

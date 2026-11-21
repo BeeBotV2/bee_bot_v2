@@ -408,7 +408,7 @@ void MissionManager::on_command(const std::string & cmd) {
     for (const auto & b : basket_->slots) left += b.filled;
     left += basket_->held.filled;
   }
-  if (left) {  // 지난 미션 장부(파일)가 남음 — 적재함이 정말 비었는지 사람이 보고 비워야 함
+  if (left && sc.place_loc < 0) {  // 지난 미션 장부(파일)가 남음 — 적재함이 정말 비었는지 사람이 보고 비워야 함
     RCLCPP_WARN(get_logger(), "적재함 장부에 퍽 %d개가 남아 있음 — 시작 거부", left);
     note("시작 거부: 적재함 장부에 퍽 " + str(left) + "개 — 확인 뒤 ros2 service call /coordinator/basket_clear std_srvs/srv/Trigger");
     return;
@@ -475,6 +475,20 @@ void MissionManager::on_command(const std::string & cmd) {
     phase_t0_ = wall_s();
     ctx_.clear();
     goto_seq(0);
+    return;
+  }
+  build_loc_order_ = visit_order(get_parameter("build_location_order").as_integer_array(), 3);
+  if (sc.place_loc >= 0) {  // 적재함 장부(이미 다 실음)의 퍽으로 배정 → 그 장소부터 BUILD → VERIFY → RETURN
+    const size_t li = static_cast<size_t>(sc.place_loc);
+    if (basket_) for (const auto & b : basket_->slots)
+      if (b.filled && b.tag >= 0) pucks_.push_back({b.tag, b.color, b.shape});
+    note("놓기 시험 — 적재함 퍽 " + str(static_cast<int>(pucks_.size())) + "개 · L" + str(sc.place_loc + 1) + "부터 BUILD");
+    build_loc_order_.erase(std::remove(build_loc_order_.begin(), build_loc_order_.end(), li), build_loc_order_.end());
+    build_loc_order_.insert(build_loc_order_.begin(), li);
+    use_given(false);
+    phase_ = Phase::SURVEY;  // 배정이 끝나면 BUILD로 (next_phase)
+    phase_t0_ = wall_s();
+    solve_allocation();
     return;
   }
   if (sc.from_survey) {  // 관측 건너뜀 — 준 바코드·신호를 본 것처럼 (SURVEY → BUILD → VERIFY → RETURN)

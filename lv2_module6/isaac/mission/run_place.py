@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""놓기만 시험 — 적재함에 퍽을 다 실어 둔 채 L1 앞(−x 쪽)에서 시작해 approach(도킹) → place부터 (BUILD → VERIFY → RETURN).
+
+  python3 isaac/mission/run_place.py                          # 실기 · L1 · P2-04 · R4Y2G6 · 칸 n = tag n (12개)
+  python3 isaac/mission/run_place.py --code P2-01 --counts R5Y3G4
+  python3 isaac/mission/run_place.py --slots 0:5,1:2,2:4      # 실제로 실은 칸:tag (나머지 칸은 빔)
+  python3 isaac/mission/run_place.py --loc L2                 # 다른 장소부터
+
+준비: 로봇을 L1 상자 −x 쪽 앞(상자를 바라보게, 도킹 전 자리)에 둠 · 적재함 칸에 --slots대로 퍽을 실음.
+하는 일: ① ~/.ros/beebot_basket.txt에 칸:tag(색·모양은 아래 표)를 적고 /coordinator/basket_reload
+        ② /cmd/mission start:PLACE:<장소>:<바코드>:<신호> → mission_manager가 장부 퍽으로 배정 → 그 장소부터 BUILD
+           (가까운 면으로 도킹 = location_side_nearest · 장소마다 다 놓으면 물러나서 한 번 봄) → 나머지 장소 → 복귀
+Ctrl+C = abort. 기록: ~/.ros/mission/<시각>/ (allocation.json · build.json · photos/)
+"""
+import argparse
+import os
+import re
+import sys
+
+import rclpy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
+
+from plan.msg import MissionState
+
+IDLE = ('IDLE', 'DONE', 'ERROR')
+# 실기 퍽 12개 (11-22 allocation.json 기록) — tag → (색, 모양)
+PUCKS = {t: ('green', 'box') for t in (0, 1, 2)} | {t: ('red', 'box') for t in (3, 4, 5)} | \
+        {t: ('green', 'cyl') for t in (6, 7, 8)} | {t: ('red', 'cyl') for t in (9, 10, 11)}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--loc', default='L1', choices=('L1', 'L2', 'L3'), help='먼저 놓을 장소 (로봇이 그 앞에 있음)')
+    ap.add_argument('--code', default='P2-04', help='바코드 (P2-01~04)')
+    ap.add_argument('--counts', default='R4Y2G6', help='신호 횟수 R<n>Y<n>G<n>')
+    ap.add_argument('--slots', default=','.join(f'{i}:{i}' for i in range(12)), help='적재함 칸:tag 목록 (기본 칸 n = tag n)')
+    ap.add_argument('--basket-file', default='~/.ros/beebot_basket.txt', help='coordinator basket_file')
+    ap.add_argument('--timeout', type=float, default=1200.0, help='[s] 이 안에 안 끝나면 abort')
+    a = ap.parse_args()
+    if not re.fullmatch(r'R\dY\dG\d', a.counts.upper()):
+        sys.exit(f'--counts {a.counts}: R<n>Y<n>G<n> 형식')
+    slots = {}
+    for kv in a.slots.split(','):
+        s, t = (int(x) for x in kv.split(':'))
+        if not (0 <= s < 12 and t in PUCKS) or s in slots or t in slots.values():
+            sys.exit(f'--slots {kv}: 칸 0~11 · tag 0~11 · 중복 없이')
+        slots[s] = t
+
+    path = os.path.expanduser(a.basket_file)
+    with open(path, 'w') as f:   # coordinator basket_save와 같은 형식
+        for s, t in sorted(slots.items()):
+            f.write(f'slot {s} {PUCKS[t][1]} {PUCKS[t][0]} {t} 0\n')
+        f.write('order ' + ' '.join(str(s) for s in sorted(slots)) + '\nheld - - -1\n')
+    start = f'start:PLACE:{a.loc}:{a.code}:{a.counts.upper()}'
+
+    ws = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ros2_ws')
+    os.environ.setdefault('FASTDDS_DEFAULT_PROFILES_FILE', os.path.join(ws, 'fastdds.xml'))
+    os.environ['ROS_AUTOMATIC_DISCOVERY_RANGE'] = 'SUBNET'
+    rclpy.init()
+    n = rclpy.create_node('run_place')
+    log = n.get_logger()
+    c = n.create_client(Trigger, '/coordinator/basket_reload')
+    if not c.wait_for_service(timeout_sec=20.0):
+        sys.exit('/coordinator/basket_reload 안 보임 — coordinator(develop 최신 빌드)가 떠 있는지 확인')
+    fut = c.call_async(Trigger.Request())
+    rclpy.spin_until_future_complete(n, fut, timeout_sec=10.0)
+    log.info(f'적재함 장부 {len(slots)}칸: {fut.result().message if fut.result() else "응답 없음"}')
+
+    latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    cmd = n.create_publisher(String, '/cmd/mission', 10)
+    st = {'phase': None, 'last': None, 'last0': None, 'started': False, 'running': False, 'done': None, 'msg': None, 't': 0}
+
+    def on_state(msg):
+        st['phase'], st['msg'] = msg.phase, msg
+        line = (msg.phase, msg.note, msg.error, msg.placed)
+        if line != st['last']:
+            st['last'] = line
+            log.info(f'[{msg.phase}] {msg.note} · 놓음 {msg.placed}/{msg.total}' + (f' · 오류 {msg.error}' if msg.error else ''))
+        if st['started'] and msg.phase not in IDLE:
+            st['running'] = True
+        if st['running'] and msg.phase in ('DONE', 'ERROR'):
+            st['done'] = msg.phase
+        if st['started'] and '시작 거부' in msg.note:
+            st['done'] = 'ERROR'
+
+    n.create_subscription(MissionState, '/mission/state', on_state, latched)
+
+    def tick():
+        st['t'] += 1
+        if not st['started']:
+            if st['phase'] in IDLE and cmd.get_subscription_count() > 0:
+                cmd.publish(String(data=start))
+                st['started'], st['last0'] = True, st['last']
+                log.info(f'{start} 보냄')
+            elif st['phase'] not in (None, *IDLE):
+                log.error(f'미션이 이미 {st["phase"]} — 끝나거나 abort한 뒤에 다시')
+                st['done'] = 'ERROR'
+            return
+        if not st['running'] and st['last'] == st['last0']:
+            cmd.publish(String(data=start))
+        if st['t'] > a.timeout:
+            log.error(f'{a.timeout:.0f} s 안에 안 끝남 — abort')
+            cmd.publish(String(data='abort'))
+            st['done'] = 'TIMEOUT'
+
+    n.create_timer(1.0, tick, clock=rclpy.clock.Clock())
+    try:
+        while rclpy.ok() and st['done'] is None:
+            rclpy.spin_once(n, timeout_sec=0.2)
+    except KeyboardInterrupt:
+        if st['started']:
+            cmd.publish(String(data='abort'))
+            rclpy.spin_once(n, timeout_sec=0.5)
+            print('abort 보냄')
+        sys.exit(1)
+
+    s = st['msg']
+    print('\n=== 놓기 결과 ===')
+    print(f'결과: {st["done"]}' + (f' · 이유 {s.error}' if s and s.error else ''))
+    if s:
+        print(f'놓음 {s.placed}/{s.total} · 장소 그룹 {s.order}')
+        for r in s.results:
+            print(f'  {r}')
+    sys.exit(0 if st['done'] == 'DONE' else 1)
+
+
+if __name__ == '__main__':
+    main()
