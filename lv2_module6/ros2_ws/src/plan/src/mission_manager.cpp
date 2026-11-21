@@ -214,6 +214,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   barcode_peek_ = declare_parameter<bool>("barcode_peek", barcode_peek_);
   scan_from_light_ = declare_parameter<bool>("barcode_scan_from_light", scan_from_light_);
   scan_offsets_ = declare_parameter<std::vector<double>>("barcode_scan_offsets", scan_offsets_);
+  scan_range_m_ = declare_parameter<double>("barcode_scan_range_m", scan_range_m_);
   barcode_peek_s_ = declare_parameter<double>("barcode_peek_s", barcode_peek_s_);
   barcode_peek_switch_s_ = declare_parameter<double>("barcode_peek_switch_s", barcode_peek_switch_s_);
   barcode_height_m_ = declare_parameter<double>("barcode_height_m", barcode_height_m_);
@@ -643,8 +644,10 @@ void MissionManager::barcode_phase() {
           const double yaw = std::atan2(dy, dx) - base_arena.yaw;
           const double relative = std::atan2(std::sin(yaw), std::cos(yaw));
           // 신호등을 봤으면 그 왼쪽 부채꼴(신호등 −0.05 ~ 마지막 scan + 0.15 rad)의 바코드만
-          const bool left_of_light = !light_yaw ||
-            (relative > *light_yaw - 0.05 && relative < *light_yaw + scan_offsets_.back() + 0.15);
+          //   11-21 실기 23:51: 신호등(−0.30) 바로 옆 −0.20을 바코드 후보로 봐 첫 엿보기를 신호등에 씀 → 가장 작은 scan 방향보다 안쪽은 버림
+          const double lo = *std::min_element(scan_offsets_.begin(), scan_offsets_.end()) - 0.03;
+          const double hi = *std::max_element(scan_offsets_.begin(), scan_offsets_.end()) + 0.15;
+          const bool left_of_light = !light_yaw || (relative > *light_yaw + lo && relative < *light_yaw + hi);
           if (!scan_only_ && range >= 0.20 && range <= 4.0 && std::abs(relative) <= 0.65 && left_of_light) {
             scan_ = false;
             candidate_yaw = relative;
@@ -668,7 +671,9 @@ void MissionManager::barcode_phase() {
           scan_ = true;
           const double yaw = *light_yaw + scan_offsets_[std::min(scan_k_, scan_offsets_.size() - 1)];
           candidate_yaw = std::atan2(std::sin(yaw), std::cos(yaw));
-          candidate_range = light_range;
+          // 아래 각도는 고정 거리로 — 신호등 거리로 쓰면 순간 0.38 m로 잡혀 아래 38°(바닥)를 봤음 (11-21 실기 23:51 3번째 방향)
+          candidate_range = scan_range_m_;
+          (void)light_range;
         }
       }
       // ⓪ 엿보기 — 팔은 접은 채 손목만 바코드 쪽으로(joint1 방위 · joint4 높이) + 손 카메라를 잠깐 고해상도로
