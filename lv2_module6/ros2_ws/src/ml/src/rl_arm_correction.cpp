@@ -39,6 +39,9 @@ CallbackReturn RlArmCorrection::on_init() {
   // pick · pick_far: 손 카메라가 원기둥으로 본 퍽이면 정책을 안 돌림 (Δ 0 그대로) — 11-22 실기: 정책 Δ가 들어간 pick은 5~8 mm 높고
   //   옆으로 5~7 mm (Δ 0이면 ±1 mm) · 원기둥은 둥글어 옆 어긋남에 약함 (사용자: 원기둥만 끔)
   auto_declare<bool>("pick_policy_cyl", false);
+  // pick · pick_far: 정책 Δ 중 joint2~4(팔 앞뒤 · 높이)는 0 — joint1(옆) · joint5(손목)만 씀. 11-22 실기: Δ가 든 pick은 joint2~4가 늘 같은
+  //   쪽(−)으로 들어가 손이 5~8 mm 높게 쥠 (Δ 0이면 ±1 mm) · true면 다섯 관절 다 (예전)
+  auto_declare<bool>("pick_policy_pitch", false);
   // 손 카메라 튄 값 거르기 (헤더 HandJumpGate): 이 단계부터 (2 = 바닥에 닿아 멈춤) rel이 hand_jump_m 넘게 뛰면 confirm개 연속일 때만 받음
   auto_declare<double>("hand_jump_m", 0.005);
   auto_declare<int>("hand_jump_confirm", 3);
@@ -120,6 +123,7 @@ CallbackReturn RlArmCorrection::on_configure(const rclcpp_lifecycle::State &) {
   policy_dt_ = 1.0 / node->get_parameter("policy_hz").as_double();
   max_cam_age_s_ = node->get_parameter("max_cam_age_s").as_double();
   pick_policy_cyl_ = node->get_parameter("pick_policy_cyl").as_bool();
+  pick_policy_pitch_ = node->get_parameter("pick_policy_pitch").as_bool();
   hand_jump_m_ = node->get_parameter("hand_jump_m").as_double();
   hand_jump_confirm_ = static_cast<int>(node->get_parameter("hand_jump_confirm").as_int());
   hand_jump_phase_ = static_cast<int>(node->get_parameter("hand_jump_phase").as_int());
@@ -363,6 +367,7 @@ return_type RlArmCorrection::update_and_write_commands(const rclcpp::Time & time
         }
         prev_act_[i] = a;
       }
+      if (pick && !pick_policy_pitch_) delta_[1] = delta_[2] = delta_[3] = 0.0;  // 옆(joint1) · 손목(joint5)만
     }
   }
   for (size_t i = 0; i < joints_.size() && i < 5; ++i) {

@@ -241,7 +241,8 @@ private:
   double max_delta_ = 0.05, residual_rad_ = 0.05, max_delta_step_ = 0.0, settle_delta_step_ = 0.0, sag_gain_ = 4.2, sag_max_ = 0.2, still_rate_ = 0.005;
   double rest_tol_ = 0.03, windup_s_ = 2.0;
   double policy_dt_ = 0.02, max_cam_age_s_ = 0.45;
-  bool pick_policy_cyl_ = false;  // pick 정책을 원기둥에도 쓸지 (pick_policy_cyl)
+  bool pick_policy_cyl_ = false;    // pick 정책을 원기둥에도 쓸지 (pick_policy_cyl)
+  bool pick_policy_pitch_ = false;  // pick Δ에 joint2~4도 쓸지 (pick_policy_pitch)
   std::string gripper_joint_ = "gripper_left_joint";
   double arm_effort_limit_ = 2.3, gripper_effort_limit_ = 0.35;
 };
