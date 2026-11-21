@@ -131,6 +131,12 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
     RCLCPP_WARN(get_logger(), "start_box_retreat %zu개 ≠ 박스 %zu개 — 무시", retreat.size(), start_boxes_.size());
   else
     for (size_t i = 0; i < retreat.size(); ++i) start_boxes_[i].retreat = retreat[i];
+  // 장소 상자도 같은 방식 (11-22 사용자) — exit_turn_clear_m(회전 여유) 위에 상자마다 더 물러날 거리 [L1, L2, L3]
+  const auto loc_retreat = declare_parameter<std::vector<double>>("location_box_retreat", std::vector<double>{});
+  if (!loc_retreat.empty() && loc_retreat.size() != loc_boxes_.size())
+    RCLCPP_WARN(get_logger(), "location_box_retreat %zu개 ≠ 장소 %zu개 — 무시", loc_retreat.size(), loc_boxes_.size());
+  else
+    for (size_t i = 0; i < loc_retreat.size(); ++i) loc_boxes_[i].retreat = loc_retreat[i];
   puck_dx_ = declare_parameter<std::vector<double>>("puck_offsets_x", {-0.040, 0.040});
   box_top_z_ = declare_parameter<double>("box_top_z", 0.070);
   puck_h_ = declare_parameter<double>("puck_height", 0.060);
@@ -175,6 +181,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
   realign_tries_ = static_cast<int>(declare_parameter<int64_t>("place_realign_tries", 2));
+  exit_turn_clear_ = declare_parameter<double>("exit_turn_clear_m", exit_turn_clear_);
   view_m_ = declare_parameter<double>("place_view_m", 0.80);
   loc_any_.assign(loc_boxes_.size(), std::nullopt);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
@@ -1567,8 +1574,14 @@ void MissionManager::place_check(size_t i, int tries) {
   last_place_loc_ = static_cast<int>(job.loc);  // 장소 앞에 섬 (go_near 성공 뒤에만 옴)
   (void)tries;
   // 11-22 사용자: 놓은 뒤 확인·다시 놓기 없음 (1 cm 기준으로 다시 집어도 오차가 안 줄고 퍽마다 약 22 s · 장소마다 마지막에 보기만 — verify_at)
-  run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [next](bool ok, const std::string & why) {
-    next(ok, ok ? "placed" : "place_failed " + why);
+  run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [this, job, next](bool ok, const std::string & why) {
+    if (ok) { next(true, "placed"); return; }
+    // 손에 쥔 채 실패(IK · 궤적 충돌 검사 — 팔이 움직이기 전)면 적재함 빈 칸에 되돌린 뒤 다음 퍽 (11-22 실기 06:51: 쥔 채로 다음 퍽 unload)
+    if (!basket_ || !basket_->held.filled) { next(false, "place_failed " + why); return; }
+    RCLCPP_WARN(get_logger(), "퍽 %d 놓기 실패 (%s) — 손에 쥔 퍽을 적재함에 되돌림", job.tag, why.c_str());
+    run({SubGoal().set__skill("load").set__target("next")}, [next, why](bool ok2, const std::string & why2) {
+      next(false, "place_failed " + why + (ok2 ? " · 적재함에 되돌림" : " · 되돌리기 실패 " + why2));
+    });
   });
 }
 
@@ -2005,7 +2018,17 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
       //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
       //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
-      if (ok) { creep_used_ = 0.0; backed_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
+      // 물러난 자리에서 제자리 회전할 수 있게 — 로봇 중심 ~ 상자 면이 exit_turn_clear_m 이상 (11-22 실기 L3: −y@0.33 · gap 0.119면
+      //   0.109 m만 물러나 면까지 0.228 m < 뒤 모서리 회전 반경 0.288 → 복귀 회전에서 상자에 걸림)
+      if (ok) {
+        creep_used_ = 0.0; backed_ = 0.0;
+        //   start_box_retreat · location_box_retreat는 첫 진입 면에서 그 위에 더 (회전 여유를 채운 뒤에도 더 물러날 상자)
+        const double extra = k == 0 ? box.retreat : 0.0;
+        const double b = std::max(std::hypot(cx - n.x, cy - n.y) - box.half - gap, exit_turn_clear_ - gap) + extra;
+        back_ = fmt("%.3f", b);
+        done(true, "");
+        return;
+      }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남
@@ -2088,9 +2111,17 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
             return;
           }
           const double dx = a.x - cx, dy = a.y - cy;  // 처음 진입 기준 가운데에서 인지 가운데까지
-          RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m (> %.2f) · 상자가 기준에서 (%+.1f, %+.1f) cm → 진입점 다시 (%d/%d)",
-                      to.c_str(), src, lat, realign_m_, dx * 100, dy * 100, tries + 1, realign_tries_);
-          (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1, true);
+          // 옆으로 비켜서지 않음 — 차동 구동이라 옆 몇 cm에도 제자리 80° 넘게 돌다 상자 앞에서 막혔음 (실기 L3 3번 · 시뮬 4번).
+          //   관측 자리 거리까지 똑바로 물러났다가 보정한 진입점으로 비스듬히 다시 들어감 (0.4 m 안 · 옆 10 cm 안이면 정밀 이동)
+          const double back = std::max(0.0, view_m_ - std::hypot(r.x - a.x, r.y - a.y));
+          RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m (> %.2f) · 상자가 기준에서 (%+.1f, %+.1f) cm → %.2f m 물러났다 다시 (%d/%d)",
+                      to.c_str(), src, lat, realign_m_, dx * 100, dy * 100, back, tries + 1, realign_tries_);
+          const auto again = [this, step, n, f_a, dx, dy, a, tries]() {
+            (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1, true);
+          };
+          if (back < 0.02) { again(); return; }
+          run({stow(), SubGoal().set__skill("approach").set__target(fmt("%.3f", back)).set__relation("exit")},
+              [again](bool, const std::string &) { again(); });
         });
       });
     });
@@ -2098,7 +2129,9 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   // 관측 자리 = 상자 가운데에서 면 법선 뒤로 place_view_m (벽에 가까우면 진입점 쪽으로 줄임) — 0이면 바로 진입점
   double vd = view_m_;
   const double nd = std::hypot(n.x - cx, n.y - cy);
-  while (vd > nd + 0.05 && wall_distance(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), walls_) < wall_clearance_) vd -= 0.05;
+  //   관측 자리에서 상자 쪽으로 크게 돎 → 벽까지 회전 여유(exit_turn_clear_m) 이상인 데까지 줄임 (wall_clearance 0.22면 회전 반경 0.288보다 가까움 ·
+  //   11-22 실기 L3 −y: 0.75 m 자리가 벽에서 0.27 m라 90° 돌며 비틀댐)
+  while (vd > nd + 0.05 && wall_distance(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), walls_) < std::max(wall_clearance_, exit_turn_clear_)) vd -= 0.05;
   if (view_m_ > 0.0 && vd > nd + 0.05)
     (*step)(to_map(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), n.yaw), f, cx, cy, -1, false);
   else
