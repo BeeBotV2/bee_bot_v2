@@ -832,8 +832,25 @@ void MissionManager::hires(bool on) {
   //   (realsense 노드가 한 줄로 처리 · 결과는 cam_info 폭으로 확인 — peek 쪽 hires_at_)
   cam_params_->set_parameters({rclcpp::Parameter("rgb_camera.color_profile", prof)});
   cam_params_->set_parameters({rclcpp::Parameter("enable_color", false)});
-  cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)});
-  RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s 요청 (프로필 → 스트림 껐다 켬)", prof.c_str());
+  // 켜기는 끄기가 끝난 뒤에 — 바로 이어 보내면 realsense가 끄는 중에 받은 켜기를 버려 컬러가 꺼진 채 남음
+  //   (11-21 실기 21:43: "Stopping Sensor: RGB Camera" 뒤 다시 안 켜짐 → 손 카메라 영상 없음 · 바코드 못 읽음 · 사진 0장).
+  //   컬러 cam_info가 다시 올 때까지 0.7 s마다 켜기를 다시 보냄 (최대 12번)
+  cam_req_at_ = now();
+  cam_tries_ = 0;
+  cam_timer_ = create_wall_timer(std::chrono::milliseconds(700), [this, prof]() {
+    if (cam_info_at_ > cam_req_at_ + rclcpp::Duration::from_seconds(0.3) && (now() - cam_info_at_).seconds() < 1.0) {
+      RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s 켜짐 (폭 %u px · %.1f s)", prof.c_str(), cam_width_, (now() - cam_req_at_).seconds());
+      cam_timer_->cancel();
+      return;
+    }
+    if (++cam_tries_ > 12) {
+      RCLCPP_ERROR(get_logger(), "손 카메라 컬러가 다시 안 켜짐 (%s) — enable_color 확인", prof.c_str());
+      cam_timer_->cancel();
+      return;
+    }
+    cam_params_->set_parameters({rclcpp::Parameter("enable_color", true)});
+  });
+  RCLCPP_INFO(get_logger(), "손 카메라 컬러 %s 요청 (프로필 → 스트림 끔 → 켜질 때까지 켬)", prof.c_str());
 }
 
 void MissionManager::peek_end(const std::string & why) {
