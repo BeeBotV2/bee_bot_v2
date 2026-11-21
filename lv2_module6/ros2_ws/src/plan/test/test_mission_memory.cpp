@@ -1,6 +1,8 @@
 // puck_for — 집기 직전에 퍽 트랙 다시 찾기 (인지 long_memory: false로 안 보이던 퍽이 다른 id로 다시 나타나도 tag·자리로 찾음)
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "plan/mission_manager.hpp"
 
 using perception::msg::TrackedObject;
@@ -91,4 +93,22 @@ TEST(BoxTodo, PicksNewAndMovedPucksOnly) {
   EXPECT_TRUE(plan::box_todo(false, false, false));  // 처음 봄
   EXPECT_FALSE(plan::box_todo(false, true, true));  // 이 상자 퍽으로 이미 적힘
   EXPECT_TRUE(plan::box_todo(false, true, false));  // 다른 상자로 알던 퍽 (S6의 퍽 5)
+}
+
+TEST(FreeSpot, CentreThenEmptyRingPoint) {
+  // 상자 위 다른 퍽 없음 → 가운데
+  auto p = plan::free_spot(1.0, 2.0, {}, 0.05, 0.065);
+  EXPECT_DOUBLE_EQ(p.first, 1.0);
+  EXPECT_DOUBLE_EQ(p.second, 2.0);
+  // 가운데 옆 2 cm에 퍽 → 둘레 8방향 중 그 퍽에서 6.5 cm 넘는 첫 점
+  const std::vector<std::pair<double, double>> one = {{1.02, 2.0}};
+  p = plan::free_spot(1.0, 2.0, one, 0.05, 0.065);
+  EXPECT_GE(std::hypot(p.first - 1.02, p.second - 2.0), 0.065);
+  EXPECT_NEAR(std::hypot(p.first - 1.0, p.second - 2.0), 0.05, 1e-9);
+  // 빈 곳이 없으면 다른 퍽에서 가장 먼 점
+  const std::vector<std::pair<double, double>> crowd = {{1.0, 2.0}, {1.03, 2.03}, {0.97, 1.97}, {1.03, 1.97}, {0.97, 2.03}};
+  p = plan::free_spot(1.0, 2.0, crowd, 0.05, 0.065);
+  double d = 1e9;
+  for (const auto & o : crowd) d = std::min(d, std::hypot(o.first - p.first, o.second - p.second));
+  EXPECT_GT(d, 0.03);
 }

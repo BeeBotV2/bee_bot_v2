@@ -431,7 +431,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     arena_corr_loc_min_rad: 0.0035 # [rad] (0.2°) — 11-18: 0.5° → 0.2° (4 m 앞 1.4 cm · 0.5°면 3.5 cm가 남음)
     arena_corr_loc_period: 2.0 # [s] 조각 사이 간격
     arena_corr_loc_settle_s: 1.5 # [s] 넘긴 뒤 이만큼은 상자 관측을 안 셈 (좌표가 옮겨지는 중)
-    # 적재함: 장부(칸 → tag)는 coordinator가 씀 (/coordinator/basket) — 쓰는 칸은 coordinator basket_use. 다 차면 나머지는 시작 박스에서 직접 운반
+    # 적재함: 장부(칸 → tag)는 coordinator가 씀 (/coordinator/basket) — 쓰는 칸은 coordinator basket_use. 다 차면 나머지는 not_loaded (직접 운반 안 함)
     box_top_z: 0.070 # 박스 윗면 = 퍽 바닥
     puck_height: 0.060
     grid_step: 0.060 # 주사위 칸 간격
@@ -453,7 +453,11 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
       #   11-20: 0.085 → 0.095 (+1 cm) — 도킹 때 가끔 상자를 밀고 더 들어감(상자 위치 추정이 멀게 잡히면 마지막 10 cm는 odom만 보고 감) → 1 cm 여유
       #   Isaac 도달 지도(dice_reach.py): 0.08이면 3×3 칸 9개 다 닿음 · 0.10이면 먼 줄 양끝 못 닿음
     approach_tries: 3 # 접근 자리 실패 시 다른 변으로 몇 번까지
-    retries: 2 # skill(집기·놓기·inspect)이 실패하면 다시 하는 횟수. 그래도 안 되면 그 퍽만 실패로 두고 다음
+    retries: 2 # skill(집기·놓기·inspect)이 실패하면 다시 하는 횟수. 그래도 안 되면 그 퍽만 실패로 두고 다음 (집기 = 1 + retries번, 다시 할 때마다 inspect로 봄)
+    # SURVEY (11-21 사용자): 시작 박스의 퍽을 다 실어야 다음 상자 · 들고 다니지 않음 · 못 실은 퍽은 BUILD(place) 전에 그 상자에 한 번 더 옴
+    survey_load_tries: 3 # 퍽 하나 load 시도 수 — 실패하면 상자 빈 자리에 되돌리고 inspect → pick → load
+    put_back_ring_m: 0.05 # [m] 되돌릴 자리: 상자 가운데 · 다른 퍽이 가까우면 가운데에서 이만큼 둘레 8방향 중 빈 곳
+    put_back_clear_m: 0.065 # [m] 빈 곳 = 다른 퍽 중심에서 이만큼 넘게 (11-21 실기 S2: 5 cm에 되돌린 퍽 9에 퍽 0 pick이 얹혀 막힘)
     planner: "rule" # BUILD 순서: rule (배정 순서대로) | plan_next (학습된 플래너가 다음 퍽·복귀 시점을 고름 — 마지막 단계)
     plan_model: "" # 비면 share/ml/model/plan/plan_next.onnx (.policy 경로를 주면 MlpPolicy로)
     place_tol: 0.010 # [m] 놓은 뒤 확인 · 재검증 — 칸 중심에서 이 안이어야 성공
