@@ -184,6 +184,11 @@ std::optional<cv::Vec3d> tag_center(const std::array<cv::Point2d, 4> & corners, 
                                     double half_w, double fx, double fy, double cx, double cy, const cv::Matx33d & rot,
                                     const cv::Vec3d & trans, const cv::Mat1b & arm = cv::Mat1b());
 std::optional<double> axis_yaw(const std::vector<cv::Vec2d> & pts, int min_points, double min_elong);
+// 트랙 방향을 새 관측 방향으로 덮지 않을지 (fuse · test_perception_core) — 주기가 더 짧은(덜 아는) 관측이
+//   ① 장소 상자 태그 방향(360°)을 덮으려 함 ② 누운 퍽 축(180°)을 자세 모르는(posture "") 관측의 태그 방향(90°)이 덮으려 함.
+//   ②: 11-21 실기 nav_1121_183927 — 누운 사각 퍽 트랙이 posture lying인 채 yaw_period 90으로 바뀌고 축이 90°씩 튀어 세우기가
+//   직각으로 쥐고 헛돎 (태그 사각형은 90°마다 같아 긴 축을 못 가림). 세운 뒤(관측 posture standing)는 지금처럼 덮음
+bool keep_track_yaw(double track_period, const std::string & track_posture, double det_period, const std::string & det_posture);
 
 // ---------- 상자 (depth 윗면)
 struct BoxTop {

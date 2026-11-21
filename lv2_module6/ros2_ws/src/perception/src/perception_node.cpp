@@ -1157,9 +1157,10 @@ std::vector<int> PerceptionNode::fuse(const std::string & cam, const builtin_int
     if (d.tag) tr.tag = d.tag;  // 태그 번호는 한 번 읽으면 남김
     if (!d.content.empty()) tr.content = d.content;
     if (!d.shape.empty()) tr.shape = d.shape;
-    if (d.yaw && tr.yaw && d.yaw_period < tr.yaw_period && tr.yaw_period > PI + 1e-6) {
-      // 장소 상자: 태그로 구한 방향(360°)을 윗면 사각형 방향(90°)으로 덮지 않음 — 360°만 지킴. 누운 퍽 축(180°)은 선 퍽 윗면(90°)이
-      //   덮어야 함 (11-15 실기: 세운 퍽이 누운 축 27°를 들고 있어 그 방향으로 쥐어 모서리를 묾 · 그리퍼 0.0080 m)
+    if (d.yaw && tr.yaw && keep_track_yaw(tr.yaw_period, tr.posture, d.yaw_period, d.posture)) {
+      // 장소 상자: 태그로 구한 방향(360°)을 윗면 사각형 방향(90°)으로 덮지 않음. 누운 퍽 축(180°)은 선 퍽 윗면(90°)이
+      //   덮어야 함 (11-15 실기: 세운 퍽이 누운 축 27°를 들고 있어 그 방향으로 쥐어 모서리를 묾 · 그리퍼 0.0080 m) — 다만 자세를
+      //   모르는 관측의 태그 방향(90°)으로는 안 덮음 (11-21 실기: 누운 퍽 축이 90°씩 튐 — keep_track_yaw)
     } else if (d.yaw) {
       // 방향은 구한 관측의 최신값 — 다만 지금 방향과 15° 넘게 다른 한 장은 다음 관측이 같은 값으로 확인할 때만 바꿈
       //   (11-14 22:51 실기: 45° 퍽이 44° 사이 딱 한 장 5°(위치도 15 mm 빗나감) → 그 순간 찍은 기억으로 집어 면을 틀리게 쥠)
