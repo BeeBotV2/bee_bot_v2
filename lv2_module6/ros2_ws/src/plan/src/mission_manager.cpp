@@ -1377,7 +1377,8 @@ void MissionManager::build(size_t i) {
   // 그 자리 재검증 (11-15): 앞 퍽과 장소가 다르거나 다 놓았으면 — 떠나기 전에 지금 선 장소를 봄 (다시 돌아오지 않음)
   if (verify_in_place_ && i > 0 && i <= jobs_.size()) {
     const size_t prev = jobs_[i - 1].loc;
-    if ((i == jobs_.size() || jobs_[i].loc != prev) && !verified_.count(prev) && last_place_loc_ == static_cast<int>(prev)) {
+    if ((i == jobs_.size() || jobs_[i].loc != prev) && !verified_.count(prev) &&
+        (last_place_loc_ == static_cast<int>(prev) || !back_.empty())) {  // 마지막 퍽을 못 놓았어도 그 장소에 붙어 있으면 그 자리에서 봄
       verify_at(prev, [this, i]() { build(i); });
       return;
     }
@@ -1540,29 +1541,14 @@ void MissionManager::place_check(size_t i, int tries) {
   });
 }
 
-// ---------- VERIFY — 장소마다 새로 본 퍽만 (발제 p7: 목표 상태 복사 금지) → 칸별 판정 + 12개 중복·누락
-void MissionManager::verify(size_t k) {  // k = 재확인 순서 인덱스 — 놓은 순서(build_location_order)의 거꾸로 (11-14: 마지막에 놓은 곳부터, 되돌아가지 않음)
-  if (k >= build_loc_order_.size()) { finish(true); return; }  // 11-22: 칸별 판정·중복 검사 없음 (보는 동작만)
-  const size_t li = build_loc_order_[build_loc_order_.size() - 1 - k];
-  if (verified_.count(li)) { verify(k + 1); return; }  // 놓은 그 자리에서 이미 함 (verify_in_place)
-  const std::string name = "L" + str(static_cast<int>(li) + 1);
-  ctx_ = "\"loc\": " + q(name);
-  note(name + " 재검증");
-  const double lx = locations_[li].first, ly = locations_[li].second;
-  go_near(loc_boxes_[li], lx, ly, [this, k, li, name](bool ok, const std::string & why) {
-    if (!ok) {
-      verified_.insert(li);
-      result(name + ": verify_approach_failed " + why);
-      seen_tags_.push_back({});
-      verify_json_ += std::string(verify_json_.empty() ? "" : ", ") + "{\"location\": " + q(name) + ", \"ok\": false, \"why\": " + q(why) + "}";
-      verify(k + 1);
-      return;
-    }
-    verify_at(li, [this, k]() { verify(k + 1); });
-  });
+// ---------- VERIFY — 11-22부터 아무것도 안 함 (장소마다 보기는 BUILD에서)
+void MissionManager::verify(size_t) {
+  // 11-22 사용자: 재검증 단계에서 장소로 다시 가지 않음 — 보는 동작은 BUILD에서 장소마다 다 놓은 뒤 그 자리에서만 (verify_at)
+  //   (11-22 실기 05:08: L2 마지막 퍽을 못 놓아 그 자리 보기가 빠지자 VERIFY가 L2에 다시 도킹 · L1로 가다 nav_no_progress)
+  finish(true);
 }
 
-// 지금 선 자리(장소 li 앞)에서 재검증 — 놓은 뒤 새로 본 퍽만으로 칸별 판정 (발제 p7: 목표 상태 복사 금지)
+// 지금 선 자리(장소 li 앞)에서 — 물러나서 한 번 봄
 void MissionManager::verify_at(size_t li, std::function<void()> then) {
   // 11-22 사용자: 재검증 판정은 안 함 — 장소에 다 놓으면 똑바로 물러난 뒤 look 자세로 한 번 보고(사진) 접음
   verified_.insert(li);
