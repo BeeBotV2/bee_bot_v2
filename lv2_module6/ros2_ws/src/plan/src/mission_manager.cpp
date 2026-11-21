@@ -362,17 +362,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
       for (const auto & o : m->objects)
         if (o.class_name == "location_box" && !detail(o, "tag").empty()) {
-          LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
-          if (!detail(o, "yaw_period").empty()) {  // 윗면 변 방향을 구한 관측 — map yaw를 odom yaw로
-            const auto & q = o.pose.pose.orientation;
-            double mo = 0.0;
-            try {
-              const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
-              mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
-              seen.yaw_odom = std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) - mo;
-              seen.has_yaw = true;
-            } catch (const std::exception &) {}
-          }
+          const LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
           // 윗면을 다 찾은 관측만 (corners · 안 잘림) — 윗면 없이 태그만 본 관측은 위치가 태그 자리(가운데에서 최대 약 10 cm)
           if (detail(o, "cut") != "true" && !detail(o, "corners").empty()) loc_whole_[detail(o, "tag")] = seen;
         }
@@ -452,6 +442,7 @@ void MissionManager::on_command(const std::string & cmd) {
   seen_tags_.clear();
   lying_.clear();
   loc_pose_.assign(locations_.size(), std::nullopt);
+  loc_fix_.assign(locations_.size(), std::nullopt);
   marks_.assign(start_boxes_.size() + loc_boxes_.size(), Mark{});
   acorr_seen_.clear();
   acorr_used_.clear();
@@ -1952,26 +1943,24 @@ void MissionManager::correct(size_t li) {
     const auto it = m.find(k);
     return it != m.end() && (now() - it->second.t).seconds() <= loc_keep_s_ ? &it->second : nullptr;
   };
-  const LocSeen * o = fresh(loc_whole_, tag);
   loc_pose_[li].reset();
-  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 윗면을 다 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
-  double mx, my, mo = 0.0;
-  spot_map(*tf_buffer_, o->s, mx, my, 1e9);  // odom 점을 지금 map으로 (odom은 짧은 동안 안 튐)
-  try {
-    const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
-    mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
-  } catch (const std::exception &) {}
-  const bool has_yaw = o->has_yaw;  // 없으면 경기장 축 (가운데만 인지)
-  const Pose2 a = to_arena(mx, my, has_yaw ? o->yaw_odom + mo : 0.0);
+  // 장소마다 상자 가운데는 한 번만 정함 (처음으로 윗면을 다 본 관측) — 그 뒤 퍽들은 같은 가운데 (면이 바뀌어도)
+  if (!loc_fix_[li]) {
+    const LocSeen * o = fresh(loc_whole_, tag);
+    if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 윗면을 다 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
+    loc_fix_[li] = o->s;
+  }
+  double mx, my;
+  spot_map(*tf_buffer_, *loc_fix_[li], mx, my, 1e9);  // odom 점을 지금 map으로 (odom은 짧은 동안 안 튐)
+  const Pose2 a = to_arena(mx, my, 0.0);
   const double off = std::hypot(a.x - b.x, a.y - b.y);
   if (off > corr_max_) {
     RCLCPP_WARN(get_logger(), "L%zu 상자 도면에서 %.0f cm (> %.0f) — 다른 것을 본 것으로 보고 안 씀", li + 1, off * 100, corr_max_ * 100);
+    loc_fix_[li].reset();
     return;
   }
-  loc_pose_[li] = Pose2{a.x, a.y, has_yaw ? a.yaw : 0.0};
-  RCLCPP_INFO(get_logger(), "L%zu 상자 (%+.1f, %+.1f) mm · 방향 %+.1f° — 윗면 관측 %.1f s 전%s", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000,
-              has_yaw ? std::remainder(a.yaw, M_PI / 2) * 180 / M_PI : 0.0, (now() - o->t).seconds(),
-              has_yaw ? "" : " · 방향 모름(경기장 축)");
+  loc_pose_[li] = Pose2{a.x, a.y, 0.0};
+  RCLCPP_INFO(get_logger(), "L%zu 상자 가운데 (도면에서 %+.1f, %+.1f mm) — 고정", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000);
 }
 
 std::pair<double, double> MissionManager::cell_target(size_t li, int cell) const {
