@@ -61,7 +61,7 @@
           <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}" error_msg="{follow_path_error_msg}" goal_checker_id="{selected_goal_checker}" progress_checker_id="{selected_progress_checker}" path_handler_id="{selected_path_handler}" tracking_feedback="{tracking_feedback}"/>
           <Sequence>
             <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
-            <ClearCostmapExceptRegion name="ClearLocalExceptNear-Context" service_name="local_costmap/clear_except_local_costmap" reset_distance="1.5" plugins="voxel_layer"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
           </Sequence>
         </RecoveryNode>
       </PipelineSequence>
@@ -75,7 +75,7 @@
           <RoundRobin name="RecoveryActions">
             <Wait wait_duration="1.5" error_code_id="{wait_error_code}" error_msg="{wait_error_msg}"/>
             <Sequence name="ClearAndBackUp">
-              <ClearCostmapExceptRegion name="ClearLocalExceptNear-Subtree" service_name="local_costmap/clear_except_local_costmap" reset_distance="1.5" plugins="voxel_layer"/>
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearCostmapAroundRobot name="ClearGlobalAroundRobot-Subtree" service_name="global_costmap/clear_around_global_costmap" reset_distance="0.6" plugins="obstacle_layer"/>
               <BackUp backup_dist="0.10" backup_speed="0.05" disable_collision_checks="false" error_code_id="{backup_error_code}" error_msg="{backup_error_msg}"/>
             </Sequence>
