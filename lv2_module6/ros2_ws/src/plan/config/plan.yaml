@@ -448,6 +448,10 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     approach_gap:
       0.144 # [m] 그다음 approach로 base_footprint ~ 박스 변을 이만큼까지 (로봇 앞면 0.069 → 7.5 cm) — 11-20 실기: 5 cm도 바짝 붙음
       #   11-20: 시뮬에서는 먼 줄 퍽(0.287 m > pick_far 0.285)이 안 닿았음 — 실기에서 먼 퍽 pick 확인. 안 되면 0.13(6 cm)
+    # 11-21 사용자: 장소 상자(L1~L3)만 더 바짝 — 앞면 5 cm. 인지 앞면 거리(face_dist_m)로 목표를 앞뒤 ≤3 cm 옮겨 면에서 멈춤 ·
+    #   면 10 cm 안은 approach_min_speed. 시작 상자는 approach_gap · odom 목표 그대로. 끄려면 place_approach_gap −1 · place_face_stop_m 0
+    place_approach_gap: 0.119 # [m] base_footprint ~ 장소 상자 변 (로봇 앞면 0.069 → 5 cm)
+    place_face_stop_m: 0.05 # [m] 인지 앞면 거리가 이만큼이 되게 목표를 옮김
     # 도킹 뒤 퍽이 멀면 팔이 닿게 조금 전진 (pick_near, 11-20) — 로봇 중심 ~ 퍽이 pick_reach_m 안에 들 만큼만 · 상자 앞 gap creep_min_gap까지
     pick_reach_m: 0.25 # [m] 수직 pick 한계 약 0.256 (시뮬 팔 범위) − 여유
     # 차체에 붙은 퍽 (11-21 사용자): 상자 위 퍽이 로봇 앞 inspect_back_min_x 안이거나 tag를 못 읽으면 look 자세로 곧게 물러나 다시 inspect

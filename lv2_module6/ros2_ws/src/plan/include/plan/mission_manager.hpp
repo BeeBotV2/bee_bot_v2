@@ -81,6 +81,8 @@ struct Box {  // arena [m] — 정사각 박스 (윗면 = box_top_z)
   std::vector<std::string> sides = {};  // 다가갈 변 "+x" "-x" "+y" "-y" (arena, 박스 가운데에서 그 변 쪽), "+x@0.41" = 가운데에서 0.41 m에 섬 — 비면 네 변 다
   double retreat = 0.0;  // [m] 도킹 뒤 다가설 자리보다 이만큼 더 똑바로 물러남 (start_box_retreat, 11-15)
   bool nearest = false;  // true면 sides를 적은 순서가 아니라 지금 로봇에서 가까운 순서로 시도 (location_side_nearest, 11-18)
+  double gap = -1.0;        // [m] 이 박스 전용 approach_gap (음수면 approach_gap) — 장소 상자: place_approach_gap
+  double face_stop = 0.0;   // [m] > 0이면 approach가 인지 앞면 거리(face_dist_m)가 이만큼이 되면 멈춤 — 장소 상자: place_face_stop_m
 };
 
 // 집을 퍽 트랙 고르기 — 인지는 안 보이는 물체를 2초 뒤 지우므로(long_memory: false) 퍽은 tag로 기억하고 집기 직전에 다시 찾는다.
