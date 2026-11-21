@@ -373,7 +373,9 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
         0.1025,
       ] # 장소가 놓인 박스 [x, y, 반 변] — 셋 다 205 박스 (11-04 운영 확인: L2 받침대도 같은 크기)
     location_tags: [12, 13, 14] # L1·L2·L3 장소 태그 번호
-    tag_correction_max: 0.05 # [m] 놓기 직전 인지 location_box(상자 윗면 가운데)가 예상 상자 중심에서 어긋난 만큼 칸을 옮기는 최대 거리 — 넘으면 잘못 본 것으로 보고 보정 안 함
+    tag_correction_max: 0.6 # [m] 놓기 직전 인지 location_box(상자 윗면 가운데 · depth — 태그 자리 아님)가 예상 상자 중심에서 어긋난 만큼 칸을 옮기는 최대 거리 — 넘으면 잘못 본 것으로 보고 보정 안 함
+    #   11-21 실기 nav_1121_183927: 0.05 → 0.6 (arena_corr_gate와 같게). L3 인지 상자가 도면에서 9~11 cm라 보정을 버리고 도면 칸에 놓아
+    #   가운데 칸이 상자 가운데에서 약 12 cm (place_off 43 mm · place_unseen · place_failed). 도킹은 인지 상자로 하는데 칸만 도면이었음
     # 도면 보정 — 경기장이 도면(위 좌표)과 100 % 같지 않고 출발 자세도 대충이라, 달리며 본 시작 박스·장소 상자(윗면 가운데)를
     #   도면 상자와 짝지어 arena → map 변환에 (dx, dy, dθ)를 더함. 다가설 자리·장소·복귀·/arena/walls 전부 (회차 시작마다 0부터)
     #   기록: 로그 "도면 보정 dx … (근거 n개)" · <회차>/arena_correction.jsonl · /arena/correction (latched JSON)
