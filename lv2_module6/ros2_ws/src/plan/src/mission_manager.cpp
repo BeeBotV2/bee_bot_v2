@@ -2129,7 +2129,9 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   // 관측 자리 = 상자 가운데에서 면 법선 뒤로 place_view_m (벽에 가까우면 진입점 쪽으로 줄임) — 0이면 바로 진입점
   double vd = view_m_;
   const double nd = std::hypot(n.x - cx, n.y - cy);
-  while (vd > nd + 0.05 && wall_distance(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), walls_) < wall_clearance_) vd -= 0.05;
+  //   관측 자리에서 상자 쪽으로 크게 돎 → 벽까지 회전 여유(exit_turn_clear_m) 이상인 데까지 줄임 (wall_clearance 0.22면 회전 반경 0.288보다 가까움 ·
+  //   11-22 실기 L3 −y: 0.75 m 자리가 벽에서 0.27 m라 90° 돌며 비틀댐)
+  while (vd > nd + 0.05 && wall_distance(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), walls_) < std::max(wall_clearance_, exit_turn_clear_)) vd -= 0.05;
   if (view_m_ > 0.0 && vd > nd + 0.05)
     (*step)(to_map(cx - vd * std::cos(n.yaw), cy - vd * std::sin(n.yaw), n.yaw), f, cx, cy, -1, false);
   else
