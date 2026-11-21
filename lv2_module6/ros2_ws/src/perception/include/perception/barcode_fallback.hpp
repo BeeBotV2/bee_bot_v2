@@ -17,7 +17,7 @@
 namespace perception {
 
 // 흰 라벨 후보 (넓은 것부터 최대 4개) — 벽이 밝은 회청색이라 밝기만으로는 안 갈려 채도도 봄
-inline std::vector<cv::Rect> barcode_labels(const cv::Mat & bgr) {
+inline std::vector<cv::Rect> barcode_labels(const cv::Mat & bgr, int min_area = 600, int min_w = 40, size_t max_n = 4) {
   cv::Mat hsv;
   cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
   std::vector<cv::Mat> ch;
@@ -33,10 +33,10 @@ inline std::vector<cv::Rect> barcode_labels(const cv::Mat & bgr) {
   for (const auto & c : cs) {
     const auto r = cv::boundingRect(c);
     const double ar = static_cast<double>(r.width) / std::max(r.height, 1);
-    if (r.area() >= 600 && r.width >= 40 && ar > 1.3 && ar < 12) out.push_back(r);
+    if (r.area() >= min_area && r.width >= min_w && ar > 1.3 && ar < 12) out.push_back(r);
   }
   std::sort(out.begin(), out.end(), [](const cv::Rect & a, const cv::Rect & b) { return a.area() > b.area(); });
-  if (out.size() > 4) out.resize(4);
+  if (out.size() > max_n) out.resize(max_n);
   return out;
 }
 
@@ -70,7 +70,12 @@ inline std::vector<cv::Rect> barcode_candidates(const cv::Mat & bgr) {
   cv::Mat g;
   cv::cvtColor(bgr, g, cv::COLOR_BGR2GRAY);
   std::vector<cv::Rect> out;
-  for (const auto & r : barcode_labels(bgr)) {
+  // 11-22 실기: pole_front_cam 640에서 1 m 앞 바코드 라벨은 38×17 px — 폭 40 미만이라 빠지고 막대도 뭉개져 못 셈.
+  //   대신 벽 아래 밝은 띠(비 약 7)·팔 브래킷이 후보가 됨 → 작은 라벨(폭 22~80)은 바코드 라벨 비율(1.5~4)이면 막대 없이 후보.
+  //   잘못 잡아도 손 카메라 1080p 읽기가 내용으로 거름
+  for (const auto & r : barcode_labels(bgr, 200, 22, 12)) {
+    const double ar = static_cast<double>(r.width) / std::max(r.height, 1);
+    if (r.width < 80) { if (ar >= 1.5 && ar <= 4.0) out.push_back(r); continue; }
     int stripe_rows = 0;
     const int step = std::max(2, r.height / 12);
     for (int y = r.y + 2; y < r.y + r.height - 2; y += step) {
