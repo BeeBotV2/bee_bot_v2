@@ -269,7 +269,7 @@ global_costmap:
         pole_front_cam:
           topic: /pole_front_cam/depth/color/points_filtered
           data_type: "PointCloud2"
-          min_obstacle_height: 0.04   # 11-21: 0.06 → 0.04 — 지도에서 상자를 뺀 no_box에서 7 cm 상자 옆면(4~7 cm)을 경로 costmap에 칠함 (2D 층이라 칸 수 거름 없음 → 바닥 잡음 때문에 0.02까지는 안 내림)
+          min_obstacle_height: 0.06   # 11-21: 0.04로 낮췄다가 되돌림 — 2D 층은 점 하나로 칸을 칠해 바닥 근처 잡음(4~6 cm)이 S4 진입점 둘레를 막음(실기 nav_1121_144601). 7 cm 상자는 윗면 점으로 이 띠에 들어옴
           max_obstacle_height: 0.3
           marking: true
           clearing: true
