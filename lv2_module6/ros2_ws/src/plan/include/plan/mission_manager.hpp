@@ -128,7 +128,8 @@ private:
   void go_observe();
   void barcode_phase();
   void barcode_done(bool ok, const std::string & why);  // 팔 stow로 → 다음 단계
-  void hires(bool on);              // 바코드 엿보기 동안만 손 카메라 컬러를 고해상도로 (끝나면 원래대로)
+  void hires(bool on);
+  void take_recent_signal();              // 바코드 엿보기 동안만 손 카메라 컬러를 고해상도로 (끝나면 원래대로)
   void peek_end(const std::string & why);  // 엿보기 끝 — 해상도 되돌리고 gaze 흐름으로
   void read_phase();
   void survey(size_t box);
@@ -251,7 +252,10 @@ private:
   std::optional<std::array<double, 2>> light_;  // 이번 관측에서 본 신호등 (arena x, y) — 바코드는 그 왼쪽
   double peek_yaw_ = 0.0;
   double occlude_rad_ = 0.35, occlude_lost_s_ = 2.0, signal_preroll_s_ = 30.0;
-  bool occl_wait_ = false;  // 팔이 신호등을 가려 접음 — 신호 확정 뒤에 다시
+  bool occl_wait_ = false;
+  std::optional<perception::msg::MissionSignal> last_ok_signal_;  // 관측 밖에서 받은 마지막 확정 신호 — 관측 시작 때 signal_preroll_s 안이면 바로 씀
+  double hires_settle_s_ = 1.5;  // [s] 고해상도가 켜진 뒤 자동 노출이 잡힐 때까지 읽기 시간을 안 셈
+  rclcpp::Time hires_live_at_{0, 0, RCL_ROS_TIME};  // 팔이 신호등을 가려 접음 — 신호 확정 뒤에 다시
   rclcpp::Time light_seen_at_{0, 0, RCL_ROS_TIME};  // 지금 엿보는 방위 [rad] (사진 이름)
   bool scan_from_light_ = true, scan_ = false, scan_only_ = false;  // scan_only_: 본 후보로 엿보기 실패 → 신호등 왼쪽만 훑음
   size_t scan_k_ = 0;
