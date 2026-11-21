@@ -55,6 +55,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     #     다시 내려옴. 1·2 먼저 · 3 마지막 · L1 마지막이면 2~4위도 0.1 m 안 (A* 로봇 반경 0.16~0.21에서도 같은 경향)
     survey_order: [1, 2, 4, 5, 6, 3]
     build_location_order: [3, 2, 1]
+    build_location_nearest: true # 11-22 사용자: 적재가 다 끝난 자리에서 가까운 장소부터 (그다음도 직전 장소에서 가까운 곳) — false면 위 고정 순서
     # 경기장 벽 선분 [x0, y0, x1, y1, …] (arena, m) — documents/mission/dice-map.png (tools/cli/ros/docker/assets/course/dice_maze/walls.json 벽판 20개)
     #   ① 벽에 막힌 다가설 자리(벽에서 wall_clearance 안)는 고르지 않음 ② /arena/walls → nvblox_map이 /map에 겹쳐 Nav2가 처음부터 벽을 앎
     #   (발제: 기존 벽·기둥·박스 위치 유지 — 경기장 고정). 비우면 둘 다 안 함
