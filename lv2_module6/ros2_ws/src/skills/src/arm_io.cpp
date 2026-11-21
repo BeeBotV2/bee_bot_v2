@@ -734,8 +734,8 @@ bool ArmIO::jam_lagging(double & lag) const {
 }
 
 ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5 &, Q5 &)> plan, bool close,
-                                double open_m, bool lift_on_empty) {
-  return [this, policy, plan, close, open_m, lift_on_empty](Cb cb) {
+                                double open_m, bool lift_on_empty, bool bottom_ok) {
+  return [this, policy, plan, close, open_m, lift_on_empty, bottom_ok](Cb cb) {
     Q5 above{}, down{};
     if (!plan(above, down)) {
       RCLCPP_WARN(node_.get_logger(), "%s: 닿는 구간 자세를 못 구함 (IK·TF)", policy.name.c_str());
@@ -745,7 +745,7 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
     // 빠른 이동(load carry → 칸 위, vel_scale 1.0) 끝에 팔이 아직 따라오는 중(11/08 실기: 관절 오차 최대 5° · 떨림)이면
     // 위에서 0.3 s만 멈추고 내려가 칸을 빗나감 → 팔이 멈출 때까지 기다린 뒤 닿는 구간 시작
     settle_ = true;
-    settle([this, policy, plan, close, open_m, lift_on_empty, above, down, cb]() {
+    settle([this, policy, plan, close, open_m, lift_on_empty, bottom_ok, above, down, cb]() {
     ++run_;
     const auto p = std::make_shared<SkillModel>(policy);
     const auto ctx = [this, p, above, down](uint8_t phase, bool holding, bool live) -> Step {
@@ -759,9 +759,14 @@ ArmIO::Step ArmIO::contact_step(const SkillModel & policy, std::function<bool(Q5
     const auto base = std::make_shared<double>(0.0);
     const auto base_a = std::make_shared<std::array<double, 5>>();  // 관절별 전류 (기록용)
     const Step jam_base = [this, base, base_a](Cb c) { *base = jam_mean(0.3); *base_a = efforts(); c(true); };
-    const Step jam_check = [this, base, base_a, name = policy.name](Cb c) {
+    const Step jam_check = [this, base, base_a, bottom_ok, name = policy.name](Cb c) {
       const double lim = node_.get_parameter("jam_current_a").as_double(), d = jam_mean(0.3) - *base;
       if (lim <= 0.0 || d <= lim) { c(true); return; }
+      if (bottom_ok) {  // 11-22 실기 place: 면에 닿은 전류(+0.57 · +0.64 A)를 막힘으로 보고 쥔 채 올라감
+        RCLCPP_WARN(node_.get_logger(), "%s: 바닥 전류 %+.2f A (> %.2f) — 면에 닿음, 그대로 놓음", name.c_str(), d, lim);
+        c(true);
+        return;
+      }
       double lag;
       if (!jam_lagging(lag)) {  // 전류만 오름 — 바닥에 닿은 것으로 보고 그대로 놓기·쥐기
         RCLCPP_WARN(node_.get_logger(), "%s: 바닥 전류 %+.2f A (> %.2f)지만 joint2·3 추종 %.1f mrad — 막힘 아님, 계속", name.c_str(), d, lim, 1000 * lag);

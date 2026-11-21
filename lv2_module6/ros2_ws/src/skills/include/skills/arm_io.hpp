@@ -100,8 +100,9 @@ public:
   Step grip_settle_step(double min_current, double empty_m, double timeout_s);
   // open_m: close=false일 때 놓으며 여는 gripper_left_joint [m] (load는 간격 38 mm)
   // lift_on_empty: 빈손 판정이어도 위로 올린 뒤 실패 (unload — 칸 안에 남지 않게). false면 내려간 채 실패 (pick — 잘못 판정해도 퍽을 박스 위에서 놓음)
+  // bottom_ok: 바닥(끝 자세)에서 오른 전류는 막힘으로 안 봄 — 면에 닿은 것으로 보고 그대로 놓음 (place · 내려가는 중 막힘은 그대로)
   Step contact_step(const SkillModel & policy, std::function<bool(Q5 &, Q5 &)> plan, bool close,
-                    double open_m = GRIPPER_OPEN_M, bool lift_on_empty = false);
+                    double open_m = GRIPPER_OPEN_M, bool lift_on_empty = false, bool bottom_ok = false);
 
   // ---------- 보정 · 입력
   // 닿는 구간을 contact_step 없이 직접 짜는 skill(pick_far)용 — run_id를 하나 올림 (rl_arm_correction이 처짐 적분·Δ·행동 기록을 0부터)

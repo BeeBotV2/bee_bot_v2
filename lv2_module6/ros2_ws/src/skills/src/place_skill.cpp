@@ -107,7 +107,7 @@ private:
       const auto descend = [this, down, open_m, done](bool ok2) {
         if (!ok2) { done(false); return; }
         arm_.contact_step(policy_, [this, down](ArmIO::Q5 & a, ArmIO::Q5 & d) { return arm_.arm_now(a) && arm_.ik_ee(down, a, d); },
-                          false, open_m)(done);
+                          false, open_m, false, true)(done);
       };
       ArmIO::Q5 now{}, q_up{};
       if (via_carry_ && arm_.arm_now(now) && std::abs(now[0]) > 1.2 && (now[0] > 0 ? carry_left_ : carry_right_).size() == 5) {
@@ -127,7 +127,7 @@ private:
         arm_.move_joints(std::vector<double>(q_above.begin(), q_above.end()), [this, down, open_m, done](bool ok2) {
           if (!ok2) { done(false); return; }
           arm_.contact_step(policy_, [this, down](ArmIO::Q5 & a, ArmIO::Q5 & d) { return arm_.arm_now(a) && arm_.ik_ee(down, a, d); },
-                            false, open_m)(done);
+                            false, open_m, false, true)(done);
         });
       }, psi);
       return;
