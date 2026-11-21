@@ -1,0 +1,49 @@
+{
+  "names": {
+    "bringup": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "control": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "faker": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "manager": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "ml": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "perception": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "plan": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "ros_system": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    },
+    "skills": {
+      "cmake-args": [
+        "-DBUILD_TESTING=OFF"
+      ]
+    }
+  }
+}
