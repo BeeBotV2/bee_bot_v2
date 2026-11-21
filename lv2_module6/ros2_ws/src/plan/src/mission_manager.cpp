@@ -1501,6 +1501,8 @@ void MissionManager::verify_at(size_t li, std::function<void()> then) {
     if (!ok) { RCLCPP_WARN(get_logger(), "%s 물러나기 실패 (%s) — 보기 건너뜀", name.c_str(), why.c_str()); then(); return; }
     run({SubGoal().set__skill("pose").set__target("look")}, [this, name, then](bool, const std::string &) {
       snap("look_" + name);
+      beep(3000, 70);  // 봤다는 표시 — 짧게 두 번
+      beep(3000, 70);
       run({stow()}, [then](bool, const std::string &) { then(); });
     });
   });
@@ -1629,6 +1631,11 @@ void MissionManager::beep_phase(Phase phase) {
     if (beep_timer_active_ && beep_timer_) beep_timer_->cancel();
     beep_timer_active_ = false;
   }
+  beep(hz, ms);
+}
+
+void MissionManager::beep(int hz, int ms) {
+  if (!phase_beeps_ || !beep_pub_) return;
   beep_queue_.emplace_back(hz, ms);
   if (beep_timer_active_) return;
   beep_timer_active_ = true;
