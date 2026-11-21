@@ -503,6 +503,11 @@ void MissionManager::on_command(const std::string & cmd) {
     build_loc_order_.insert(build_loc_order_.begin(), li);
     use_given_order_ = true;
     use_given(false);
+    if (!sc.place_order.empty()) {  // 장소 그룹 직접 (바코드 정렬 규칙 대신)
+      order_ = sc.place_order;
+      note("장소 그룹 직접: L1 " + order_.substr(0, 1) + " · L2 " + order_.substr(1, 1) + " · L3 " + order_.substr(2, 1));
+      publish_state();
+    }
     phase_ = Phase::SURVEY;  // 배정이 끝나면 BUILD로 (next_phase)
     phase_t0_ = wall_s();
     solve_allocation();

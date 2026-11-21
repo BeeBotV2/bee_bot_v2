@@ -5,6 +5,7 @@
   python3 isaac/mission/run_place.py --code P2-01 --counts R5Y3G4
   python3 isaac/mission/run_place.py --slots 0:5,1:2,2:4      # 실제로 실은 칸:tag (나머지 칸은 빔)
   python3 isaac/mission/run_place.py --loc L2                 # 다른 장소부터
+  python3 isaac/mission/run_place.py --dice 2,6,4             # L1·L2·L3 주사위 눈 직접 (바코드 정렬 규칙 대신 · 신호 횟수 안에서)
 
 준비: 로봇을 L1 상자 −x 쪽 앞(상자를 바라보게, 도킹 전 자리)에 둠 · 적재함 12칸에 퍽을 아무렇게나 다 실음.
       놓기 동작 시험용 — 장부는 '칸 n = tag n'으로 가정하고 칸 순서대로 꺼내 정해진 칸에 놓음. 실제 퍽의 tag·색과 놓인 칸이
@@ -39,6 +40,7 @@ def main():
     ap.add_argument('--loc', default='L1', choices=('L1', 'L2', 'L3'), help='먼저 놓을 장소 (로봇이 그 앞에 있음)')
     ap.add_argument('--code', default='P2-04', help='바코드 (P2-01~04)')
     ap.add_argument('--counts', default='R4Y2G6', help='신호 횟수 R<n>Y<n>G<n>')
+    ap.add_argument('--dice', default='', help='L1,L2,L3 주사위 눈 (예 2,6,4) — 신호 R·Y·G 횟수를 장소에 직접 배정 (비면 바코드 규칙)')
     ap.add_argument('--slots', default=','.join(f'{i}:{i}' for i in range(12)), help='적재함 칸:tag 목록 (기본 칸 n = tag n)')
     ap.add_argument('--basket-file', default='~/.ros/beebot_basket.txt', help='coordinator basket_file')
     ap.add_argument('--timeout', type=float, default=1200.0, help='[s] 이 안에 안 끝나면 abort')
@@ -59,6 +61,17 @@ def main():
         f.write('order ' + ' '.join(str(s) for s in sorted(slots)) + '\nheld - - -1\n')
     start = f'start:PLACE:{a.loc}:{a.code}:{a.counts.upper()}'
     a_code, a_counts = a.code, a.counts.upper()
+    if a.dice:   # 눈 → 그룹 (R·Y·G 횟수에서 찾음 — 같은 횟수가 둘이면 R → Y → G 순서로)
+        cnt = dict(zip('RYG', map(int, re.fullmatch(r'R(\d)Y(\d)G(\d)', a.counts.upper()).groups())))
+        order = ''
+        for n_ in (int(x) for x in a.dice.split(',')):
+            g = next((g for g in 'RYG' if cnt[g] == n_ and g not in order), None)
+            if g is None:
+                sys.exit(f'--dice {a.dice}: 신호 {a.counts}에 {n_}번인 색이 없음')
+            order += g
+        if len(order) != 3:
+            sys.exit('--dice: 세 개 (L1,L2,L3)')
+        start += f':{order}'
 
     ws = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ros2_ws')
     os.environ.setdefault('FASTDDS_DEFAULT_PROFILES_FILE', os.path.join(ws, 'fastdds.xml'))

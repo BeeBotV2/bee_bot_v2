@@ -145,6 +145,7 @@ struct StartCmd {
   bool diag = false, from_survey = false, given = false;  // given = 바코드·신호를 받음
   std::string barcode;
   Counts counts;
+  std::string place_order;  // PLACE 6번째 칸 (선택): L1·L2·L3 그룹 직접 — 예 "YGR" (바코드 정렬 규칙 대신, 놓기 시험용)
   int place_loc = -1;  // start:PLACE:L<n>:<바코드>:<신호> — 적재함에 다 실은 채 장소 L<n> 앞에서 BUILD부터 (0부터)
   std::vector<std::string> go_to;  // start:GOTO:S1,S2,L1 — 그 상자들에 미션처럼 다가가기만 (S1~S6 시작 박스 · L1~L3 장소)
 };

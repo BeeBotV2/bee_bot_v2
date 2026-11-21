@@ -444,10 +444,18 @@ bool parse_start(const std::string & cmd, StartCmd & out, std::string & why) {
     return true;
   }
   if (name == "PLACE") {  // start:PLACE:L1:<바코드>:<신호> — 장부의 퍽으로 배정 → 그 장소부터 BUILD (시험용)
-    if (t.size() != 5 || t[2].size() != 2 || t[2][0] != 'L' || t[2][1] < '1' || t[2][1] > '3') { why = "need_loc_barcode_signal"; return false; }
+    // start:PLACE:L1:<바코드>:<신호>[:<L1L2L3 그룹, 예 YGR>]
+    if ((t.size() != 5 && t.size() != 6) || t[2].size() != 2 || t[2][0] != 'L' || t[2][1] < '1' || t[2][1] > '3') { why = "need_loc_barcode_signal"; return false; }
     bool asc = false;
     if (!parse_barcode(t[3], asc)) { why = "unknown_barcode"; return false; }
     if (!parse_counts(t[4], out.counts, why)) return false;
+    if (t.size() == 6) {
+      std::string o = t[5];
+      std::string sorted = o;
+      std::sort(sorted.begin(), sorted.end());
+      if (sorted != "GRY") { why = "bad_order"; return false; }
+      out.place_order = o;
+    }
     out.place_loc = t[2][1] - '1';
     out.barcode = t[3];
     out.given = true;
