@@ -18,6 +18,7 @@
 #include "moveit_msgs/action/execute_trajectory.hpp"
 #include "moveit_msgs/srv/get_motion_plan.hpp"
 #include "moveit_msgs/srv/get_state_validity.hpp"
+#include "perception/msg/hand_relative.hpp"
 #include "perception/msg/hand_target.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -128,6 +129,11 @@ private:
   double grip_current_a_ = 0.1, grasp_min_pos_m_ = 0.003, grasp_min_effort_ = 0.25;
   bool grasp_check_ = true, contact_ = false, grasp_empty_ = false, sag_warned_ = false, jam_ = false;
   rclcpp::TimerBase::SharedPtr jam_timer_;  // 내려가는 중 막힘 감시
+  // 막힘 기록 (11-21): 관절별 전류(막힘 기준 잡을 때 → 지금) · 관절 각 · 손 카메라 상대 위치 → WARN 로그 + 실패 detail
+  std::string jam_note(const std::array<double, 5> & base_a);
+  std::array<double, 5> efforts();
+  rclcpp::Subscription<perception::msg::HandRelative>::SharedPtr hr_sub_;
+  perception::msg::HandRelative::ConstSharedPtr hr_;
   double jam_mean(double window_s) const;
   std::string contact_mode_ = "sim", grip_fail_;
   uint64_t gen_ = 0;

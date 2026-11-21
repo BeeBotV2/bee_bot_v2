@@ -379,6 +379,7 @@ int Coordinator::tag_of(const perception::msg::TrackedObject & o) const {
 
 void Coordinator::run_step() {
   if (!running_ || mode_ != "AUTO" || estop_) return;
+  fail_detail_.clear();  // 단계를 (다시) 시작 — 앞 skill 실패의 detail이 coordinator 자체 실패(pick_no_target 등)에 붙지 않게
   if (idx_ >= plan_.goals.size()) {
     running_ = false;
     const uint32_t final_step = plan_.goals.empty() ? 0 : plan_.goals.back().step;
@@ -418,6 +419,7 @@ void Coordinator::send(const std::string & action, const Skill::Goal & goal, Ok 
     return;
   }
   waited_s_ = 0;
+  fail_detail_.clear();  // 앞 skill 실패가 재시도(arm_jam · pick_far)로 넘어갔으면 남지 않게
   const uint64_t gen = gen_;
   child_pending_ = true;
   rclcpp_action::Client<Skill>::SendGoalOptions opt;
@@ -450,6 +452,7 @@ void Coordinator::send(const std::string & action, const Skill::Goal & goal, Ok 
     if (r.code == rclcpp_action::ResultCode::SUCCEEDED && r.result->success) { ok(*r.result); return; }
     if (r.code == rclcpp_action::ResultCode::CANCELED) return;  // 취소한 쪽(모드·비상정지·새 계획)이 이미 처리
     const std::string why = r.result && !r.result->reason.empty() ? r.result->reason : action + "_failed";
+    fail_detail_ = action + (r.result && !r.result->detail.empty() ? ": " + r.result->detail : "");
     // 먼 퍽 (skills pick_far_skill.cpp): pick이 손을 수직으로 퍽 위에 못 둬서 실패하면 손을 기울여 들어가는 pick_far로 같은 목표를 한 번 더.
     //   성공·실패 처리(ok · on_fail)는 pick 것을 그대로 — 위(mission_manager)에서는 pick 한 번으로 보임.
     //   pick_far 노드가 없으면(옛 launch) 예전처럼 pick 실패로 끝 (기다리면 run_step이 pick부터 다시 돌아 끝없이 반복됨)
@@ -559,12 +562,13 @@ void Coordinator::finish_stop() {
 }
 
 void Coordinator::finish_action(const std::shared_ptr<ExecuteHandle> & handle, bool success, bool cancelled,
-                                 uint32_t final_step, const std::string & reason) {
+                                 uint32_t final_step, const std::string & reason, const std::string & detail) {
   if (!handle || !handle->is_active()) return;
   auto result = std::make_shared<ExecutePlan::Result>();
   result->success = success;
   result->final_step = final_step;
   result->reason = reason;
+  result->detail = detail;
   if (cancelled) handle->canceled(result);
   else if (success) handle->succeed(result);
   else handle->abort(result);
@@ -593,9 +597,10 @@ void Coordinator::fail(const std::string & reason) {
   const auto & g = plan_.goals[idx_];
   ++gen_;  // 실패 뒤 남은 goal/result callback은 이 계획을 다시 건드리지 않게
   running_ = false;
-  RCLCPP_WARN(get_logger(), "step %u 실패 (%s)", g.step, reason.c_str());
+  RCLCPP_WARN(get_logger(), "step %u 실패 (%s)%s", g.step, reason.c_str(), fail_detail_.empty() ? "" : (" — " + fail_detail_).c_str());
   status(g.step, TaskStatus::FAILED, reason);
-  finish_action(active_plan_action_, false, false, g.step, reason);
+  finish_action(active_plan_action_, false, false, g.step, reason, fail_detail_);
+  fail_detail_.clear();
   active_plan_action_.reset();
 }
 

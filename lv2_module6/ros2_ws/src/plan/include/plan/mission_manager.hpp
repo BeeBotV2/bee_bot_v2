@@ -161,8 +161,9 @@ private:
   int attempt_ = 0;                  // 다음 run()의 다시 시도 번호 (run_retry · grab · place_check · stand_up이 정함)
   std::string ctx_;                  // 지금 다루는 퍽·박스·장소 (JSON 필드 조각, 예 "\"tag\": 7, \"loc\": \"L1\"")
   double phase_t0_ = 0, mission_t0_ = 0;
-  void step_line(size_t k, double t0, double t1, bool ok, const std::string & why, bool timed = true);
-  void close_steps(bool ok, const std::string & why, size_t last);  // 기록 중인 계획을 last 단계까지 닫음
+  void step_line(size_t k, double t0, double t1, bool ok, const std::string & why, bool timed = true, const std::string & detail = "");
+  void close_steps(bool ok, const std::string & why, size_t last, const std::string & detail = "");
+  std::string fail_fields(bool ok, const std::string & detail) const;  // 실패 줄 JSON 꼬리: detail · robot  // 기록 중인 계획을 last 단계까지 닫음
   void phase_line(bool ok, const std::string & why, Phase next);
   void mission_line(bool ok, const std::string & why);
   void snap(const std::string & name);           // photo_topic 한 장 → photos/<번호>_<name>.jpg

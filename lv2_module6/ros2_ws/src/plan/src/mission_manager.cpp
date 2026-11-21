@@ -1440,7 +1440,9 @@ void MissionManager::run(std::vector<SubGoal> goals, Done done) {
     const std::string why = result.result && !result.result->reason.empty() ? result.result->reason :
       (result.code == rclcpp_action::ResultCode::CANCELED ? "cancelled" : "coordinator_failed");
     const uint32_t fs = result.result ? result.result->final_step : 0;
-    close_steps(ok, ok ? "" : why, ok ? step_log_.goals.size() - 1 : fs ? fs - 1 : step_log_.cur);
+    const std::string detail = result.result ? result.result->detail : "";
+    if (!ok) RCLCPP_WARN(get_logger(), "계획 %u 실패 %s%s", plan_id, why.c_str(), detail.empty() ? "" : (" — " + detail).c_str());
+    close_steps(ok, ok ? "" : why, ok ? step_log_.goals.size() - 1 : fs ? fs - 1 : step_log_.cur, detail);
     if (!ok && interrupted(why)) { stop("interrupted: " + why); return; }
     if (diag_run_ && diag_fatal(ok, why, stuck_, stuck_limit_)) { stop("fatal: " + why); return; }
     done(ok, why);
@@ -2017,7 +2019,8 @@ void MissionManager::append_log(const std::string & name, const std::string & li
 
 // ---------- 시간 기록 (steps.jsonl · phases.jsonl) — tools/plan/step_stats.py가 skill별 시도·성공률·시간으로 모음
 //   dur_s null = feedback을 놓쳐 단계 경계를 모름 (그 단계는 시간 통계에서 뺌)
-void MissionManager::step_line(size_t k, double t0, double t1, bool ok, const std::string & why, bool timed) {
+//   실패 줄엔 detail(skill 마지막 단계들) · robot(그때 map 자세)도 (11-21 — 원인을 launch 로그에서 찾지 않게)
+void MissionManager::step_line(size_t k, double t0, double t1, bool ok, const std::string & why, bool timed, const std::string & detail) {
   const auto & s = step_log_;
   if (k >= s.goals.size()) return;
   const auto & g = s.goals[k];
@@ -2026,16 +2029,24 @@ void MissionManager::step_line(size_t k, double t0, double t1, bool ok, const st
     ", \"plan\": " + std::to_string(s.plan) + ", \"step\": " + str(static_cast<int>(k) + 1) +
     ", \"steps\": " + str(static_cast<int>(s.goals.size())) + ", \"skill\": " + q(g.skill) + ", \"target\": " + q(g.target) +
     ", \"relation\": " + q(g.relation) + ", \"ok\": " + (ok ? "true" : "false") + ", \"reason\": " + q(why) +
-    ", \"retry\": " + str(s.retry) + (s.ctx.empty() ? "" : ", " + s.ctx) + "}");
+    ", \"retry\": " + str(s.retry) + (s.ctx.empty() ? "" : ", " + s.ctx) + fail_fields(ok, detail) + "}");
 }
 
-void MissionManager::close_steps(bool ok, const std::string & why, size_t last) {
+std::string MissionManager::fail_fields(bool ok, const std::string & detail) const {
+  if (ok) return "";
+  std::string out = detail.empty() ? "" : ", \"detail\": " + q(detail);
+  Pose2 r;
+  if (robot_map(r)) out += fmt(", \"robot\": [%.3f, %.3f, %.1f]", r.x, r.y, r.yaw * 180.0 / M_PI);
+  return out;
+}
+
+void MissionManager::close_steps(bool ok, const std::string & why, size_t last, const std::string & detail) {
   auto & s = step_log_;
   if (!s.plan || s.goals.empty()) return;
   last = std::min(std::max(last, s.cur), s.goals.size() - 1);
   const double t = wall_s();
   for (size_t k = s.cur; k <= last; ++k)  // 경계를 놓친 단계(cur < last)는 시간 모름
-    step_line(k, k == s.cur ? s.t0 : t, t, k == last ? ok : true, k == last ? why : "", k == s.cur && last == s.cur);
+    step_line(k, k == s.cur ? s.t0 : t, t, k == last ? ok : true, k == last ? why : "", k == s.cur && last == s.cur, k == last ? detail : "");
   s.plan = 0;
 }
 
