@@ -11,7 +11,11 @@
       - default_planning_response_adapters/AddTimeOptimalParameterization
       - default_planning_response_adapters/ValidateSolution
       - default_planning_response_adapters/DisplayMotionPath
-    start_state_max_bounds_error: 0.1
+    # 시작 자세가 관절 한계를 살짝 넘으면 한계 안으로 당겨서 계획 (CheckStartStateBounds) — 11-21 실기 nav_1121_183927: place 중
+    #   joint4 1.97122 > 1.97로 그 뒤 모든 계획이 'Start state out of bounds'로 거부돼 BUILD·VERIFY가 0.3 s에 다 실패.
+    #   예전 start_state_max_bounds_error(0.1)는 이 MoveIt(Lyrical)에 없는 이름이라 무시됐음. 많이 넘으면 실행 때
+    #   allowed_start_tolerance(0.05)로 걸림
+    fix_start_state: true
     planner_configs:
       RRTConnectkConfigDefault:
         type: geometric::RRTConnect
