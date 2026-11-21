@@ -3,7 +3,7 @@
 skill: load_slot
 kind: arm            # arm (rl_arm_correction이 계산) | base (skill_approach가 계산)
 layout: place          # 정책 입력 모양 (ml/arm_obs.hpp place 39 · pick 41)
-use: false
+use: true            # 11-21 사용자: 켬 — 실기 load 막힘 6건 중 3건이 팔 자세 어긋남 5~9 mm (정책 입력 hand_relative slot에 보임, 성공은 대부분 2 mm 이하) · 11-14 저녁부터 꺼져 있었음 (현 LoadEnv 93 % < 기준 동작 99.6 %)
 runtime: onnx         # onnx (기본, ONNX Runtime) | policy (같은 정책의 .policy · 실측에서 ONNX가 나쁘면)
 node: skill_load
 sim_baseline: 94.0      # [%] 학습 없이 기준 동작만 (1024판, seed 7, twist=1 · 도착 ±3 mm · 손 안 숨은 오프셋 ±3 mm)

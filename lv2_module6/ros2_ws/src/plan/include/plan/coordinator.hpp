@@ -38,6 +38,7 @@
 #include "plan/msg/basket_state.hpp"
 #include "plan/msg/sub_goal_array.hpp"
 #include "plan/msg/task_status.hpp"
+#include "plan/shared_tf.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -180,8 +181,10 @@ private:
   TrackedObjectArray::ConstSharedPtr objects_;
   // 기억한 퍽 — perception은 안 보이면 2초 뒤 지우므로(long_memory false, 11/04 "기억은 통합 쪽") 마지막으로 본 모습을 remember_s 동안
   //   (적재 뒤 팔이 상자를 안 보는 자세여도 다음 퍽을 그 자리로 바로 pick). 집으면 지움 · 같은 자리에 새 트랙이 생기면 지움
-  struct Seen { perception::msg::TrackedObject o; rclcpp::Time t; };
-  std::map<uint32_t, Seen> remembered_;
+  // at: 기억한 자리 (plan/shared_tf.hpp Spot) — 도킹해 서 있는 동안은 odom 기준으로 다시 꺼냄 (11-21)
+  struct Seen { perception::msg::TrackedObject o; rclcpp::Time t; Spot at; };
+  mutable std::map<uint32_t, Seen> remembered_;
+  void recall(Seen & s) const;  // s.o 자리를 지금 쓸 map 점으로
   double remember_s_ = 120.0;
   void remember(const TrackedObjectArray & m);
   rclcpp::Publisher<TaskStatus>::SharedPtr status_pub_;

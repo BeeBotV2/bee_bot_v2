@@ -344,8 +344,16 @@ bool Coordinator::is_id(const std::string & s) {
 
 const perception::msg::TrackedObject * Coordinator::find(uint32_t id) const {
   if (objects_) for (const auto & o : objects_->objects) if (o.id == id) return &o;
-  if (const auto it = remembered_.find(id); it != remembered_.end()) return &it->second.o;  // 지금은 안 보이는 퍽
+  if (const auto it = remembered_.find(id); it != remembered_.end()) {  // 지금은 안 보이는 퍽
+    recall(it->second);
+    return &it->second.o;
+  }
   return nullptr;
+}
+
+void Coordinator::recall(Seen & s) const {
+  auto & p = s.o.pose.pose.position;
+  spot_map(*tf_buffer_, s.at, p.x, p.y);
 }
 
 void Coordinator::remember(const TrackedObjectArray & m) {
@@ -354,6 +362,7 @@ void Coordinator::remember(const TrackedObjectArray & m) {
   //   트랙이 엉뚱한 자리로 끌려갔음 (11/07 Isaac: 적재 중 옆 퍽 트랙이 14 cm 밀려 그 자리로 pick → IK 실패)
   const bool trust = !running_ || (idx_ < plan_.goals.size() && plan_.goals[idx_].skill == "inspect");
   for (auto it = remembered_.begin(); it != remembered_.end();) {  // 오래됨 · 같은 자리(3 cm)에 다른 id 트랙이 다시 생김 → 잊음
+    recall(it->second);
     bool replaced = (t - it->second.t).seconds() > remember_s_;
     for (const auto & o : m.objects)
       if (trust && !replaced && o.id != it->first && o.class_name.rfind("puck", 0) == 0 &&
@@ -364,7 +373,7 @@ void Coordinator::remember(const TrackedObjectArray & m) {
   }
   if (remember_s_ <= 0 || !trust) return;
   for (const auto & o : m.objects)
-    if (o.class_name.rfind("puck", 0) == 0) remembered_[o.id] = {o, t};
+    if (o.class_name.rfind("puck", 0) == 0) remembered_[o.id] = {o, t, make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y)};
 }
 
 std::string Coordinator::shape_of(const perception::msg::TrackedObject & o) const {
@@ -778,8 +787,8 @@ void Coordinator::pick(const SubGoal & g) {
                                                [&o](const auto & x) { return x.id == o.id; });
   if (!visible) {  // 기억한 퍽 — 대상과 그 옆 퍽(기억한 것)을 실어 보냄: grasp_scorer가 지금 인지 대신 씀
     sg.objects.push_back(o);
-    for (const auto & [id, s] : remembered_)
-      if (id != o.id) sg.objects.push_back(s.o);
+    for (auto & [id, s] : remembered_)
+      if (id != o.id) { recall(s); sg.objects.push_back(s.o); }
     RCLCPP_INFO(get_logger(), "pick %s: 지금 안 보임 — 기억한 자리 (%.3f, %.3f)로", g.target.c_str(),
                 o.pose.pose.position.x, o.pose.pose.position.y);
   }
