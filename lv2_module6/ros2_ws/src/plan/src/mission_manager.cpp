@@ -164,6 +164,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   // 방문 순서 (1부터) — 경기장 고정이라 오프라인 A*(tools/plan/route_order.py, 도면 벽)로 정한 값. 비거나 틀리면 1, 2, 3, …
   survey_order_ = visit_order(declare_parameter<std::vector<int64_t>>("survey_order", std::vector<int64_t>{}), start_boxes_.size());
   build_loc_order_ = visit_order(declare_parameter<std::vector<int64_t>>("build_location_order", std::vector<int64_t>{}), 3);
+  build_nearest_ = declare_parameter<bool>("build_location_nearest", build_nearest_);
   walls_ = declare_parameter<std::vector<double>>("arena_walls", std::vector<double>{});
   keepout_ = declare_parameter<std::vector<double>>("keepout_zones", std::vector<double>{});
   wall_clearance_ = declare_parameter<double>("wall_clearance", 0.22);
@@ -501,6 +502,7 @@ void MissionManager::on_command(const std::string & cmd) {
     return;
   }
   build_loc_order_ = visit_order(get_parameter("build_location_order").as_integer_array(), 3);
+  use_given_order_ = false;
   if (sc.place_loc >= 0) {  // 적재함 장부(이미 다 실음)의 퍽으로 배정 → 그 장소부터 BUILD → VERIFY → RETURN
     const size_t li = static_cast<size_t>(sc.place_loc);
     if (basket_) for (const auto & b : basket_->slots)
@@ -508,6 +510,7 @@ void MissionManager::on_command(const std::string & cmd) {
     note("놓기 시험 — 적재함 퍽 " + str(static_cast<int>(pucks_.size())) + "개 · L" + str(sc.place_loc + 1) + "부터 BUILD");
     build_loc_order_.erase(std::remove(build_loc_order_.begin(), build_loc_order_.end(), li), build_loc_order_.end());
     build_loc_order_.insert(build_loc_order_.begin(), li);
+    use_given_order_ = true;
     use_given(false);
     phase_ = Phase::SURVEY;  // 배정이 끝나면 BUILD로 (next_phase)
     phase_t0_ = wall_s();
@@ -1324,6 +1327,26 @@ void MissionManager::solve_allocation() {
   if (partial) ok = true;
   std::vector<std::string> empty;
   std::string groups;
+  // 적재가 다 끝난 지금 자리에서 가까운 장소부터 (11-22 사용자: 고정 순서 L3 → L2 → L1이면 S1 근처에서 끝나도 L3까지 갔다 옴)
+  //   — 그다음도 직전 장소에서 가까운 곳 (욕심 순서). 놓기 시험(start:place)은 정한 장소부터라 그대로
+  // ponytail: 직선 거리 — 벽 너머가 가까워 보일 수 있음. 동선이 꼬이면 Nav2 경로 길이(ComputePathToPose)로
+  Pose2 rb;
+  if (ok && build_nearest_ && !use_given_order_ && robot_arena(rb)) {
+    std::vector<size_t> left = build_loc_order_, by;
+    double x = rb.x, y = rb.y;
+    while (!left.empty()) {
+      const auto it = std::min_element(left.begin(), left.end(), [&](size_t a, size_t b) {
+        return std::hypot(locations_[a].first - x, locations_[a].second - y) < std::hypot(locations_[b].first - x, locations_[b].second - y);
+      });
+      by.push_back(*it);
+      x = locations_[*it].first; y = locations_[*it].second;
+      left.erase(it);
+    }
+    build_loc_order_ = by;
+    std::vector<std::string> names;
+    for (const size_t li : by) names.push_back("L" + str(static_cast<int>(li) + 1));
+    note("놓는 순서 (지금 자리에서 가까운 장소부터): " + join(names));
+  }
   if (ok) {
     for (const size_t li : build_loc_order_) {  // 장소 방문 순서 (build_location_order) — 장소 번호 li는 그대로
       const char g = order_[li];
