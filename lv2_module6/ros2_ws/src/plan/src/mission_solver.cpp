@@ -132,7 +132,8 @@ std::pair<double, double> cell_offset(int cell, double step) {
 
 std::pair<double, double> box_cell(const Pose2 & box, int cell, double step) {
   const auto [dx, dy] = cell_offset(cell, step);
-  return {box.x + dx, box.y + dy};
+  const double c = std::cos(box.yaw), s = std::sin(box.yaw);
+  return {box.x + c * dx - s * dy, box.y + s * dx + c * dy};
 }
 
 Pose2 arena_to_map(const Pose2 & p, const Pose2 & start) {

@@ -57,8 +57,8 @@ std::vector<int> dice_cells_ordered(int n, double facing_yaw);
 std::pair<double, double> cell_offset(int cell, double step = 0.060);
 
 struct Pose2 { double x = 0, y = 0, yaw = 0; };
-// 인지한 장소 상자 가운데(arena) 위의 칸 중심 — 격자는 장소 중심 ±60 mm · 방향은 모든 장소 지도 +Y 고정
-//   (발제 documents/mission/README.md §4: "회전 대체 불가") → 상자가 돌아가 있어도 칸은 돌리지 않음 (box.yaw 안 씀)
+// 인지한 장소 상자 가운데(arena) 위의 칸 중심 — 격자는 장소 중심 ±step · 무늬 방향 box.yaw = 무늬 +Y(칸 0·1·2 줄)가 향하는 쪽에서 π/2를 뺀 각
+//   (11-22 발제에서 "방향 +Y 고정 · 회전 대체 불가" 삭제 — 장소마다 처음 도킹한 쪽에서 똑바로 보이게 돌림, mission_manager correct)
 std::pair<double, double> box_cell(const Pose2 & box, int cell, double step = 0.060);
 
 // 경기장(arena) 자세 → map 자세. start = 로봇이 켜진 자리의 arena 자세 (map 원점 = 그 자리, map x = 그때 로봇 앞)

@@ -456,6 +456,7 @@ void MissionManager::on_command(const std::string & cmd) {
   lying_.clear();
   loc_pose_.assign(locations_.size(), std::nullopt);
   loc_fix_.assign(locations_.size(), std::nullopt);
+  loc_rot_.assign(locations_.size(), std::nullopt);
   marks_.assign(start_boxes_.size() + loc_boxes_.size(), Mark{});
   acorr_seen_.clear();
   acorr_used_.clear();
@@ -2036,8 +2037,14 @@ void MissionManager::correct(size_t li) {
     loc_fix_[li].reset();
     return;
   }
-  loc_pose_[li] = Pose2{a.x, a.y, 0.0};
-  RCLCPP_INFO(get_logger(), "L%zu 상자 가운데 (도면에서 %+.1f, %+.1f mm) — 고정", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000);
+  // 무늬 방향: 처음 도킹한 자리에서 로봇이 보는 쪽이 무늬 위(+Y) — 90° 단위로 맞춰 장소가 끝날 때까지 고정 (11-22 발제 +Y 고정 삭제)
+  if (!loc_rot_[li]) {
+    Pose2 r;
+    loc_rot_[li] = robot_arena(r) ? std::round((r.yaw - M_PI / 2) / (M_PI / 2)) * (M_PI / 2) : 0.0;
+  }
+  loc_pose_[li] = Pose2{a.x, a.y, *loc_rot_[li]};
+  RCLCPP_INFO(get_logger(), "L%zu 상자 가운데 (도면에서 %+.1f, %+.1f mm) · 무늬 %.0f° — 고정", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000,
+              *loc_rot_[li] * 180.0 / M_PI);
 }
 
 std::pair<double, double> MissionManager::cell_target(size_t li, int cell) const {
