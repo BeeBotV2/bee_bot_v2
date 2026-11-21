@@ -631,8 +631,7 @@ void send_state()
     print_value(or_nan(GRIPPER_INDEX, slope * rpm_to_rad_s(g.velocity * VELOCITY_RPM_PER_UNIT)));
     print_value(or_nan(GRIPPER_INDEX, g.current * CURRENT_MA_PER_UNIT / 1000.0f));
 
-    imu.update();
-    print_value(imu.quat[1]);  // cIMU quat = w, x, y, z
+    print_value(imu.quat[1]);  // imu.update()는 loop()에서 매번 (11-21)  // cIMU quat = w, x, y, z
     print_value(imu.quat[2]);
     print_value(imu.quat[3]);
     print_value(imu.quat[0]);
@@ -662,6 +661,9 @@ void setup()
 
 void loop()
 {
+    // IMU는 매 loop마다 갱신 (11-21) — 예전엔 S 송신(10 ms)마다만 불러 cIMU 자세 필터가 100 Hz로만 돌고 보낸 자이로도 그 순간 한 번 값.
+    //   TurtleBot3 펌웨어처럼 매 loop 갱신 → 자세 필터가 제 주기로 돌고 S에는 가장 최근 값
+    imu.update();
     read_host();
     if (has_pending_c)
     {

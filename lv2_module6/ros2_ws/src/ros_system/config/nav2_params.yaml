@@ -277,7 +277,8 @@ global_costmap:
           marking: true
           clearing: false
           obstacle_min_range: 0.0
-          obstacle_max_range: 1.2
+          obstacle_max_range: 0.8   # 11-21: 1.2 → 0.8 (칠하기만) — 회전 중 yaw 오차 ~10°면 1.2 m 앞 벽이 0.21 m 어긋나 칠해져 wall_point_filter(0.15)를 넘음
+                                    #   (실기 nav_1121_160812 2.9 s: 위쪽 벽 0.16~0.21 m 칸이 S1 짧은 길을 막아 6.4 m 우회). 0.8 m면 0.14 m
           raytrace_min_range: 0.0
           raytrace_max_range: 3.0
         pole_front_cam_clear:   # 지우기 전용 — 벽 앞 칸도 광선으로 계속 지움

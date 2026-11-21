@@ -20,7 +20,7 @@ ekf_filter_node:
     #     vx  : cuVSLAM 0.0025 (cuvslam_slam linear_variance 기본) · 바퀴 0.1 (controllers.yaml twist_covariance_diagonal[0])
     #     vy  : 바퀴 1e-4 — 바퀴 축이 base_footprint 원점이라 옆 속도는 늘 0 (diff drive). 바퀴 /odom의 vy(=0)를 넣어 '옆으로 안 감'을 알림
     #           (robot_localization 문서 권장 방식). cuVSLAM vy는 안 넣음 — 실기에서 rms 0.025 m/s가 전부 잡음
-    #     vyaw: cuVSLAM 0.0025 (angular_variance 기본) · IMU 0.03 (controllers.yaml static_covariance_angular_velocity) · 바퀴 안 넣음
+    #     vyaw: cuVSLAM 0.001 (11-21 ros_system.launch.py에서 — 기본 0.0025) · IMU 0.03 (controllers.yaml static_covariance_angular_velocity) · 바퀴 안 넣음
     #   실측 비중 (bag approach_1116_015043 재생 — cuVSLAM 속도에 0.8을 곱해 넣고 EKF가 줄어든 몫): vx 85% · vyaw 64% cuVSLAM
     #   (cuvslam_slam linear_variance 4e-4 · angular_variance 1e-3으로 내리면 96% · 81% — 대신 15 Hz 계단이 그대로 나와 떨림 1.13배)
     # 바퀴 yaw는 안 씀: 11-16 bag 둘에서 바퀴 yaw −81° · −126° vs IMU −113° · −146° vs cuVSLAM −116° · −146°
