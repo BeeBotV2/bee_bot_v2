@@ -115,6 +115,7 @@ private:
   void finish(bool ok, const std::string & why = "");
   void note(const std::string & text);           // 지금 하는 일 → /mission/state
   void result(const std::string & text);         // 퍽·장소 결과 (실패해도 계속) → /mission/state · build.json
+  void beep(int hz, int ms);                     // 부저 큐에 한 음 (180 ms 간격으로 차례로)
   void beep_phase(Phase phase);                  // 단계마다 pitch가 올라감 · 완료/오류는 긴 끝 신호
   void stop(const std::string & why);            // ERROR — coordinator 정지
 
