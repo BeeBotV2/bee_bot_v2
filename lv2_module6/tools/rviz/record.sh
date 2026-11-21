@@ -28,7 +28,8 @@ TOPICS=(/tf /tf_static /odom /odometry/filtered /cuvslam/odom /imu /joint_states
         /state/devices/arm /state/devices/gripper /arena/correction /localization/wall_fit /localization/map_to_odom
         /skills/pick/_action/feedback /skills/pick_far/_action/feedback /skills/load/_action/feedback /skills/unload/_action/feedback
         /skills/place/_action/feedback /skills/inspect/_action/feedback /skills/pose/_action/feedback /skills/stand/_action/feedback
-        /skills/stand_pick/_action/feedback /skills/approach/_action/feedback /task/current_plan)
+        /skills/stand_pick/_action/feedback /skills/approach/_action/feedback /task/current_plan
+        /perception/gripper_cam/detections)  # 11-22: 손 카메라 검출 — hand_relative valid가 끊기는 이유 (퍽 못 봄 · tag 못 읽음)
 # RVIZ_RECORD_IMAGES=1 (odom_nvblox.sh image_raw): 컬러 영상도 — 퍽 축·파지 확인용. Wi-Fi 부하 큼 (depth는 뺌)
 [ "${RVIZ_RECORD_IMAGES:-0}" = "1" ] && TOPICS+=(/pole_front_cam/color/image_raw /gripper_cam/color/image_raw)
 OUT="${RVIZ_BAG_DIR:-$HOME/bee_bags}/nav_$(date +%m%d_%H%M%S)"
