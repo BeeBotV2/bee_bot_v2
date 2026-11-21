@@ -390,6 +390,8 @@ private:
   double pick_reach_m_ = 0.25, creep_min_gap_ = 0.095, creep_used_ = 0.0;  // pick_near: 수직 pick 한계 · 상자 앞 최소 gap · 이번 도킹에서 전진한 거리
   // 차체에 붙은 퍽 → look 자세로 물러남 (back_off): 로봇 앞 이 안 퍽 · 그 퍽을 이만큼 앞에 오게 · 이번 도킹에서 최대 (plan.yaml inspect_back_*)
   double back_min_x_ = 0.17, back_want_x_ = 0.21, back_max_m_ = 0.08, backed_ = 0.0;
+  double back_recent_s_ = 8.0;  // 이만큼 안에 본 퍽도 셈 — 차체에 붙으면 인지 목록에서 빠짐 (plan.yaml inspect_back_recent_s)
+  std::map<uint32_t, perception::msg::TrackedObject> recent_pucks_;  // 트랙 id → 마지막 모습 (근래 back_recent_s_만 남김)
   bool near_body(size_t b, double & need) const;
   void back_off(size_t b, double cx, double cy, int tries, std::function<void()> then);
   std::string back_;   // 박스에 붙어 있을 때 물러날 standoff 자세 "x,y,yaw" (map) — 다음 go_near가 먼저 씀

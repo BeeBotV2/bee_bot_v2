@@ -61,6 +61,7 @@ public:
     box_stale_s_ = declare_parameter<double>("box_stale_s", 1.0);   // last_seen이 이보다 오래된 측정은 버림
     box_seed_s_ = declare_parameter<double>("box_seed_s", 30.0);   // 첫 측정만 이만큼 지난 것도 받음 (도착 직전 pole_front_cam)
     box_jump_m_ = declare_parameter<double>("box_jump_m", 0.08);    // 추정에서 이만큼 넘게 튄 측정은 버림
+    box_rejump_s_ = declare_parameter<double>("box_rejump_s", 1.0);  // 튄 측정이 서로 맞으며 이만큼 이어지면 추정을 그쪽으로 다시 잡음
     box_alpha_ = declare_parameter<double>("box_alpha", 0.3);       // 새 측정을 섞는 비율
     box_rate_mps_ = declare_parameter<double>("box_rate_mps", 0.02);  // 목표를 옮기는 최대 속도 [m/s]
     box_rate_dps_ = declare_parameter<double>("box_rate_dps", 3.0);   // 목표 방향을 돌리는 최대 속도 [deg/s]
@@ -108,9 +109,12 @@ private:
     box_mode_ = face_ok_ = false;  // 이전 goal의 측정이 끼지 않게 (아래에서 다시 정함)
     exit_ = g.target == "exit";
     if (exit_) { start_exit(g, done); return; }
-    frame_ = g.values.size() >= 2 ? "odom" : "map";
-    if (!robot_pose(x, y, yaw)) { done(false, "approach_no_tf"); return; }
     const std::string name = g.target.empty() ? "dock_box" : g.target;
+    // drive_straight(물러나기 · 팔이 닿게 전진 · 바코드)는 상자 옆 몇 cm — 목표를 시작 때 odom에 고정. map이면 wall_localization이
+    //   움직이는 만큼 목표가 밀림 (실기 nav_1121_214753 S2: 71 mm 물러나는 6 s 동안 map→odom 약 12 cm · 1.8° → 목표가 옆으로 가
+    //   상자 앞에서 제자리 42° 돌며 상자를 밂)
+    frame_ = g.values.size() >= 2 || name == "drive_straight" ? "odom" : "map";
+    if (!robot_pose(x, y, yaw)) { done(false, "approach_no_tf"); return; }
     const auto it = policies_.find(name);
     if (it == policies_.end()) { done(false, "approach_bad_policy"); return; }
     pol_ = &it->second;
@@ -131,7 +135,7 @@ private:
     started_ = progress_ = last_meas_ = now();
     done_ = done;
     box_mode_ = g.values.size() >= 2;
-    have_box_ = frozen_ = false;
+    have_box_ = frozen_ = jumping_ = false;
     face_ = box_mode_ ? 1 : 0;
     if (box_mode_) {
       gap_ = g.values[0];
@@ -244,9 +248,24 @@ private:
     } else {
       const double dx = mx - bx_, dy = my - by_;
       if (std::hypot(dx, dy) > box_jump_m_) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "상자 측정 튐 %.3f m — 버림", std::hypot(dx, dy));
+        // 첫 측정이 틀렸으면 맞는 측정이 다 '튐'으로 버려져 틀린 자리로 붙음 (실기 nav_1121_214753 S2: Nav2가 돌던 중 본 시작 전
+        //   측정이 실제 상자에서 약 16 cm 안쪽 → 가까이서 잰 측정 0.10~0.17 m를 다 버리고 그 자리까지 가며 상자를 약 10 cm 밂)
+        //   → 튄 측정끼리 box_jump_m 안으로 box_rejump_s 넘게 이어지면 그쪽이 맞는 것으로 보고 추정을 옮김
+        if (!jumping_ || std::hypot(mx - jx_, my - jy_) > box_jump_m_) { jumping_ = true; jx_ = mx; jy_ = my; jump_since_ = t; }
+        if ((t - jump_since_).seconds() < box_rejump_s_) {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000, "상자 측정 튐 %.3f m — 버림", std::hypot(dx, dy));
+          return;
+        }
+        RCLCPP_WARN(get_logger(), "상자 측정이 %.1f s 넘게 %.3f m 떨어진 곳에서 이어짐 — 추정을 옮김", box_rejump_s_, std::hypot(dx, dy));
+        jumping_ = false;
+        bx_ = mx; by_ = my; bh_ = std::remainder(h, 2 * M_PI);
+        stage(fmt_box("상자 다시 봄", mx, my));
+        gx_ = bx_ - (half_ + gap_ - face_shift_) * std::cos(bh_);
+        gy_ = by_ - (half_ + gap_ - face_shift_) * std::sin(bh_);
+        gyaw_ = bh_;
         return;
       }
+      jumping_ = false;
       double sx = box_alpha_ * dx, sy = box_alpha_ * dy;
       const double n = std::hypot(sx, sy), lim = box_rate_mps_ * dt;
       if (n > lim) { sx *= lim / n; sy *= lim / n; }
@@ -538,6 +557,9 @@ private:
   double box_match_m_, box_wait_s_, box_stale_s_, box_seed_s_, box_jump_m_, box_alpha_, box_rate_mps_, box_rate_dps_, box_min_side_, box_freeze_m_;
   rclcpp::Time last_meas_{0, 0, RCL_ROS_TIME};
   bool box_mode_ = false, have_box_ = false, frozen_ = false;
+  bool jumping_ = false;  // 튄 측정이 이어지는 중 — 그 자리(jx_, jy_ · frame_)와 시작 시각
+  double jx_ = 0.0, jy_ = 0.0, box_rejump_s_ = 1.0;
+  rclcpp::Time jump_since_{0, 0, RCL_ROS_TIME};
   double gap_ = 0, half_ = 0, hint_x_ = 0, hint_y_ = 0, bx_ = 0, by_ = 0, bh_ = 0;
   double face_slow_m_ = 0.10, face_shift_max_ = 0.03, face_stop_ = 0.0, face_shift_ = 0.0, face_m_ = 0.0;
   bool face_ok_ = false;

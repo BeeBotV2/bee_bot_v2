@@ -147,6 +147,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   back_min_x_ = declare_parameter<double>("inspect_back_min_x", back_min_x_);
   back_want_x_ = declare_parameter<double>("inspect_back_want_x", back_want_x_);
   back_max_m_ = declare_parameter<double>("inspect_back_max_m", back_max_m_);
+  back_recent_s_ = declare_parameter<double>("inspect_back_recent_s", back_recent_s_);
   nav_turn_m_ = declare_parameter<double>("nav_turn_m", 0.10);
   approach_tries_ = static_cast<int>(declare_parameter<int64_t>("approach_tries", 3));
   retries_ = static_cast<int>(declare_parameter<int64_t>("retries", 2));
@@ -353,6 +354,10 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   objects_sub_ = create_subscription<perception::msg::TrackedObjectArray>("/tracked_objects", rclcpp::QoS(5).reliable(),
     [this](perception::msg::TrackedObjectArray::ConstSharedPtr m) {
       objects_ = m;
+      // 근래 본 퍽 (near_body) — 차체에 붙은 퍽은 보이다 사라짐 (실기 nav_1121_214753 S3: stand 뒤 퍽 5가 0.14 m에 2 s 보이고 빠짐 → 물러나지 않고 puck_lost)
+      for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
+      for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
+        it = (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() > back_recent_s_ ? recent_pucks_.erase(it) : std::next(it);
       // 상자 인지 위치(marks_)는 arena_correction을 꺼도 approach_perceived면 셈 (보정 자체는 update_corr 안에서 acorr_on_만)
       if ((acorr_on_ || near_perceived_) && (active_ || acorr_idle_)) update_corr(*m);
       // 태그를 읽은 퍽의 마지막 모습 — 안 보이게 돼도 그 자리로 바로 pick (locate) · 되돌림 확인 (put_back).
@@ -1079,14 +1084,14 @@ std::vector<int> MissionManager::collect(size_t b, double cx, double cy) {
 //   need = 가장 붙은 퍽이 inspect_back_want_x에 오게 물러날 거리 (tag만 못 읽은 퍽은 그 자리 기준)
 bool MissionManager::near_body(size_t b, double & need) const {
   Pose2 r;
-  if (!objects_ || !robot_map(r) || !box_seen_.count(b)) return false;
+  if (!robot_map(r) || !box_seen_.count(b)) return false;
   const auto [bx, by] = here(box_seen_.at(b));
   const double c = std::cos(r.yaw), sn = std::sin(r.yaw);
   bool any = false;
   need = 0.0;
-  for (const auto & o : objects_->objects) {
+  for (const auto & [id, o] : recent_pucks_) {  // 지금 목록 + 근래 보였다 빠진 퍽 (map 자리 그대로 · 로봇은 지금 자세)
     const auto & p = o.pose.pose.position;
-    if (!is_puck(o) || p.z > box_top_z_ + puck_h_ + 0.04) continue;  // 손에 든 퍽은 윗면보다 위
+    if (p.z > box_top_z_ + puck_h_ + 0.04) continue;  // 손에 든 퍽은 윗면보다 위
     if (std::hypot(p.x - bx, p.y - by) > start_boxes_[b].half * M_SQRT2 + 0.03) continue;
     const std::string t = detail(o, "tag");
     if (!t.empty() && basket_slot_of(std::stoi(t)) >= 0) continue;
