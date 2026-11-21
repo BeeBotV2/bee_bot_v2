@@ -249,7 +249,11 @@ private:
   std::string peek_profile_ = "1920x1080x15", cam_profile_ = "640x360x15";
   bool peek_sent_ = false, peek_done_ = false, hires_on_ = false;
   std::optional<std::array<double, 2>> light_;  // 이번 관측에서 본 신호등 (arena x, y) — 바코드는 그 왼쪽
-  bool scan_from_light_ = true, scan_ = false;
+  double peek_yaw_ = 0.0;
+  double occlude_rad_ = 0.35, occlude_lost_s_ = 2.0, signal_preroll_s_ = 30.0;
+  bool occl_wait_ = false;  // 팔이 신호등을 가려 접음 — 신호 확정 뒤에 다시
+  rclcpp::Time light_seen_at_{0, 0, RCL_ROS_TIME};  // 지금 엿보는 방위 [rad] (사진 이름)
+  bool scan_from_light_ = true, scan_ = false, scan_only_ = false;  // scan_only_: 본 후보로 엿보기 실패 → 신호등 왼쪽만 훑음
   size_t scan_k_ = 0;
   std::vector<double> scan_offsets_{0.15, 0.30, 0.45, 0.60};  // [rad] 신호등 방위에서 왼쪽으로 차례로 gaze
   std::optional<std::array<double, 3>> cand_;  // 이번 관측에서 마지막으로 본 바코드 후보 (arena x, y, map z) — 안 보여도 gaze에 씀
