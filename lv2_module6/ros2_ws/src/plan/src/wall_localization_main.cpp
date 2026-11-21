@@ -41,6 +41,7 @@ public:
     wall_gate_ = declare_parameter<double>("arena_corr_wall_gate", wall_gate_);
     wall_min_cells_ = static_cast<int>(declare_parameter<int64_t>("arena_corr_wall_min_cells", wall_min_cells_));
     wall_min_eig_ = declare_parameter<double>("arena_corr_wall_min_eig", wall_min_eig_);
+    wall_max_rms_ = declare_parameter<double>("arena_corr_wall_max_rms", wall_max_rms_);
     keep_s_ = declare_parameter<double>("arena_corr_wall_keep_s", keep_s_);
     res_ = declare_parameter<double>("arena_corr_wall_res", res_);
     z_min_ = declare_parameter<double>("arena_corr_wall_z_min", z_min_);
@@ -136,9 +137,11 @@ private:
     // odom 점을 도면 벽에 — 결과 c는 odom → 도면 보정 (c⁻¹ = map→odom). 시작값만 지난 결과, 측정은 map→odom과 무관
     const auto f = holding_ && last_f_.ok ? last_f_
                                           : fit_walls(segs_, pts, last_fit_, wall_gate_, wall_min_cells_, wall_min_eig_, max_shift_, max_rot_);
-    if (!f.ok) {
-      if (f.why != wall_why_) RCLCPP_INFO(get_logger(), "Wall fit unavailable: %s (%d cells)", f.why.c_str(), f.inliers);
-      wall_why_ = f.why;
+    // RMS가 크면 벽 아닌 칸(상자 위 퍽 13 cm · 사람 등)에 끌린 fit — 버림 (11-22 실기: 정상 p90 0.097 m · 틀어진 판 0.14~0.16 m로 map→odom 30 cm 밀림)
+    const std::string why = !f.ok ? f.why : f.rms > wall_max_rms_ ? "rms" : "";
+    if (!why.empty()) {
+      if (why != wall_why_) RCLCPP_INFO(get_logger(), "Wall fit unavailable: %s (%d cells · RMS %.3f m)", why.c_str(), f.inliers, f.rms);
+      wall_why_ = why;
       return;
     }
     wall_why_.clear();
@@ -167,7 +170,7 @@ private:
   std::vector<std::array<double, 4>> segs_;
   bool apply_, sent_init_ = false;
   double max_shift_, max_rot_, min_m_, min_rad_, step_m_, step_rad_;
-  double wall_gate_ = 0.3, wall_min_eig_ = 0.03;
+  double wall_gate_ = 0.3, wall_min_eig_ = 0.03, wall_max_rms_ = 0.11;
   int wall_min_cells_ = 60;
   double keep_s_ = 25.0, res_ = 0.05, z_min_ = 0.10, z_max_ = 0.30, range_ = 2.5, cloud_period_ = 0.5, last_cloud_ = 0;
   size_t stride_ = 4;
