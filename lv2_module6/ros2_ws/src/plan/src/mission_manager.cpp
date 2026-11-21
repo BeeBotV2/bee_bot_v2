@@ -362,8 +362,9 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
       for (const auto & o : m->objects)
         if (o.class_name == "location_box" && !detail(o, "tag").empty()) {
-          loc_any_[detail(o, "tag")] = o;
-          if (detail(o, "cut") != "true") loc_whole_[detail(o, "tag")] = o;
+          const LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+          loc_any_[detail(o, "tag")] = seen;
+          if (detail(o, "cut") != "true") loc_whole_[detail(o, "tag")] = seen;
         }
       for (auto it = recent_pucks_.begin(); it != recent_pucks_.end();)
         it = (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() > back_recent_s_ ? recent_pucks_.erase(it) : std::next(it);
@@ -1381,6 +1382,16 @@ void MissionManager::bring(size_t i) {
   const auto at_box = [this, i, job, slot, skip](bool ok, const std::string & why) {
     if (!ok) { skip("place_approach_failed " + why); return; }
     correct(job.loc);
+    // 팔이 안 닿는 칸이면 꺼내지 않음 — 꺼낸 뒤 place가 IK로 바로 실패하면 퍽을 쥔 채 다음 칸으로 감 (11-22 실기 nav_1122_025043: L1 칸 2 · 5,
+    //   0.282 · 0.263 m — 그 칸 쪽 변은 벽 0.22 m 안이라 빠짐)
+    const auto c = cell_target(job.loc, job.cell);
+    Pose2 r;
+    if (robot_arena(r) && std::hypot(c.first - r.x, c.second - r.y) > place_reach_m_) {
+      RCLCPP_WARN(get_logger(), "L%d 칸 %d 팔이 안 닿음 (%.3f m > %.2f) — 꺼내지 않음", static_cast<int>(job.loc) + 1, job.cell,
+                  std::hypot(c.first - r.x, c.second - r.y), place_reach_m_);
+      skip("place_unreachable");
+      return;
+    }
     run_retry({SubGoal().set__skill("unload").set__target(str(slot))}, [this, i, skip](bool ok2, const std::string & why2) {
       if (!ok2) { skip("tray_pick_failed " + why2); return; }
       place_check(i, 0);
@@ -1913,20 +1924,21 @@ void MissionManager::correct(size_t li) {
   const double ex = b.x, ey = b.y;
   // 안 잘린 마지막 관측 우선 — 붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고(11-21 L2: 칸마다 8 cm 튐), 목록에서 빠지기도 함
   //   (11-22 실기 nav_1122_023039: 첫 칸 보정이 없어 도면 칸 — 상자가 도면에서 11 cm라 상자 밖에 놓음)
-  // ponytail: map 좌표로 기억 — 그사이 map→odom이 밀리면 그만큼 틀림 (loc_box_keep_s 안만)
   const std::string tag = str(loc_tags_[li]);
-  const auto fresh = [this](const std::map<std::string, perception::msg::TrackedObject> & m, const std::string & k) -> const perception::msg::TrackedObject * {
+  const auto fresh = [this](const std::map<std::string, LocSeen> & m, const std::string & k) -> const LocSeen * {
     const auto it = m.find(k);
-    return it != m.end() && (now() - rclcpp::Time(it->second.last_seen, RCL_ROS_TIME)).seconds() <= loc_keep_s_ ? &it->second : nullptr;
+    return it != m.end() && (now() - it->second.t).seconds() <= loc_keep_s_ ? &it->second : nullptr;
   };
-  const perception::msg::TrackedObject * o = fresh(loc_whole_, tag);
+  const LocSeen * o = fresh(loc_whole_, tag);
   const bool whole = o != nullptr;
   if (!o) o = fresh(loc_any_, tag);
   if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 보정 없음 — %.0f s 안에 본 장소 상자 없음 (보정 %+.1f, %+.1f mm 그대로)", li + 1, loc_keep_s_, corr_[li].first * 1000, corr_[li].second * 1000); return; }
-  const auto a = to_arena(o->pose.pose.position.x, o->pose.pose.position.y);
+  double mx, my;
+  spot_map(*tf_buffer_, o->s, mx, my, 1e9);  // odom 점을 지금 map으로 (로봇이 움직였어도 — odom은 짧은 동안 안 튐)
+  const auto a = to_arena(mx, my);
   corr_[li] = tag_correction(ex, ey, a.x, a.y, corr_max_);
   RCLCPP_INFO(get_logger(), "L%zu 상자 보정 (%+.1f, %+.1f) mm — %s %.1f s 전", li + 1, corr_[li].first * 1000, corr_[li].second * 1000,
-              whole ? "안 잘린 관측" : "잘린 관측", (now() - rclcpp::Time(o->last_seen, RCL_ROS_TIME)).seconds());
+              whole ? "안 잘린 관측" : "잘린 관측", (now() - o->t).seconds());
 }
 
 std::pair<double, double> MissionManager::cell_target(size_t li, int cell) const {
