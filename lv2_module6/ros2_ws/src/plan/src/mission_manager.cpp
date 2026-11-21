@@ -171,6 +171,8 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_search_ = declare_parameter<double>("place_search", 0.05);
   loc_keep_s_ = declare_parameter<double>("loc_box_keep_s", loc_keep_s_);
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
+  realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
+  realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
@@ -1900,12 +1902,16 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
   const double t_start = wall_s();
   // navigate "look"(도착 전 팔 올리기)은 안 씀 (11-13 headless: 팔이 pole_front_cam을 가려 보던 상자를 잃고, 0.25 m에선 gripper_cam에 잘려 보임)
   const std::string to = box_label(box);
-  run({stow(), SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", m.x, m.y, m.yaw)).set__relation("near" + leg_to(to)),
-       // 상자 도킹: 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12).
-       //   11-16: f도 같은 가운데(cx, cy — 인지 평균 또는 도면) 기준이라 Nav2 목표 · 힌트 · 인지가 한 상자를 가리킴
-       SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", f.x, f.y, f.yaw) + fmt(",%.4f,%.4f", gap, box.half) +
-                     (box.face_stop > 0.0 ? fmt(",%.4f", box.face_stop) : std::string()))
-         .set__relation("dock_box")},
+  const auto nav = [this, to](const Pose2 & mm) {
+    return SubGoal().set__skill("navigate").set__target(fmt("%.3f,%.3f,%.3f", mm.x, mm.y, mm.yaw)).set__relation("near" + leg_to(to));
+  };
+  // 상자 도킹: 자리(f)는 힌트 — skill_approach가 인지 상자 + gap으로 목표를 정함 (도면은 안 믿음, 11-12).
+  //   11-16: f도 같은 가운데(cx, cy — 인지 평균 또는 도면) 기준이라 Nav2 목표 · 힌트 · 인지가 한 상자를 가리킴
+  const auto dock = [gap, half = box.half, stop = box.face_stop](const Pose2 & ff) {
+    return SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", ff.x, ff.y, ff.yaw) + fmt(",%.4f,%.4f", gap, half) +
+                                                        (stop > 0.0 ? fmt(",%.4f", stop) : std::string())).set__relation("dock_box");
+  };
+  const std::function<void(bool, const std::string &)> after =
     [this, box, px, py, done, k, poses, push, n, t_start, retried, cx, cy, to, gap](bool ok, const std::string & why) {
       stop_ = ok ? to : "";  // 붙었으면 그 상자 앞 (exit으로 같은 자리로 물러난 뒤 다음 구간 표가 시작) · 실패면 모름
       // 출발하자마자 navigate 실패(5 s 안)는 경로·자리 탓이 아니라 일시 오류 — 같은 자리로 한 번 더 (11-15 실기 S3: 출발 0.4 s 만에
@@ -1929,7 +1935,49 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
         return;
       }
       go_near(box, px, py, done, k + 1, poses);
+    };
+  if (to[0] != 'L' || realign_m_ <= 0.0) { run({stow(), nav(m), dock(f)}, after); return; }
+  // 장소 상자: Nav2 도착(±0.15 m · ±40°) 뒤 상자 쪽으로 돌아 보고, 인지 상자 정면에서 옆으로 realign_m 넘게 벗어났으면
+  //   인지 가운데 기준 진입점으로 Nav2 한 번 더 (11-22 사용자 · 실기 nav_1122_030435 L3: 진입점이 도면 기준이라 13 cm + Nav2 오차 12.6 cm
+  //   → 정면에서 26 cm 옆에서 approach를 시작해 비스듬히 붙음). 상자 쪽으로 먼저 도는 건 방향 오차로 상자가 화면 밖일 수 있어서
+  run({stow(), nav(m)}, [this, box, to, m, f, n, cx, cy, after, nav, dock](bool ok, const std::string & why) {
+    if (!ok) { after(false, why); return; }
+    Pose2 r;
+    if (!robot_map(r)) { run({dock(f)}, after); return; }
+    const auto bm = to_map(cx, cy);
+    const double face = std::atan2(bm.y - r.y, bm.x - r.x);
+    const rclcpp::Time t_turn = now();
+    run({SubGoal().set__skill("approach").set__target(fmt("%.4f,%.4f,%.4f", r.x, r.y, face)).set__relation("drive_straight")},
+        [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn](bool, const std::string &) {
+      realign_timer_ = create_wall_timer(std::chrono::duration<double>(realign_wait_s_), [this, box, to, m, f, n, cx, cy, after, nav, dock, t_turn]() {
+        realign_timer_->cancel();
+        const size_t li = static_cast<size_t>(std::stoi(to.substr(1)) - 1);
+        const auto it = li < loc_tags_.size() ? loc_whole_.find(str(loc_tags_[li])) : loc_whole_.end();
+        Pose2 r;
+        if (it == loc_whole_.end() || it->second.t < t_turn || !robot_arena(r)) {
+          RCLCPP_INFO(get_logger(), "%s 진입점 — 돌아서도 상자 윗면을 다 못 봄, 그대로 approach", to.c_str());
+          run({dock(f)}, after);
+          return;
+        }
+        double mx, my;
+        spot_map(*tf_buffer_, it->second.s, mx, my, 1e9);
+        const Pose2 a = to_arena(mx, my, 0.0);
+        const double lat = -(r.x - a.x) * std::sin(n.yaw) + (r.y - a.y) * std::cos(n.yaw);  // 변 법선에서 옆으로
+        if (std::abs(lat) <= realign_m_) {
+          RCLCPP_INFO(get_logger(), "%s 진입점 — 인지 상자 정면에서 옆 %.3f m, 그대로 approach", to.c_str(), lat);
+          run({dock(f)}, after);
+          return;
+        }
+        const double dx = a.x - cx, dy = a.y - cy;
+        const auto m2 = to_map(n.x + dx, n.y + dy, n.yaw);
+        const auto bf = to_arena(f.x, f.y, f.yaw);
+        const auto f2 = to_map(bf.x + dx, bf.y + dy, bf.yaw);
+        RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 상자 정면에서 옆 %.3f m (> %.2f) · 상자가 진입 기준에서 (%+.1f, %+.1f) cm → 진입점 다시",
+                    to.c_str(), lat, realign_m_, dx * 100, dy * 100);
+        run({nav(m2), dock(f2)}, after);
+      });
     });
+  });
 }
 
 // ---------- 장소 상자 — 칸은 인지한 상자(가운데 · 변 방향) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
