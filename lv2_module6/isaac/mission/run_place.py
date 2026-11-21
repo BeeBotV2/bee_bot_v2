@@ -6,7 +6,9 @@
   python3 isaac/mission/run_place.py --slots 0:5,1:2,2:4      # 실제로 실은 칸:tag (나머지 칸은 빔)
   python3 isaac/mission/run_place.py --loc L2                 # 다른 장소부터
 
-준비: 로봇을 L1 상자 −x 쪽 앞(상자를 바라보게, 도킹 전 자리)에 둠 · 적재함 칸에 --slots대로 퍽을 실음.
+준비: 로봇을 L1 상자 −x 쪽 앞(상자를 바라보게, 도킹 전 자리)에 둠 · 적재함 12칸에 퍽을 아무렇게나 다 실음.
+      놓기 동작 시험용 — 장부는 '칸 n = tag n'으로 가정하고 칸 순서대로 꺼내 정해진 칸에 놓음. 실제 퍽의 tag·색과 놓인 칸이
+      맞는지는 안 봄 (결과의 tag 번호 = 꺼낸 적재함 칸 번호). 맞게 놓는지까지 보려면 --slots로 실제 칸:tag를 줌.
 하는 일: ① ~/.ros/beebot_basket.txt에 칸:tag(색·모양은 아래 표)를 적고 /coordinator/basket_reload
         ② /cmd/mission start:PLACE:<장소>:<바코드>:<신호> → mission_manager가 장부 퍽으로 배정 → 그 장소부터 BUILD
            (가까운 면으로 도킹 = location_side_nearest · 장소마다 다 놓으면 물러나서 한 번 봄) → 나머지 장소 → 복귀
