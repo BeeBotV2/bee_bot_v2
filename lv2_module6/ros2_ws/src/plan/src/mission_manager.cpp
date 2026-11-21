@@ -362,7 +362,17 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
       for (const auto & o : m->objects) if (is_puck(o)) recent_pucks_[o.id] = o;
       for (const auto & o : m->objects)
         if (o.class_name == "location_box" && !detail(o, "tag").empty()) {
-          const LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+          LocSeen seen{make_spot(*tf_buffer_, o.pose.pose.position.x, o.pose.pose.position.y), rclcpp::Time(o.last_seen, RCL_ROS_TIME)};
+          if (!detail(o, "yaw_period").empty()) {  // 윗면 변 방향을 구한 관측 — map yaw를 odom yaw로
+            const auto & q = o.pose.pose.orientation;
+            double mo = 0.0;
+            try {
+              const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
+              mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
+              seen.yaw_odom = std::atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) - mo;
+              seen.has_yaw = true;
+            } catch (const std::exception &) {}
+          }
           loc_any_[detail(o, "tag")] = seen;
           if (detail(o, "cut") != "true") loc_whole_[detail(o, "tag")] = seen;
         }
@@ -441,7 +451,7 @@ void MissionManager::on_command(const std::string & cmd) {
   stop_ = get_parameter("start_stop").as_string();  // 미션은 출발 자리에서 시작 (운영 규칙) · 시뮬 구간 시험은 그 상자 앞 (S4 등)
   seen_tags_.clear();
   lying_.clear();
-  corr_.assign(locations_.size(), {0.0, 0.0});
+  loc_pose_.assign(locations_.size(), std::nullopt);
   marks_.assign(start_boxes_.size() + loc_boxes_.size(), Mark{});
   acorr_seen_.clear();
   acorr_used_.clear();
@@ -1382,6 +1392,7 @@ void MissionManager::bring(size_t i) {
   const auto at_box = [this, i, job, slot, skip](bool ok, const std::string & why) {
     if (!ok) { skip("place_approach_failed " + why); return; }
     correct(job.loc);
+    if (!loc_pose_[job.loc]) { skip("place_box_unseen"); return; }  // 상자를 못 봤으면 도면 칸에 놓지 않음 (퍽은 적재함에 그대로)
     // 팔이 안 닿는 칸이면 꺼내지 않음 — 꺼낸 뒤 place가 IK로 바로 실패하면 퍽을 쥔 채 다음 칸으로 감 (11-22 실기 nav_1122_025043: L1 칸 2 · 5,
     //   0.282 · 0.263 m — 그 칸 쪽 변은 벽 0.22 m 안이라 빠짐)
     const auto c = cell_target(job.loc, job.cell);
@@ -1916,14 +1927,12 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
     });
 }
 
-// ---------- 놓기 기준 보정 — 인지 location_box(장소 상자 윗면 가운데, 태그 12~14)가 예상 상자 중심에서 어긋난 만큼 칸을 옮김
-//   윗면을 못 찾고 태그만 본 location_box는 태그 근처라 보통 tag_correction_max를 넘어 보정 안 함
+// ---------- 장소 상자 — 칸은 인지한 상자(가운데 · 변 방향) 위에 (11-22 사용자: 도면 좌표 + 보정은 상자가 도면과 다르면 상자 밖에 놓음)
+//   안 잘린 마지막 관측 우선 (붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고, 목록에서 빠지기도 함 — 실기 nav_1122_023039)
+//   관측은 odom 점으로 기억 → 쓸 때 지금 map으로 (붙어 있는 동안 벽 정합이 map→odom을 3~5 cm씩 옮김)
 void MissionManager::correct(size_t li) {
-  if (li >= loc_tags_.size() || li >= loc_boxes_.size() || !objects_) return;
+  if (li >= loc_tags_.size() || li >= loc_boxes_.size() || li >= loc_pose_.size()) return;
   const Box & b = loc_boxes_[li];
-  const double ex = b.x, ey = b.y;
-  // 안 잘린 마지막 관측 우선 — 붙은 뒤엔 상자가 화면에 잘려 가운데가 몇 cm 틀리고(11-21 L2: 칸마다 8 cm 튐), 목록에서 빠지기도 함
-  //   (11-22 실기 nav_1122_023039: 첫 칸 보정이 없어 도면 칸 — 상자가 도면에서 11 cm라 상자 밖에 놓음)
   const std::string tag = str(loc_tags_[li]);
   const auto fresh = [this](const std::map<std::string, LocSeen> & m, const std::string & k) -> const LocSeen * {
     const auto it = m.find(k);
@@ -1932,19 +1941,33 @@ void MissionManager::correct(size_t li) {
   const LocSeen * o = fresh(loc_whole_, tag);
   const bool whole = o != nullptr;
   if (!o) o = fresh(loc_any_, tag);
-  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 보정 없음 — %.0f s 안에 본 장소 상자 없음 (보정 %+.1f, %+.1f mm 그대로)", li + 1, loc_keep_s_, corr_[li].first * 1000, corr_[li].second * 1000); return; }
-  double mx, my;
-  spot_map(*tf_buffer_, o->s, mx, my, 1e9);  // odom 점을 지금 map으로 (로봇이 움직였어도 — odom은 짧은 동안 안 튐)
-  const auto a = to_arena(mx, my);
-  corr_[li] = tag_correction(ex, ey, a.x, a.y, corr_max_);
-  RCLCPP_INFO(get_logger(), "L%zu 상자 보정 (%+.1f, %+.1f) mm — %s %.1f s 전", li + 1, corr_[li].first * 1000, corr_[li].second * 1000,
-              whole ? "안 잘린 관측" : "잘린 관측", (now() - o->t).seconds());
+  loc_pose_[li].reset();
+  if (!o) { RCLCPP_WARN(get_logger(), "L%zu 상자 못 봄 — %.0f s 안에 본 장소 상자 없음", li + 1, loc_keep_s_); return; }
+  double mx, my, mo = 0.0;
+  spot_map(*tf_buffer_, o->s, mx, my, 1e9);  // odom 점을 지금 map으로 (odom은 짧은 동안 안 튐)
+  try {
+    const auto t = tf_buffer_->lookupTransform("map", "odom", tf2::TimePointZero).transform.rotation;
+    mo = std::atan2(2 * (t.w * t.z + t.x * t.y), 1 - 2 * (t.y * t.y + t.z * t.z));
+  } catch (const std::exception &) {}
+  // 변 방향: 이 관측에 없으면 안 잘린 관측의 것 · 둘 다 없으면 경기장 축 (가운데만 인지)
+  const LocSeen * yw = o->has_yaw ? o : fresh(loc_whole_, tag);
+  const bool has_yaw = yw && yw->has_yaw;
+  const Pose2 a = to_arena(mx, my, has_yaw ? yw->yaw_odom + mo : 0.0);
+  const double off = std::hypot(a.x - b.x, a.y - b.y);
+  if (off > corr_max_) {
+    RCLCPP_WARN(get_logger(), "L%zu 상자 도면에서 %.0f cm (> %.0f) — 다른 것을 본 것으로 보고 안 씀", li + 1, off * 100, corr_max_ * 100);
+    return;
+  }
+  loc_pose_[li] = Pose2{a.x, a.y, has_yaw ? a.yaw : 0.0};
+  RCLCPP_INFO(get_logger(), "L%zu 상자 (%+.1f, %+.1f) mm · 방향 %+.1f° — %s %.1f s 전%s", li + 1, (a.x - b.x) * 1000, (a.y - b.y) * 1000,
+              has_yaw ? std::remainder(a.yaw, M_PI / 2) * 180 / M_PI : 0.0, whole ? "안 잘린 관측" : "잘린 관측", (now() - o->t).seconds(),
+              has_yaw ? "" : " · 방향 모름(경기장 축)");
 }
 
 std::pair<double, double> MissionManager::cell_target(size_t li, int cell) const {
+  if (li < loc_pose_.size() && loc_pose_[li]) return box_cell(*loc_pose_[li], cell, grid_step_);
   const auto [dx, dy] = cell_offset(cell, grid_step_);
-  const auto [cx, cy] = li < corr_.size() ? corr_[li] : std::pair<double, double>{0.0, 0.0};
-  return {locations_[li].first + dx + cx, locations_[li].second + dy + cy};
+  return {locations_[li].first + dx, locations_[li].second + dy};
 }
 
 int MissionManager::basket_slot_of(int tag) const {

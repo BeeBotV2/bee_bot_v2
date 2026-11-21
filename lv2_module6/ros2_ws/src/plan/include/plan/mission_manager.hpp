@@ -157,9 +157,9 @@ private:
   void verify_at(size_t li, std::function<void()> then);  // 지금 선 자리에서 장소 li 재검증 (가서 서는 건 부르는 쪽)
   void go_home(bool corrected = false);
 
-  // 장소 상자로 장소 li 칸 보정 — 지금 /tracked_objects에 그 태그의 location_box가 있으면 corr_[li]를 갱신
+  // 장소 li 상자를 최근 관측으로 다시 정함 (loc_pose_[li]) — 못 봤으면 비움
   void correct(size_t li);
-  std::pair<double, double> cell_target(size_t li, int cell) const;  // 보정을 더한 칸 중심 (arena)
+  std::pair<double, double> cell_target(size_t li, int cell) const;  // 칸 중심 (arena) — 인지한 상자 위 · 아직 못 봤으면 도면 (다가설 자리 힌트만)
   const TrackedObject * puck_near(double mx, double my, double r = 0.0) const;  // map 점에서 r(0이면 match_radius) 안 가장 가까운 퍽 (tag 상관없이)
   // 누운 퍽을 세워서 손에 쥠: stand → stand_check_s 뒤 인지로 섰나 → stand_pick. 아직 누웠으면 그 퍽으로 stand 다시 (retries번)
   void stand_up(uint32_t id, double mx, double my, int tries, Done done);
@@ -336,10 +336,10 @@ private:
   std::map<int, char> alloc_;
   struct Job { int tag; size_t loc; int cell; };
   std::vector<Job> jobs_;
-  std::vector<std::pair<double, double>> corr_;  // 장소마다 태그 보정 (arena, )
+  std::vector<std::optional<Pose2>> loc_pose_;  // 장소마다 인지한 상자 (가운데 · 변 방향, arena) — 칸은 이 위에 (없으면 놓지 않음)
   // 장소 상자(location_box) 마지막 관측 — tag별 · 안 잘린 것과 아무거나 (correct: 붙은 뒤엔 상자가 늘 잘리거나 목록에서 빠짐, 11-22 실기)
   //   odom으로 적어 둠 (Spot) — 그사이 벽 정합이 map→odom을 옮겨도 상자는 odom에선 그대로 (11-22 실기: 붙어 있는 동안 3~5 cm씩)
-  struct LocSeen { Spot s; rclcpp::Time t; };
+  struct LocSeen { Spot s; rclcpp::Time t; double yaw_odom = 0.0; bool has_yaw = false; };
   std::map<std::string, LocSeen> loc_whole_, loc_any_;
   double loc_keep_s_ = 60.0, place_reach_m_ = 0.25;
   // 도면 보정 — 인지한 시작 박스·장소 상자(윗면 가운데)를 도면 상자와 짝지어 arena → map 변환을 고침 (출발 자세 · 도면 오차)
