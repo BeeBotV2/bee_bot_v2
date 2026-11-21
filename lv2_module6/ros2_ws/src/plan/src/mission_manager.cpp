@@ -168,6 +168,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   keepout_ = declare_parameter<std::vector<double>>("keepout_zones", std::vector<double>{});
   wall_clearance_ = declare_parameter<double>("wall_clearance", 0.22);
   place_tol_ = declare_parameter<double>("place_tol", 0.010);
+  place_reuse_lat_m_ = declare_parameter<double>("place_reuse_lat_m", place_reuse_lat_m_);
   place_search_ = declare_parameter<double>("place_search", 0.05);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
@@ -1371,13 +1372,30 @@ void MissionManager::bring(size_t i) {
   const int slot = basket_slot_of(job.tag);  // coordinator 장부에서 그 tag가 실린 칸
   // 적재함에 없음 — 시작 박스에서 직접 집어 들고 오지 않음 (11-21 사용자: 들고 다니면 꼬임 · SURVEY에서 다 싣고, 못 실은 퍽은 한 번 더 왔음)
   if (slot < 0) { skip("not_loaded"); return; }
-  go_near(loc_boxes_[job.loc], tx, ty, [this, i, job, slot, skip](bool ok, const std::string & why) {
-    if (!ok) { skip("place_approach_failed " + why); return; }
-    correct(job.loc);
+  const auto unload_place = [this, i, slot, skip]() {
     run_retry({SubGoal().set__skill("unload").set__target(str(slot))}, [this, i, skip](bool ok2, const std::string & why2) {
       if (!ok2) { skip("tray_pick_failed " + why2); return; }
       place_check(i, 0);
     });
+  };
+  // 같은 장소에 붙은 채이고 이번 칸이 지금 자리 정면에서 옆으로 place_reuse_lat_m 안이면 물러나지 않고 그 자리에서 놓음
+  //   (11-22 사용자: 퍽마다 0.23 m 물러났다 다시 도킹 — 퍽당 약 8 s · 칸 간격 6 cm라 옆 칸은 그 자리에서 닿음)
+  Pose2 r;
+  if (!back_.empty() && docked_loc_ == static_cast<int>(job.loc) && robot_map(r)) {
+    const auto m = to_map(tx, ty);
+    const double lat = -std::sin(r.yaw) * (m.x - r.x) + std::cos(r.yaw) * (m.y - r.y);
+    if (std::abs(lat) <= place_reuse_lat_m_) {
+      note(fmt("같은 자리에서 놓음 (칸이 옆으로 %+.0f mm)", lat * 1000));
+      last_place_loc_ = static_cast<int>(job.loc);
+      unload_place();
+      return;
+    }
+  }
+  go_near(loc_boxes_[job.loc], tx, ty, [this, job, skip, unload_place](bool ok, const std::string & why) {
+    if (!ok) { skip("place_approach_failed " + why); return; }
+    docked_loc_ = static_cast<int>(job.loc);
+    correct(job.loc);
+    unload_place();
   });
 }
 
@@ -1775,6 +1793,7 @@ std::pair<double, double> MissionManager::near_center(const Box & box) {
 }
 
 void MissionManager::go_near(const Box & box, double px, double py, Done done, size_t k, std::vector<Pose2> poses, bool retried) {
+  if (k == 0 && poses.empty()) docked_loc_ = -1;  // 다시 붙을 때까지 어느 장소에도 안 붙음
   if (k == 0 && poses.empty() && !back_.empty()) {  // 지금 박스에 붙어 있으면 먼저 standoff까지 똑바로 물러남 (Nav2는 원 0.18이라 붙은 자리에선 출발 못 함)
     const std::string back = back_;  // 후진 거리 [m] — approach exit (odom 기준 똑바로, 11-13: 예전엔 map 자리로 가서 map이 밀리면 비틀림)
     back_.clear();

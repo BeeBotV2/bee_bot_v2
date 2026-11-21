@@ -477,6 +477,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     put_back_clear_m: 0.065 # [m] 빈 곳 = 다른 퍽 중심에서 이만큼 넘게 (11-21 실기 S2: 5 cm에 되돌린 퍽 9에 퍽 0 pick이 얹혀 막힘)
     planner: "rule" # BUILD 순서: rule (배정 순서대로) | plan_next (학습된 플래너가 다음 퍽·복귀 시점을 고름 — 마지막 단계)
     plan_model: "" # 비면 share/ml/model/plan/plan_next.onnx (.policy 경로를 주면 MlpPolicy로)
+    place_reuse_lat_m: 0.07 # [m] BUILD: 같은 장소 다음 칸이 지금 도킹 자리 정면에서 옆으로 이 안이면 물러났다 다시 도킹하지 않고 그 자리에서 놓음 (11-22)
     place_tol: 0.010 # [m] 놓은 뒤 확인 · 재검증 — 칸 중심에서 이 안이어야 성공
     place_search: 0.05 # [m] 놓은 뒤 확인 때 칸에서 이 안의 퍽만 그 퍽으로 봄
     match_radius: 0.04 # [m] 조사 때 퍽 자리와 트랙을 짝짓는 거리
