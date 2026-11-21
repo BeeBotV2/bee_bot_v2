@@ -638,7 +638,7 @@ geometry_msgs::msg::PoseStamped map_pose(double x, double y, double z, double ya
 }  // namespace
 
 bool Coordinator::look_if_no_yaw(const SubGoal & g) {
-  // 방향이 모호한 퍽(누운 퍽 긴 축 · 사각 퍽 면)은 한 번 그 퍽 바로 위(inspect <id>: 손 카메라가 윗면을 봄)에서 다시 본 뒤 같은 단계를
+  // 방향이 모호한 퍽(누운 퍽 긴 축 · 사각 퍽 면)은 한 번 look 자세로(inspect, 11-21 통일) 다시 본 뒤 같은 단계를
   //   다시 함 (11-15 실기: 태그 안 보인 선 퍽을 yaw 0°로 모서리를 쥠 · 누운 퍽 방향 없음 → stand_no_yaw). 다시 봐도 모르면 원래대로
   if (looked_ == idx_ || !is_id(g.target)) return false;
   const auto * o = find(std::stoul(g.target));
@@ -648,8 +648,10 @@ bool Coordinator::look_if_no_yaw(const SubGoal & g) {
   const bool need = o->class_name == "puck_lying" || (o->class_name == "puck" && shape_of(*o) != "cyl");
   if (has_yaw || !need || !skills_.at("inspect")->action_server_is_ready()) return false;
   looked_ = idx_;
-  RCLCPP_INFO(get_logger(), "%s %s: 방향 모름 — 퍽 위에서 다시 봄", g.skill.c_str(), g.target.c_str());
+  RCLCPP_INFO(get_logger(), "%s %s: 방향 모름 — look 자세로 다시 봄", g.skill.c_str(), g.target.c_str());
   Skill::Goal sg;
+  sg.target = "box";
+  sg.values = {1.0};
   sg.pose.header.frame_id = "map";
   sg.pose.pose.position = o->pose.pose.position;
   sg.pose.pose.position.z += o->size.z / 2;
@@ -760,7 +762,7 @@ void Coordinator::approach(const SubGoal & g) {
 void Coordinator::pick(const SubGoal & g) {
   if (!is_id(g.target) || !find(std::stoul(g.target))) { fail("pick_no_target"); return; }
   if (approach_if_far(g)) return;  // 집을 퍽이 팔 밖이면 먼저 다가감 (계획에 navigate가 빠져 있어도)
-  if (look_if_no_yaw(g)) return;    // 사각 퍽 면을 모르면 퍽 위에서 한 번 다시 봄
+  if (look_if_no_yaw(g)) return;    // 사각 퍽 면을 모르면 look 자세로 한 번 다시 봄
   if (!find(std::stoul(g.target))) { fail("pick_no_target"); return; }
   const auto o = *find(std::stoul(g.target));
   Skill::Goal sg;
@@ -829,18 +831,12 @@ void Coordinator::place(const SubGoal & g) {
 }
 
 void Coordinator::inspect(const SubGoal & g) {
+  // skill_inspect는 look 자세 하나 (11-21) — 상자 보기(relation "box")는 퍽 2개를, 나머지(칸 · 퍽)는 1개를 기대
   Skill::Goal sg;
-  if (const auto v = parse_numbers(g.target); v.size() == 3) {  // 좌표 inspect — 그 점(퍽 윗면 등) 위
+  sg.target = "box";
+  if (const auto v = parse_numbers(g.target); v.size() == 3) {  // 좌표 inspect — 상자 가운데 · 칸 (퍽 윗면 높이)
     sg.pose = map_pose(v[0], v[1], v[2]);
-    if (g.relation == "box") {  // 상자 보기 — 점 = 상자 가운데(퍽 윗면 높이): look 자세 → 퍽이 모자라면 다시 담기 (skill_inspect)
-      sg.target = "box";
-      send("inspect", sg, [this](const Skill::Result &) { next(); });
-      return;
-    }
-    if (double rx, ry; robot_xy(rx, ry)) {  // 손이 로봇 → 점 방향을 보게 (gripper_cam이 그 점을 화면 가운데에)
-      sg.values = {std::atan2(v[1] - ry, v[0] - rx)};
-      RCLCPP_INFO(get_logger(), "inspect 점까지 수평 %.3fm (로봇 %.3f,%.3f)", std::hypot(v[0] - rx, v[1] - ry), rx, ry);
-    }
+    if (g.relation != "box") sg.values = {1.0};
     send("inspect", sg, [this](const Skill::Result &) { next(); });
     return;
   }
@@ -849,8 +845,9 @@ void Coordinator::inspect(const SubGoal & g) {
   const auto * o = find(std::stoul(g.target));
   sg.pose.header.frame_id = "map";
   sg.pose.pose.position = o->pose.pose.position;
-  sg.pose.pose.position.z += o->size.z / 2;  // 윗면 — 손가락 아래라 gripper_cam이 윗면을 봄
+  sg.pose.pose.position.z += o->size.z / 2;
   sg.pose.pose.orientation.w = 1.0;
+  sg.values = {1.0};
   send("inspect", sg, [this, id = g.target](const Skill::Result &) {
     const auto * obj = find(std::stoul(id));
     RCLCPP_INFO(get_logger(), "inspect %s: 태그 %s", id.c_str(), obj && tag_of(*obj) >= 0 ? "읽음" : "못 읽음");
