@@ -174,6 +174,7 @@ MissionManager::MissionManager(const rclcpp::NodeOptions & options)
   place_reach_m_ = declare_parameter<double>("place_reach_m", place_reach_m_);
   realign_m_ = declare_parameter<double>("place_realign_m", realign_m_);
   realign_wait_s_ = declare_parameter<double>("place_realign_wait_s", realign_wait_s_);
+  exit_min_m_ = declare_parameter<double>("place_exit_min_m", exit_min_m_);
   corr_max_ = declare_parameter<double>("tag_correction_max", 0.6);
   acorr_on_ = declare_parameter<bool>("arena_correction", acorr_on_);
   acorr_idle_ = declare_parameter<bool>("arena_corr_idle", acorr_idle_);
@@ -1995,7 +1996,24 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
       //   retreat(더 물러남)은 첫 진입 면 뒤를 재서 정한 값 → 대체 면에선 0 (11-18 sim)
       //   11-18: 0.20 m만 물러나게 해봤으나 SmacPlanner2D(방향 없는 경로)에선 상자를 바라본 채 시작 → 회전 기준(60°) 아래 경로면
       //   RPP가 상자 쪽으로 호를 그리다 막히고 BackUp도 뒤 상자에 막혀 갇힘 (sim M5 S4) → 다가설 자리까지 물러남 유지
-      if (ok) { creep_used_ = 0.0; backed_ = 0.0; back_ = fmt("%.3f", std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0)); done(true, ""); return; }
+      if (ok) {
+        creep_used_ = 0.0; backed_ = 0.0;
+        double back = std::hypot(cx - n.x, cy - n.y) - box.half - gap + (k == 0 ? box.retreat : 0.0);
+        // 장소 상자: 최소 place_exit_min_m 물러남 — 0.15 m면 다음 Nav2가 상자 바로 옆에서 출발해 RPP가 'collision ahead'로 막히고,
+        //   복구가 local costmap을 지운 뒤 앞 카메라가 가까운 상자를 다시 못 봄 (11-22 실기 nav_1122_060716 L3). 벽 쪽은 다가설 자리 규칙대로
+        if (to[0] == 'L') {
+          const double c = std::cos(n.yaw), s = std::sin(n.yaw);
+          const double dx = cx - (box.half + gap) * c, dy = cy - (box.half + gap) * s;  // 붙은 자리
+          const double clear = std::min(0.32, wall_distance(dx - back * c, dy - back * s, walls_));
+          for (double b = back + 0.02; b <= exit_min_m_ + 1e-6; b += 0.02) {
+            if (wall_distance(dx - b * c, dy - b * s, walls_) < clear || in_keepout(dx - b * c, dy - b * s)) break;
+            back = b;
+          }
+        }
+        back_ = fmt("%.3f", back);
+        done(true, "");
+        return;
+      }
       RCLCPP_WARN(get_logger(), "접근 자리 %zu 실패 (%s) — 다음 변", k + 1, why.c_str());
       // 상자 앞에서 끝남(붙다 멈춤 · 상자를 못 봐 다가설 자리에 섬) — 그대로 Nav2를 보내면 제자리에서 돌다 상자를 밀거나(11-13),
       //   후진 금지라 몸 뒤가 벽에 걸려 못 빠져나옴 (11-13 headless) → 먼저 똑바로 물러남

@@ -486,6 +486,7 @@ mission_manager: # 주사위 기억 미션 (documents/mission/README.md) — 좌
     loc_box_keep_s: 60.0 # [s] 놓기 보정에 쓰는 장소 상자 관측 — 이 안에 장소 태그(윗면 정중앙)를 읽은 관측만
     place_realign_m: 0.08 # [m] 장소 상자 진입점 도착 뒤 상자 쪽으로 돌아 봤을 때 인지 상자 정면에서 옆으로 이만큼 넘게 벗어나면 진입점을 고쳐 Nav2 한 번 더 · 0 = 끔
     place_realign_wait_s: 0.8 # [s] 돈 뒤 윗면 관측을 기다리는 시간
+    place_exit_min_m: 0.25 # [m] 장소 상자에서 물러날 때 최소 이만큼 (벽 쪽은 다가설 자리 규칙 · 0.32 m 넘게 남김) — 0.15 m면 다음 Nav2가 상자 옆에서 막혀 local costmap 지움 (11-22 실기 L3)
     match_radius: 0.04 # [m] 조사 때 퍽 자리와 트랙을 짝짓는 거리
     stand_check_s: 1.0 # [s] 누운 퍽 stand 뒤 인지가 섰는지 볼 때까지 기다림 → 섰으면 선 퍽을 pick (못 보면 stand_pick), 아직 누웠으면 stand 다시 (retries번)
     stand_find_m: 0.10 # [m] stand 뒤 look에서 누운 가운데 이 안의 퍽: 누움 → 다시 stand · 섬 → pick · 없음 → stand_lost (선 퍽은 약 45 mm 옆 · 실패하면 6~7 cm 튐) — 11-15
