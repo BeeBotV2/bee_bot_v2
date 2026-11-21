@@ -1009,7 +1009,7 @@ void MissionManager::put_back(size_t b, int tag, const std::string & why, std::f
   }
   const auto [px, py] = free_spot(bx, by, others, std::min(put_back_ring_m_, start_boxes_[b].half - 0.04), put_back_clear_m_);
   const std::string head = "puck " + str(tag) + ": load 실패 " + why;
-  note(fmt("퍽 %d 상자 %zu에 되돌림 (가운데에서 %.0f mm)", tag, b + 1, 1000 * std::hypot(px - bx, py - by)));
+  note("퍽 " + str(tag) + " 상자 " + str(static_cast<int>(b) + 1) + "에 되돌림" + fmt(" (가운데에서 %.0f mm)", 1000 * std::hypot(px - bx, py - by)));  // fmt는 double만
   run({SubGoal().set__skill("place").set__target(fmt("%.4f,%.4f,%.4f", px, py, box_top_z_))},
     [this, b, tag, bx, by, px, py, head, next](bool ok, const std::string &) {
       if (!ok) { RCLCPP_WARN(get_logger(), "퍽 %d 상자 %zu에 되돌리기 실패", tag, b + 1); next(false); return; }
