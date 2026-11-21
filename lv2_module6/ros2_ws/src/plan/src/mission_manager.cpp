@@ -1574,8 +1574,14 @@ void MissionManager::place_check(size_t i, int tries) {
   last_place_loc_ = static_cast<int>(job.loc);  // 장소 앞에 섬 (go_near 성공 뒤에만 옴)
   (void)tries;
   // 11-22 사용자: 놓은 뒤 확인·다시 놓기 없음 (1 cm 기준으로 다시 집어도 오차가 안 줄고 퍽마다 약 22 s · 장소마다 마지막에 보기만 — verify_at)
-  run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [next](bool ok, const std::string & why) {
-    next(ok, ok ? "placed" : "place_failed " + why);
+  run({SubGoal().set__skill("place").set__target(point(tx, ty, box_top_z_))}, [this, job, next](bool ok, const std::string & why) {
+    if (ok) { next(true, "placed"); return; }
+    // 손에 쥔 채 실패(IK · 궤적 충돌 검사 — 팔이 움직이기 전)면 적재함 빈 칸에 되돌린 뒤 다음 퍽 (11-22 실기 06:51: 쥔 채로 다음 퍽 unload)
+    if (!basket_ || !basket_->held.filled) { next(false, "place_failed " + why); return; }
+    RCLCPP_WARN(get_logger(), "퍽 %d 놓기 실패 (%s) — 손에 쥔 퍽을 적재함에 되돌림", job.tag, why.c_str());
+    run({SubGoal().set__skill("load").set__target("next")}, [next, why](bool ok2, const std::string & why2) {
+      next(false, "place_failed " + why + (ok2 ? " · 적재함에 되돌림" : " · 되돌리기 실패 " + why2));
+    });
   });
 }
 
@@ -2105,9 +2111,17 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
             return;
           }
           const double dx = a.x - cx, dy = a.y - cy;  // 처음 진입 기준 가운데에서 인지 가운데까지
-          RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m (> %.2f) · 상자가 기준에서 (%+.1f, %+.1f) cm → 진입점 다시 (%d/%d)",
-                      to.c_str(), src, lat, realign_m_, dx * 100, dy * 100, tries + 1, realign_tries_);
-          (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1, true);
+          // 옆으로 비켜서지 않음 — 차동 구동이라 옆 몇 cm에도 제자리 80° 넘게 돌다 상자 앞에서 막혔음 (실기 L3 3번 · 시뮬 4번).
+          //   관측 자리 거리까지 똑바로 물러났다가 보정한 진입점으로 비스듬히 다시 들어감 (0.4 m 안 · 옆 10 cm 안이면 정밀 이동)
+          const double back = std::max(0.0, view_m_ - std::hypot(r.x - a.x, r.y - a.y));
+          RCLCPP_WARN(get_logger(), "%s 진입점 — 인지 %s 정면에서 옆 %.3f m (> %.2f) · 상자가 기준에서 (%+.1f, %+.1f) cm → %.2f m 물러났다 다시 (%d/%d)",
+                      to.c_str(), src, lat, realign_m_, dx * 100, dy * 100, back, tries + 1, realign_tries_);
+          const auto again = [this, step, n, f_a, dx, dy, a, tries]() {
+            (*step)(to_map(n.x + dx, n.y + dy, n.yaw), to_map(f_a.x + dx, f_a.y + dy, f_a.yaw), a.x, a.y, tries + 1, true);
+          };
+          if (back < 0.02) { again(); return; }
+          run({stow(), SubGoal().set__skill("approach").set__target(fmt("%.3f", back)).set__relation("exit")},
+              [again](bool, const std::string &) { again(); });
         });
       });
     });
