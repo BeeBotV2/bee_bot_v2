@@ -1192,7 +1192,9 @@ bool MissionManager::near_body(size_t b, double & need) const {
     const std::string t = detail(o, "tag");
     if (!t.empty() && basket_slot_of(std::stoi(t)) >= 0) continue;
     const double fwd = (p.x - r.x) * c + (p.y - r.y) * sn;
-    if (fwd >= back_min_x_ && !t.empty()) continue;
+    // tag를 못 읽은 트랙은 붙어 있을 때만 (inspect_back_want_x 안) — 11-22 실기 nav_1122_095737: 물러남 8번이 모두 0.21~0.34 m 앞의
+    //   tag 없는 트랙 (같은 퍽의 tag 읽기 전 트랙 · 근래 목록) 때문이었음. 실제로 붙은 퍽(0.13~0.15 m)만 tag를 못 읽음
+    if (fwd >= (t.empty() ? back_want_x_ : back_min_x_)) continue;
     any = true;
     need = std::max(need, back_want_x_ - fwd);
   }
@@ -2231,7 +2233,7 @@ void MissionManager::grab(int tag, Done done, int tries) {
     }
     lying_.erase(tag);
     attempt_ = tries;
-    pick_near(o->id, again);
+    pick_near(*o, again);
   }, tries > 0);
 }
 
@@ -2295,7 +2297,7 @@ void MissionManager::stand_up(uint32_t id, double mx, double my, int tries, Done
       }
       // 섰음: 선 퍽을 일반 pick (인지 위치 · 손 카메라 · pick 정책). 선 퍽은 누운 가운데에서 약 45 mm 옆에 섬
       //   (11-15 실기: 세운 그 자리에서 같은 손목으로 바로 내려가는 stand_pick은 세우며 밀린 만큼 빗나감)
-      pick_near(o->id, done);
+      pick_near(*o, done);
     });
   });
 }
@@ -2304,15 +2306,15 @@ void MissionManager::stand_up(uint32_t id, double mx, double my, int tries, Done
 //   박스에 붙은 뒤(back_ 있음)에만 · 퍽(인지, map)이 로봇 중심에서 pick_reach_m 밖이면 그 안에 들 만큼만 곧게 전진 —
 //   상자 앞 gap이 creep_min_gap 아래로는 안 감 (approach_gap − creep_min_gap가 이 도킹의 전진 한도) · 움직이며 계산하지 않고
 //   한 번 가고 멈춘 뒤 pick (pick은 손 카메라로 다시 잼 · 그래도 못 닿으면 coordinator가 pick_far). 전진한 만큼 물러나는 거리에 더함
-void MissionManager::pick_near(uint32_t id, Done done) {
-  const auto pick = [this, id, done]() { run({SubGoal().set__skill("pick").set__target(std::to_string(id))}, done); };
-  const TrackedObject * o = nullptr;
-  if (objects_) for (const auto & t : objects_->objects) if (t.id == id) o = &t;
+//   퍽 자리는 locate가 준 것 — 인지 목록에서 빠진 퍽도 기억한 자리로 (11-22 실기 nav_1122_095737: 두 번째 퍽은 첫 pick 동안 목록에서
+//   빠져 id로 못 찾아 전진을 건너뜀 → 0.27~0.28 m에서 grasp_failed_all → pick_far 2번)
+void MissionManager::pick_near(const TrackedObject & o, Done done) {
+  const auto pick = [this, id = o.id, done]() { run({SubGoal().set__skill("pick").set__target(std::to_string(id))}, done); };
   const double room = approach_gap_ - creep_min_gap_ - creep_used_;
   Pose2 r;
-  if (back_.empty() || !o || room < 0.01 || !robot_map(r)) { pick(); return; }
+  if (back_.empty() || room < 0.01 || !robot_map(r)) { pick(); return; }
   const double c = std::cos(r.yaw), s = std::sin(r.yaw);
-  const double dx = o->pose.pose.position.x - r.x, dy = o->pose.pose.position.y - r.y;
+  const double dx = o.pose.pose.position.x - r.x, dy = o.pose.pose.position.y - r.y;
   const double fwd = dx * c + dy * s, lat = -dx * s + dy * c;
   if (std::hypot(fwd, lat) <= pick_reach_m_ || std::abs(lat) >= pick_reach_m_) { pick(); return; }  // 이미 닿음 · 옆이라 앞으로 가도 안 닿음
   const double step = std::min(fwd - std::sqrt(pick_reach_m_ * pick_reach_m_ - lat * lat), room);
