@@ -144,6 +144,9 @@ public:
     odom_tol_ = declare_parameter<double>("odom_lookup_tolerance", 0.1);  // [s] 영상 시각의 odom TF가 아직 없을 때 최근 TF를 쓰는 한도
     max_twist_lin_ = declare_parameter<double>("max_twist_lin", 0.6);  // [m/s] 넘으면 /cuvslam/odom 안 냄 (자세 튐)
     max_twist_ang_ = declare_parameter<double>("max_twist_ang", 4.0);  // [rad/s]
+    // 11-22 실기 nav_1122_091419: 600 s 뒤 추적이 15 → 9 Hz로 느려지며 영상 시각보다 최대 1.7 s 늦게 냄 — EKF history_length(0.6 s)보다
+    //   늦은 회전 속도가 들어가 yaw가 −10°씩 세 번 튐 → 벽 정합 over_limit로 잠김. 이보다 늦은 측정은 안 냄 (바퀴·IMU가 받침)
+    max_odom_delay_ = declare_parameter<double>("max_odom_delay", 0.5);  // [s]
     if (const char * a = std::getenv("BEE_MAP_ANCHOR")) odom_anchor_ = std::string(a) == "odom";
     if (odom_anchor_) RCLCPP_WARN(get_logger(), "map 기준 = EKF odom (+도면 보정) — cuVSLAM 자세는 map→odom에 안 씀");
     if (env_on("BEE_MAP_FREEZE")) {
@@ -551,6 +554,12 @@ private:
 
   // 속도만 (자세는 안 씀 — cuVSLAM 좌표는 추적을 잃으면 새로 시작해 자세를 EKF에 그대로 넣으면 튐)
   void publish_odom(const builtin_interfaces::msg::Time & stamp, const Pose2 & v) {
+    const double late = (now() - rclcpp::Time(stamp, RCL_ROS_TIME)).seconds();
+    if (late > max_odom_delay_) {
+      ++stale_;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "늦은 측정 버림 (%.2f s > %.2f s · 누적 %zu)", late, max_odom_delay_, stale_);
+      return;
+    }
     nav_msgs::msg::Odometry o;
     o.header.stamp = stamp;
     o.header.frame_id = odom_;
@@ -775,7 +784,8 @@ private:
   std::optional<ros_system::MapGate> gate_;
   Eigen::Matrix4d base_from_cam_ = Eigen::Matrix4d::Identity();
   Pose2 map_offset_;
-  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0, odom_tol_ = 0.1;
+  double max_twist_lin_ = 0.6, max_twist_ang_ = 4.0, odom_tol_ = 0.1, max_odom_delay_ = 0.5;
+  size_t stale_ = 0;
   bool odom_anchor_ = false;
   uint64_t n_corr_ignored_ = 0, n_target_ignored_ = 0;
   std::optional<Pose2> last_base_, pending_initialpose_;
