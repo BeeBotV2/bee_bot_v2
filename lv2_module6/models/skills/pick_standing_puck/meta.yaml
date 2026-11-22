@@ -3,7 +3,7 @@
 skill: pick_standing_puck
 kind: arm            # arm (rl_arm_correction이 계산) | base (skill_approach가 계산)
 layout: pick_box      # 정책 입력 모양 (ml/arm_obs.hpp pick_box 67 = pick 41 + 측정 유효·나이·검사 위치·행동 기록·부하)
-use: true
+use: false           # 11-22 사용자: 끔
 runtime: onnx         # onnx (기본, ONNX Runtime) | policy (같은 정책의 .policy · 실측에서 ONNX가 나쁘면)
 node: skill_pick
 sim_baseline: 53.1      # [%] 학습 없이 기준 동작만 (1024판 seed 7, 설계 환경 B 조건, 손 안 어긋남 < 4 mm)
