@@ -58,6 +58,7 @@ public:
     w_max_ = declare_parameter<double>("approach_w_max", 0.5);           // sim: 회전 상한 [rad/s]
     face_start_ = declare_parameter<double>("approach_face_deg", 15.0) * M_PI / 180.0;  // 상자 도킹: 시작 때 면 방향과 이만큼 넘게 틀어졌으면 먼저 제자리 회전
     face_done_ = declare_parameter<double>("approach_face_done_deg", 4.0) * M_PI / 180.0;  // 그 회전을 이 안에서 끝냄
+    lat_tol_ = declare_parameter<double>("approach_lat_tol_m", 0.02);  // [m] 끝에서 옆 어긋남 허용 — 차동 구동은 옆으로 못 감 (방향만 맞추고 도착)
     turn_tol_m_ = declare_parameter<double>("approach_turn_tol_m", turn_tol_m_);  // target "turn": 위치가 이 안이면 방향만 (도는 동안 밀리는 1~3 cm)
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     box_match_m_ = declare_parameter<double>("box_match_m", 0.45);  // 상자 도킹: 힌트(도면) 상자 가운데에서 이만큼 안의 상자만
@@ -501,10 +502,14 @@ private:
     // 1~2 cm 안에서 점을 향해 조향(head · 4·gy)하다 상자 앞에서 계속 돌았다 (scene_approach 실측 11-12).
     // → 목표 방향 직선을 따라감: 로봇 발(직선 위 투영)에서 carrot_m 앞 점을 향해 조향(목표는 안 넘김) → 옆 어긋남이 도착 전에 사라짐
     //   pos_done_: latch_m(= tol_m의 0.6) 안에 들면 release 밖까지 방향만 · 지나치면 직선 따라 후진 · 등지면(45° 넘게) 제자리 회전 (멀 때만)
+    //   11-22 실기 nav_1122_102815 L2: 옆 5~8 mm가 남아 거리가 latch(6 mm) 밑으로 안 내려감 → 몇 mm 옆 점을 향해 조향(head_c ±60~137°)하며
+    //   면 방향과 반대로 돌다(−5° → +40°) approach_blocked (S4 · L2 반복) → 앞뒤(along)만 latch · 옆은 approach_lat_tol_m 안이면 방향만
     const double latch = 0.6 * tol_m_, release = std::max(release_m_, 2.0 * tol_m_);
-    if (dist <= latch) pos_done_ = true;
-    else if (dist > release) pos_done_ = false;
     const double along = gx * std::cos(gyaw) + gy * std::sin(gyaw);  // 목표까지 남은 길이 (목표 방향으로) — 음수면 지나침
+    const double lat = -gx * std::sin(gyaw) + gy * std::cos(gyaw);   // 목표 직선에서 옆
+    const double lat_tol = std::max(lat_tol_, tol_m_);                 // turn · exit은 tol_m(3~5 cm)이 더 큼
+    if (std::abs(along) <= latch && std::abs(lat) <= lat_tol) pos_done_ = true;
+    else if (dist > release) pos_done_ = false;
     const double lead = std::max(0.0, along - carrot_m_);              // 당근 = 목표에서 이만큼 뒤 (직선 위)
     const double cx = gx - lead * std::cos(gyaw), cy = gy - lead * std::sin(gyaw);
     const double head_c = std::atan2(cy, cx);
@@ -536,7 +541,7 @@ private:
       if (face_ok_ && face_m_ < face_slow_m_) v = std::min(v, min_speed_);  // 앞면 정지 도킹: 면 가까이는 데드밴드 위 최저 속도로
       w = std::clamp(3.0 * head_c, -w_max_, w_max_);
     }
-    if (dist <= tol_m_ && std::abs(gyaw) < tol_yaw_) still_s_ += 0.05;
+    if (std::abs(along) <= tol_m_ && std::abs(lat) <= lat_tol && std::abs(gyaw) < tol_yaw_) still_s_ += 0.05;
     else still_s_ = 0.0;
     if (still_s_ >= hold_s_) {
       RCLCPP_INFO(get_logger(), "approach 도착 — 앞 %.4f m · 옆 %.4f m · 방향 %.3f rad", gx, gy, gyaw);
@@ -632,7 +637,7 @@ private:
   double best_ = 1e9, still_s_ = 0, act0_ = 0, act1_ = 0, last_v_ = 0, last_w_ = 0;
   int stage_ = 0;
   int face_ = 0;  // 상자 도킹 먼저 돌기: 1 = 첫 틱에 판단 · 2 = 도는 중 · 0 = 안 함/끝
-  double face_start_ = 0.26, face_done_ = 0.07, turn_tol_m_ = 0.05;
+  double face_start_ = 0.26, face_done_ = 0.07, turn_tol_m_ = 0.05, lat_tol_ = 0.02;
   rclcpp::Time started_{0, 0, RCL_ROS_TIME}, progress_{0, 0, RCL_ROS_TIME};
   Done done_;
   rclcpp::TimerBase::SharedPtr timer_;
