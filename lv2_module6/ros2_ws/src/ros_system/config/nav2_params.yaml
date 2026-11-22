@@ -74,7 +74,8 @@ controller_server:
       # 11-18: 0.08 / 0.3 → 0.15 / 0.5 — 다가설 자리는 approach 출발점일 뿐(최종 자리는 approach가 상자를 보며 맞춤).
       #   좁으면 Lattice(후진 허용 + 도착 방향 고정)가 자리를 0.24 m 지나쳤다 후진해 들어오는 경로를 냄 (sim S4)
       xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.7   # 11-18: 0.5 → 0.7 rad(40°, 사용자) — 앞 카메라 가로 시야 약 87°의 절반: 이 안이면 상자가 대체로 화면에 들어와 approach가 바로 시작
+      yaw_goal_tolerance: 0.26  # 11-22: 0.7 → 0.26 rad(15°, 사용자) — 실기 nav_1122_085550 S4: 30° 틀어진 채 '도착'해 상자가 화면 끝에 잘려
+                                #   (짧은 변 0.18 < box_min_side_m) 못 잡고, 팔이 look으로 올라가 가려 approach_box_unseen
     # through-poses BT가 찾는 이름 — 통과 지점이라 넓게
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
