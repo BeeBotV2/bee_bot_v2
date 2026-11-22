@@ -37,6 +37,7 @@ skill_approach:
     # 상자 도킹 (goal.values = [gap, half]): 도면 자리는 힌트 — 인지 상자로 목표를 정함 (11-12). 팔은 pose_look으로 천천히 (launch arm_velocity_scale 0.15)
     box_match_m: 0.45        # [m] 힌트 상자 가운데에서 이만큼 안의 start_box · location_box만 (11-13: 0.35 → 0.45 — 지도 오차 20~25 cm에 측정이 밖으로 나감, 상자끼리는 0.7 m 넘게 떨어짐)
     box_wait_s: 8.0          # [s] 첫 측정까지 정지해서 기다림 — 넘으면 approach_box_unseen
+    approach_unseen_back_m: 0.10 # [m] 상자를 못 보면 box_wait_s 절반 뒤 한 번 천천히(0.05 m/s) 물러나 다시 봄 — 11-22 실기 S4 −y 8 s 못 봄 · 0 = 끔
     box_seed_s: 30.0         # [s] 첫 측정만 이만큼 지난 것도 받음 (시작 전 기억 포함 — map→odom은 관측 시각 것이라 오래돼도 맞음) — 시작하며 팔이 올라가 pole_front_cam이 가려져도 도착 직전 측정으로 시작 (11-13)
     box_stale_s: 1.0         # [s] last_seen이 이보다 오래된 측정은 버림
     box_jump_m: 0.08         # [m] 추정에서 이만큼 넘게 튄 측정은 버림

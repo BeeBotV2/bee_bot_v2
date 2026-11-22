@@ -62,6 +62,7 @@ public:
     look_q_ = declare_parameter<std::vector<double>>("pose_look", {0.0, -1.682497, 0.324631, 1.926843, 0.0});  // arm.yaml이 덮음
     box_match_m_ = declare_parameter<double>("box_match_m", 0.45);  // 상자 도킹: 힌트(도면) 상자 가운데에서 이만큼 안의 상자만
     box_wait_s_ = declare_parameter<double>("box_wait_s", 8.0);     // 첫 측정까지 기다림 (그동안 정지)
+    unseen_back_m_ = declare_parameter<double>("approach_unseen_back_m", unseen_back_m_);  // 못 보면 절반 기다린 뒤 한 번 물러남 (0 = 끔)
     box_stale_s_ = declare_parameter<double>("box_stale_s", 1.0);   // last_seen이 이보다 오래된 측정은 버림
     box_seed_s_ = declare_parameter<double>("box_seed_s", 30.0);   // 첫 측정만 이만큼 지난 것도 받음 (도착 직전 pole_front_cam)
     box_jump_m_ = declare_parameter<double>("box_jump_m", 0.08);    // 추정에서 이만큼 넘게 튄 측정은 버림
@@ -145,6 +146,7 @@ private:
     done_ = done;
     box_mode_ = g.values.size() >= 2;
     have_box_ = frozen_ = jumping_ = yjumping_ = false;
+    unseen_noted_ = false;
     face_ = box_mode_ ? 1 : 0;
     if (box_mode_) {
       gap_ = g.values[0];
@@ -384,10 +386,18 @@ private:
   bool box_ready() {
     if (!box_mode_) return true;
     if (!have_box_) {
-      halt();
       progress_ = now();
-      if ((now() - started_).seconds() > box_wait_s_) {
-        RCLCPP_WARN(get_logger(), "approach: %.1f s 동안 상자를 못 봄 (도면 (%.3f, %.3f) 근처)", box_wait_s_, hint_x_, hint_y_);
+      // 상자를 아직 못 봄 — box_wait_s 절반이 지나면 한 번만 unseen_back_m 천천히 물러나 다시 봄 (가까워 윗면이 잘려 보일 때 ·
+      //   11-21 22:33 · 11-22 08:57 실기 S4 −y: 0.45 m 자리에서 8 s 동안 못 봄 → 다른 변으로 가 막힘). 0이면 끔
+      const double t_wait = (now() - started_).seconds(), t_back = unseen_back_m_ / 0.05;
+      if (unseen_back_m_ > 0.0 && t_wait > 0.5 * box_wait_s_ && t_wait < 0.5 * box_wait_s_ + t_back) {
+        if (!unseen_noted_) { unseen_noted_ = true; RCLCPP_INFO(get_logger(), "approach: 상자를 못 봄 — %.2f m 물러나 다시 봄", unseen_back_m_); }
+        send(-0.05, 0.0);
+        return false;
+      }
+      halt();
+      if (t_wait > box_wait_s_ + (unseen_back_m_ > 0.0 ? t_back : 0.0)) {
+        RCLCPP_WARN(get_logger(), "approach: %.1f s 동안 상자를 못 봄 (도면 (%.3f, %.3f) 근처)", box_wait_s_ + (unseen_back_m_ > 0.0 ? unseen_back_m_ / 0.05 : 0.0), hint_x_, hint_y_);
         end(false, "approach_box_unseen");
       }
       return false;
@@ -613,6 +623,8 @@ private:
   std::string frame_ = "map";  // 목표·로봇 자세 프레임 — 상자 도킹은 odom
   ArmIO arm_;
   std::vector<double> look_q_;
+  double unseen_back_m_ = 0.10;  // 상자를 못 볼 때 한 번 물러날 거리 [m]
+  bool unseen_noted_ = false;
   double box_match_m_, box_wait_s_, box_stale_s_, box_seed_s_, box_jump_m_, box_alpha_, box_rate_mps_, box_rate_dps_, box_min_side_, box_freeze_m_;
   rclcpp::Time last_meas_{0, 0, RCL_ROS_TIME};
   bool box_mode_ = false, have_box_ = false, frozen_ = false;
