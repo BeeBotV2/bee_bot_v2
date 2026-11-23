@@ -1437,6 +1437,7 @@ void MissionManager::build(size_t i) {
 
 void MissionManager::bring(size_t i) {
   const Job job = jobs_[i];
+  if (place_avoid_ && (place_avoid_->loc != static_cast<size_t>(job.loc) || place_avoid_->cell != job.cell)) place_avoid_.reset();
   last_place_loc_ = -1;  // 장소 앞에서 놓기 시작할 때 다시 정함
   ctx_ = "\"tag\": " + str(job.tag) + ", \"loc\": \"L" + str(static_cast<int>(job.loc) + 1) + "\", \"cell\": " + str(job.cell);
   const auto skip = [this, i, job](const std::string & why) {
@@ -1476,21 +1477,39 @@ void MissionManager::bring(size_t i) {
     //   0.282 · 0.263 m — 그 칸 쪽 변은 벽 0.22 m 안이라 빠짐)
     const auto c = cell_target(job.loc, job.cell);
     Pose2 r;
-    if (robot_arena(r) && std::hypot(c.first - r.x, c.second - r.y) > place_reach_m_) {
-      RCLCPP_WARN(get_logger(), "L%d 칸 %d 팔이 안 닿음 (%.3f m > %.2f) — 꺼내지 않음", static_cast<int>(job.loc) + 1, job.cell,
+    const bool have_r = robot_arena(r);
+    // 이 변에서 안 닿음 → 꺼내지 않고 다른 변으로 한 번 (go_near가 이 변을 맨 뒤로) · 그래도 안 되면 그 칸은 안 놓음 (11-23 사용자)
+    const auto other_side = [this, i, job, skip, have_r, r](const std::string & why) {
+      if (place_avoid_ || !have_r) { place_avoid_.reset(); skip(why); return; }
+      place_avoid_ = PlaceAvoid{static_cast<size_t>(job.loc), job.cell, r.yaw};
+      RCLCPP_WARN(get_logger(), "L%d 칸 %d %s — 꺼내지 않고 다른 변으로", static_cast<int>(job.loc) + 1, job.cell, why.c_str());
+      bring(i);
+    };
+    if (have_r && std::hypot(c.first - r.x, c.second - r.y) > place_reach_m_) {
+      RCLCPP_WARN(get_logger(), "L%d 칸 %d 팔이 안 닿음 (%.3f m > %.2f)", static_cast<int>(job.loc) + 1, job.cell,
                   std::hypot(c.first - r.x, c.second - r.y), place_reach_m_);
-      skip("place_unreachable");
+      other_side("place_unreachable");
       return;
     }
-    run_retry({SubGoal().set__skill("unload").set__target(str(slot))}, [this, i, skip](bool ok2, const std::string & why2) {
-      if (!ok2) { skip("tray_pick_failed " + why2); return; }
-      place_check(i, 0);
+    // 거리 안이어도 손 수직 IK는 놓는 높이 0.285 m · 칸 위 2 cm 0.276 m까지 (stand::ik_down) — 꺼내기 전에 skill_place에 물음
+    run({SubGoal().set__skill("place").set__target(point(c.first, c.second, box_top_z_)).set__relation("check")},
+        [this, i, slot, skip, other_side](bool ok, const std::string & why) {
+      if (!ok) {
+        if (interrupted(why)) { skip(why); return; }
+        other_side("place_unreachable ik");
+        return;
+      }
+      place_avoid_.reset();
+      run_retry({SubGoal().set__skill("unload").set__target(str(slot))}, [this, i, skip](bool ok2, const std::string & why2) {
+        if (!ok2) { skip("tray_pick_failed " + why2); return; }
+        place_check(i, 0);
+      });
     });
   };
   // 이미 그 장소 상자에 붙어 있고 다음 칸이 팔 닿는 거리면 물러나지 않고 그 자리에서 (11-22 사용자: 칸마다 exit → 다시 도킹)
   const Box & box = loc_boxes_[job.loc];
   Pose2 r;
-  if (!back_.empty() && stop_ == box_label(box) && robot_arena(r) && std::hypot(tx - r.x, ty - r.y) <= place_reach_m_) {
+  if (!place_avoid_ && !back_.empty() && stop_ == box_label(box) && robot_arena(r) && std::hypot(tx - r.x, ty - r.y) <= place_reach_m_) {
     RCLCPP_INFO(get_logger(), "%s 붙은 채 다음 칸 %d (%.3f m)", stop_.c_str(), job.cell, std::hypot(tx - r.x, ty - r.y));
     at_box(true, "");
     return;
@@ -1970,6 +1989,10 @@ void MissionManager::go_near(const Box & box, double px, double py, Done done, s
         return std::hypot(near_c_.first - reach_d * std::cos(p.yaw) - px, near_c_.second - reach_d * std::sin(p.yaw) - py);
       };
       std::stable_partition(poses.begin(), poses.end(), [&](const Pose2 & p) { return dock_d(p) <= place_reach_m_; });
+      if (place_avoid_ && box_label(box) == "L" + str(static_cast<int>(place_avoid_->loc) + 1))  // 칸 IK가 안 풀린 변은 맨 뒤 (11-23)
+        std::stable_partition(poses.begin(), poses.end(), [&](const Pose2 & p) {
+          return std::abs(std::remainder(p.yaw - place_avoid_->yaw, 2 * M_PI)) > 0.5;
+        });
       if (!poses.empty())
         RCLCPP_INFO(get_logger(), "%s 칸 점 (%.3f, %.3f) — 첫 변에서 %.3f m%s", box_label(box).c_str(), px, py, dock_d(poses[0]),
                     dock_d(poses[0]) <= place_reach_m_ ? "" : " (닿는 변 없음)");

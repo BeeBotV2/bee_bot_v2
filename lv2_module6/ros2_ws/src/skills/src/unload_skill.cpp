@@ -13,7 +13,7 @@
 namespace skills {
 
 // 칸에서 꺼낼 때 손가락 사이 (시뮬 UnloadEnv open_gap_range 45~50 mm 가운데) — 최대 53 mm면 칸 벽에 가까움
-constexpr double UNLOAD_OPEN_GAP_M = 0.0475;
+constexpr double UNLOAD_OPEN_GAP_M = 0.040;  // 11-23 사용자: 47.5 → 40 mm — 칸 안쪽 폭 45 mm보다 넓게 벌린 채 내려가 손가락이 칸막이 윗면에 얹힘 (sim 칸 0·3 grasp_empty)
 
 class UnloadSkill : public SkillNode {
 public:
@@ -56,10 +56,12 @@ public:
             arm_.gripper_step(arm_.grip_close_m(), arm_.grip_current_a()), arm_.held_step(), arm_.joints_step(over),
             arm_.joints_step(carry)});
         stage("칸 " + std::to_string(g.slot) + " (" + shape + " · carry_" + table_.carry[g.slot] + ")");
-        arm_.run_steps(steps, 0, [this, done, carry](bool ok) {
+        arm_.run_steps(steps, 0, [this, done, carry, a](bool ok) {
           const std::string why = ok ? "" : arm_.grasp_empty() ? "grasp_empty" : arm_.contact() ? "arm_contact" : "unload_failed";
           if (ok || why != "grasp_empty") { done(ok, why); return; }
-          arm_.joints_step(carry)([done, why](bool) { done(false, why); });  // 빈손: 칸 위에서 carry로 빠져나옴 (바로 stow면 차체 위로 휙)
+          // 빈손: 칸 위에서 unload_lift_m 더 올린 뒤 carry로 빠져나옴 (바로 stow면 차체 위로 휙). 11-23 sim 칸 0: 퍽이 비스듬히 끼어
+          //   '빈손'(걸림)인데 칸 위 높이로 carry까지 가 옆 칸 퍽 위를 지남 — 성공 경로와 같은 높이로
+          lift_step(a)([this, done, why, carry](bool) { arm_.joints_step(carry)([done, why](bool) { done(false, why); }); });
         });
       });
     });

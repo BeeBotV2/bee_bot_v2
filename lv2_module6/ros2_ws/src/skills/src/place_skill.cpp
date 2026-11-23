@@ -37,7 +37,10 @@ public:
     carry_right_ = declare_parameter<std::vector<double>>("pose_carry_right", std::vector<double>{});
     policy_ = load_model("place_cell");
     serve("place", [this](const SkillGoal & g, Done done) {
-      if (g.target != "cell" && g.target != "over") { done(false, "place_bad_target"); return; }
+      if (g.target != "cell" && g.target != "over" && g.target != "cell_check") { done(false, "place_bad_target"); return; }
+      // cell_check: 팔은 안 움직이고 칸 위 IK만 (place_cell과 같은 높이 순서) — mission_manager가 unload 전에 물음 (11-23 사용자:
+      //   IK가 안 풀리면 꺼내지 말고 go_near로 다른 변. 11-23 sim L3 먼 줄 0.291 · 0.295 m: 꺼냄 → IK 실패 → 되돌림 27 s × 2)
+      if (g.target == "cell_check") { const bool ok = cell_reachable(g.pose); done(ok, ok ? "" : "place_ik_unreachable"); return; }
       when_ready([this]() { return arm_.moveit_ready() && arm_.gripper_ready(); }, "arm_unavailable", done, [this, g, done]() {
         arm_.clear_flags();
         // 처짐 적분: 예전엔 여기서 reset_sag(한 번에 0) → 팔이 처졌다 다시 올라와 멈출 때까지 ~0.45 s 기다림 (11/08 실기 unload → place).
@@ -86,6 +89,25 @@ private:
     } catch (const std::exception &) {
       return false;
     }
+  }
+
+  // 칸(g.pose = 놓을 면 · map) 위 어느 높이(above_m → 2 cm)에서든 손 수직 IK가 풀리면 true — place 목표와 같은 release 계산
+  bool cell_reachable(const geometry_msgs::msg::PoseStamped & cell) {
+    auto p = cell;
+    if (p.header.frame_id.empty()) p.header.frame_id = "map";
+    p.pose.orientation = geometry_msgs::msg::Quaternion();
+    double yb = 0.0;
+    ArmIO::Q5 now{}, q{};
+    if (!base_yaw(p.header.frame_id, yb) || !arm_.arm_now(now)) return false;
+    p.pose.position.x -= offset_x_m_ * std::cos(yb);
+    p.pose.position.y -= offset_x_m_ * std::sin(yb);
+    const double down_z = cell.pose.position.z + held_bottom_m_ + drop_m_;
+    for (const double h : {above_m_, CONTACT_ABOVE_M, 0.03, 0.02}) {
+      p.pose.position.z = down_z + h;
+      if (arm_.ik_ee_yaw(p, yb, now, q)) return true;
+    }
+    RCLCPP_WARN(get_logger(), "place 확인: 칸 위 IK 안 풀림 (팔이 못 닿음)");
+    return false;
   }
 
   void place_cell(const geometry_msgs::msg::PoseStamped & release, double top, double psi, ArmIO::Cb done) {

@@ -815,10 +815,12 @@ void Coordinator::pick(const SubGoal & g) {
 void Coordinator::place(const SubGoal & g) {
   Skill::Goal sg;
   if (const auto v = parse_numbers(g.target); v.size() == 3) {  // 좌표 place — 손 안 퍽 바닥이 z가 되게 (주사위 칸)
-    sg.target = "cell";
+    sg.target = g.relation == "check" ? "cell_check" : "cell";  // check: 팔 안 움직이고 IK만 (unload 전, 11-23)
     sg.pose = map_pose(v[0], v[1], v[2]);
     if (double rx, ry; robot_xy(rx, ry))
-      RCLCPP_INFO(get_logger(), "place 점까지 수평 %.3fm (로봇 %.3f,%.3f)", std::hypot(v[0] - rx, v[1] - ry), rx, ry);
+      RCLCPP_INFO(get_logger(), "place%s 점까지 수평 %.3fm (로봇 %.3f,%.3f)", g.relation == "check" ? " 확인" : "",
+                  std::hypot(v[0] - rx, v[1] - ry), rx, ry);
+    if (g.relation == "check") { send("place", sg, [this](const Skill::Result &) { next(); }); return; }
     send("place", sg, [this](const Skill::Result &) {
       held_ = PuckInfo{};  // 손 비움 — 장부 발행·저장
       basket_changed();
