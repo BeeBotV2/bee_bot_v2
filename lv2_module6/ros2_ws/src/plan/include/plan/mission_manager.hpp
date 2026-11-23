@@ -146,6 +146,7 @@ private:
   int load_tries_ = 3;                           // survey_load_tries — 퍽 하나 load 시도 수 (실패마다 상자에 되돌리고 다시 집음)
   // 상자 윗면 위 tag 퍽 중 할 일 (처음 본 퍽 · 다른 상자 자리로 기억했는데 여기 있는 퍽)을 이 상자로 적고 돌려줌
   std::vector<int> collect(size_t b, double cx, double cy);
+  void near_first(std::vector<int> & tags) const;  // 실을 순서: 선 퍽 먼저 · 로봇에 가까운 퍽부터
   void solve_allocation();
   void build(size_t i);
   void bring(size_t i);                          // 그 퍽을 장소 앞에서 적재함 칸에서 꺼내 손에 쥘 때까지

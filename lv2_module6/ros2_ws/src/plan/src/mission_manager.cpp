@@ -1027,10 +1027,11 @@ void MissionManager::visit_box(size_t b, bool again, std::function<void()> then)
         snap("box" + str(static_cast<int>(b) + 1));
         auto found = collect(b, cx, cy);
         for (const int tag : left) if (!std::count(found.begin(), found.end(), tag) && basket_slot_of(tag) < 0) found.push_back(tag);
-        const auto start = [this, b, then](const std::vector<int> & f, bool counted) {
+        const auto start = [this, b, then](std::vector<int> f, bool counted) {
           if (counted)
             for (int missing = static_cast<int>(puck_dx_.size()) - static_cast<int>(f.size()); missing > 0; --missing)
               result("box " + str(static_cast<int>(b) + 1) + ": tag_unread");
+          near_first(f);
           load(b, f, 0, then);
         };
         // tag를 못 읽어 할 일이 박스 퍽 수보다 적음 — 한 번 더 봄 (1차만 · 다시 온 상자는 이미 실은 퍽이 있어 수를 모름)
@@ -1078,6 +1079,25 @@ std::vector<int> MissionManager::collect(size_t b, double cx, double cy) {
   // 선 퍽 먼저 싣고 누운 퍽은 나중에 (세우다 옆 퍽을 칠 수 있음 · 11-15 사용자)
   std::stable_partition(found.begin(), found.end(), [this](int tag) { return !lying_.count(tag); });
   return found;
+}
+
+// 실을 순서: 선 퍽 먼저(누운 퍽은 나중 — 세우다 옆 퍽을 칠 수 있음) · 같은 쪽 안에서는 로봇에 가까운 퍽부터 (11-21 사용자) —
+//   look 자세로 물러난(back_off) 자리에서 가까운 퍽을 먼저 집고 먼 퍽은 마지막에 pick_near로 한 번만 다가감
+//   (실기 nav_1121_223313: 물러남 43 mm → 다가감 35 mm · 41 mm → 68 mm를 퍽마다 앞뒤로 오감)
+void MissionManager::near_first(std::vector<int> & tags) const {
+  Pose2 r;
+  if (!robot_map(r)) return;
+  const double c = std::cos(r.yaw), sn = std::sin(r.yaw);
+  const auto fwd = [&](int tag) {
+    const auto it = puck_seen_.find(tag);
+    if (it == puck_seen_.end()) return std::numeric_limits<double>::infinity();  // 자리 모름 — 맨 뒤
+    const auto [x, y] = here(it->second);
+    return (x - r.x) * c + (y - r.y) * sn;
+  };
+  std::stable_sort(tags.begin(), tags.end(), [&](int a, int b) {
+    const bool la = lying_.count(a) > 0, lb = lying_.count(b) > 0;
+    return la != lb ? lb : fwd(a) < fwd(b);
+  });
 }
 
 // 상자 윗면 위 퍽 중 차체에 붙은 것 — 로봇 앞 inspect_back_min_x 안이거나 tag를 못 읽음 (적재함에 실린 tag는 뺌).
