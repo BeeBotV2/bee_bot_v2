@@ -338,6 +338,9 @@ private:
   std::vector<Job> jobs_;
   std::vector<std::optional<Pose2>> loc_pose_;
   std::vector<std::optional<double>> loc_rot_;  // 장소마다 주사위 무늬 방향 [rad, arena] — 처음 도킹한 쪽에서 똑바로 (90° 단위 · 회차 동안 고정)
+  // 칸 IK가 안 풀린 변 (11-23 사용자: IK가 안 풀리면 go_near) — 그 칸만 · go_near가 이 yaw의 변을 맨 뒤로. 한 번 더 안 되면 place_unreachable
+  struct PlaceAvoid { size_t loc; int cell; double yaw; };
+  std::optional<PlaceAvoid> place_avoid_;
   std::vector<std::optional<Spot>> loc_fix_;  // 장소마다 처음 정한 상자 가운데 (odom) — 회차 동안 고정 · 퍽마다 다시 재면 몇 cm씩 튀어 모양이 무너짐 (11-22)
   // 장소 상자(location_box) 마지막 관측 — tag별 · 가운데 = 윗면 정중앙 태그
   //   odom으로 적어 둠 (Spot) — 그사이 벽 정합이 map→odom을 옮겨도 상자는 odom에선 그대로 (11-22 실기: 붙어 있는 동안 3~5 cm씩)

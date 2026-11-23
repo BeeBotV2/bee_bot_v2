@@ -65,5 +65,10 @@
   <disable_collisions link1="upper_arm_link" link2="wheel_right_link" reason="Never" />
   <disable_collisions link1="arm_base_link" link2="upper_arm_link" reason="Never" />
   <!-- base_link 충돌에는 바구니(적재함)·기둥이 있다 (feature/isaac-setup storage_collision) — 팔 링크와 base_link는 검사한다 -->
+  <!-- 11-23 사용자: finger ↔ base_link는 검사 안 함 — 적재함 칸 0·3 쥐는 자세(basket_box_q_grasp)에서 벌린 손가락 아래끝이
+       칸막이 storage_7 윗면(base_link z 0.1277)에 0.1~0.6 mm 겹쳐 unload가 늘 거부됨 (/check_state_validity 실측, 실기에선 안 닿음).
+       대신 손가락이 몸·적재함에 닿는 건 MoveIt이 못 잡음 -->
+  <disable_collisions link1="base_link" link2="finger_left_link" reason="User" />
+  <disable_collisions link1="base_link" link2="finger_right_link" reason="User" />
   <!-- TODO: 실기 치수 확정 후 MoveIt Setup Assistant 충돌 샘플링으로 다시 생성 (Never 쌍 자동 산출) -->
 </robot>

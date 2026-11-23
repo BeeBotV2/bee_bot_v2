@@ -5,6 +5,7 @@ While playing, puck ground truth goes to /tmp/beebot_sim_pucks.json (loops/pick_
 Navigation truth (robot base + every box, world frame and map frame = robot file pose) goes to /tmp/beebot_sim_nav.json
 (isaac/mission/nav_bench.py). BEE_DYN_OBS=1 adds a visual-only moving cylinder (/World/dyn_obs, seen by the cameras, no
 collider) placed from /tmp/beebot_dyn_obs.json {"x","y"} in the map frame; nav_bench.py drives it and checks clearance.
+BEE_UPRIGHT_PUCKS=1 stands up a puck that lies still for 2 s, where it lies (mission runs without stand).
 Same result on every machine, no personal layout file.
 Window: Kit raises and focuses its own window several times while loading (GLFW XRaiseWindow/XSetInputFocus, which
 GNOME's focus-new-windows setting does not stop), so typing in a terminal gets interrupted. BEE_START_MINIMIZED=1
@@ -79,6 +80,51 @@ def reset_pucks():
     v.set_transforms(t, idx)
     v.set_velocities(np.zeros((v.count, 6), dtype=np.float32), idx)
     print(f"[isaac_startup] pucks reset ({len(idx)})", flush=True)
+
+
+_lying = {}  # puck index -> time first seen lying and still (BEE_UPRIGHT_PUCKS)
+UPRIGHT_AFTER_S = 2.0  # [s] lying and still this long -> stood up (a puck being turned by stand or carried is moving)
+
+
+def upright_pucks(stage):
+    """BEE_UPRIGHT_PUCKS=1: a puck lying still (tilt > 60 deg) is stood up where it lies - bottom on the surface under it,
+    yaw kept, zero velocity (PhysX only, nothing saved). For mission runs that should not depend on stand (11-23 user)."""
+    v = _phys.get("view")
+    if v is None:
+        return
+    import numpy as np
+    if "half" not in _phys:  # local box of each puck around its origin (bottom-face centre): half sizes + centre
+        cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        _phys["half"] = {}
+        for i, path in enumerate(v.prim_paths[1:], 1):
+            r = cache.ComputeUntransformedBound(stage.GetPrimAtPath(path)).ComputeAlignedRange()
+            _phys["half"][i] = ((r.GetMax() - r.GetMin()) / 2, (r.GetMax() + r.GetMin()) / 2)
+    t, vel, now = v.get_transforms(), v.get_velocities(), time.time()
+    fix = []
+    for i in range(1, v.count):
+        q = Gf.Quatd(float(t[i][6]), float(t[i][3]), float(t[i][4]), float(t[i][5]))
+        rot = Gf.Rotation(q)
+        up = rot.TransformDir(Gf.Vec3d(0, 0, 1))
+        if up[2] > 0.5 or np.linalg.norm(vel[i][:3]) > 0.02:  # standing (< 60 deg) or moving
+            _lying.pop(i, None)
+            continue
+        if now - _lying.setdefault(i, now) < UPRIGHT_AFTER_S:
+            continue
+        half, mid = _phys["half"][i]
+        c = Gf.Vec3d(float(t[i][0]), float(t[i][1]), float(t[i][2])) + rot.TransformDir(mid)  # box centre (world)
+        hz = sum(abs(rot.TransformDir(Gf.Vec3d(*a))[2]) * half[k] for k, a in enumerate(((1, 0, 0), (0, 1, 0), (0, 0, 1))))
+        x = rot.TransformDir(Gf.Vec3d(1, 0, 0))
+        yaw = math.atan2(x[1], x[0]) if abs(x[2]) < 0.9 else 0.0
+        qn = Gf.Rotation(Gf.Vec3d(0, 0, 1), math.degrees(yaw)).GetQuat()
+        t[i][:3] = [c[0], c[1], c[2] - hz + 0.002]  # origin = bottom-face centre, 2 mm above the surface
+        t[i][3:6], t[i][6] = list(qn.GetImaginary()), qn.GetReal()
+        fix.append(i)
+        _lying.pop(i, None)
+        print(f"[isaac_startup] puck stood up: {v.prim_paths[i].rsplit('/', 1)[1]}", flush=True)
+    if fix:
+        idx = np.array(fix, dtype=np.uint32)
+        v.set_transforms(t, idx)
+        v.set_velocities(np.zeros((v.count, 6), dtype=np.float32), idx)
 
 
 def write_truth(stage, pucks):
@@ -295,6 +341,7 @@ async def _setup():
         timeline.play()
     frame = 0
     dyn = {} if os.environ.get("BEE_DYN_OBS") == "1" else None
+    upright = os.environ.get("BEE_UPRIGHT_PUCKS") == "1"  # lying pucks stood up where they lie (upright_pucks)
     while True:  # reset.sh: Stop(장면 처음 자세로) → Play — ROS 재시작은 isaac_sim.sh
         await app.next_update_async()
         frame += 1
@@ -312,6 +359,11 @@ async def _setup():
                 _nav.clear()
                 if frame % (NAV_EVERY * 2000) == 0:
                     print(f"[isaac_startup] nav truth not written: {e!r}", flush=True)
+        if upright and pucks and frame % TRUTH_EVERY == 0 and timeline.is_playing():
+            try:
+                upright_pucks(stage)
+            except Exception as e:  # noqa: BLE001 - never stop the reset loop
+                print(f"[isaac_startup] upright failed: {e!r}", flush=True)
         if dyn is not None:
             with Usd.EditContext(stage, stage.GetSessionLayer()):
                 dyn_obs(stage, dyn)

@@ -95,6 +95,7 @@ skill_unload:
     server_wait_s: 30.0
     unload_lift_m: 0.04      # [m] 쥐고 칸 위로 나온 뒤 곧게 더 올림 — 손 안 퍽이 옆 칸 퍽을 치지 않게 (11-21 sim) · load_over_lift_m과 같은 높이
     unload_end_pose: over    # 11-21 사용자: carry에서 멈추지 않음 — 올린 높이에서 끝내고 다음 place가 carry를 경유점으로 지나 놓을 자리로 (pick · load와 같음)
+    jam_current_a: 0.0       # 11-23 사용자: unload는 막힘 판정 끔 (0 = 끔, arm_io) — 오프라인 충돌 확인 완료 · sim 칸 0에서 손가락 아래끝이 칸막이 storage_7 윗면(0.6 mm)에 얹혀 6/6 '막힘 바닥'
     traj_collision_check: false  # 11-22 사용자: unload는 자기 충돌 검사 안 함 — 칸 0·3 쥐는 자세(손가락 47.5 mm 벌림)에서 base_link(적재함) - finger가 늘 닿는다고 거부 · 실기에선 안 닿음
 skill_stand:
   ros__parameters:

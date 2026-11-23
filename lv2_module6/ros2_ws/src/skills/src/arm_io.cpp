@@ -77,6 +77,10 @@ ArmIO::ArmIO(rclcpp::Node & node)
   node.declare_parameter<double>("grip_close_gap_m", 0.026);
   // 잡기 판정: 손가락이 닫는 목표보다 이만큼 넘게 못 들어가고 멈췄으면 쥠 (빈손이면 목표까지 감) [m]
   node.declare_parameter<double>("grasp_stop_margin_m", 0.0005);
+  // 잡기 판정 위쪽 한계: 손가락이 이보다 벌어진 채 멈췄으면 퍽이 아니라 다른 것에 걸림 → 빈손 [m, gripper_left_joint]
+  //   0.009 = 간격 약 36 mm (퍽 30 mm 쥠 = 0.0047 ~ 0.0062). 11-23 sim: unload 칸 0·3에서 손가락이 칸막이에 걸려 0.0167 · 0.0176에서
+  //   멈췄는데 '쥠'으로 보고 빈손 place 성공 (L2 칸 0·2 빔). 0 이하면 끔
+  node.declare_parameter<double>("grasp_max_pos_m", 0.009);
   // sim: 닿는 구간은 시뮬과 같은 기준 동작 + 학습 보정 (2026-11-03 배포 결정) · moveit: 예전처럼 MoveIt만
   contact_mode_ = node.declare_parameter<std::string>("contact_mode", "sim");
   plan_ = node.create_client<GetMotionPlan>("/plan_kinematic_path");
@@ -380,8 +384,10 @@ ArmIO::Step ArmIO::held_step() {
     const bool stopped = grasp_held(pos, eff, std::max(grasp_min_pos_m_, grip_close_m() + node_.get_parameter("grasp_stop_margin_m").as_double()), 0.0);
     // 전류 기준은 쥐는 전류 상한의 절반까지 낮춤 — grasp_min_effort 0.25 A는 0.35 A로 쥘 때 값. 0.1 A로 쥐면 쥔 퍽도 0.09 ~ 0.10 A라
     // 위치 기준(목표 + 0.5 mm, 0.1 mm 차)만 남아 쥔 퍽을 빈손으로 판정 (11/08 실기 unload 칸 2: 0.0047 m · 0.09 A). 빈손은 목표까지 가고 전류 ~0
-    const bool ok = stopped || grasp_held(pos, eff, grasp_min_pos_m_, std::min(grasp_min_effort_, 0.5 * grip_current_a()));
-    RCLCPP_INFO(node_.get_logger(), "잡기 판정 %s — 그리퍼 %.4fm · %.2fA", ok ? "쥠" : "빈손", pos, eff);
+    const double max_pos = node_.get_parameter("grasp_max_pos_m").as_double();
+    const bool caught = max_pos > 0.0 && pos > max_pos;  // 퍽보다 넓게 벌어진 채 멈춤 — 손가락이 다른 것에 걸림
+    const bool ok = !caught && (stopped || grasp_held(pos, eff, grasp_min_pos_m_, std::min(grasp_min_effort_, 0.5 * grip_current_a())));
+    RCLCPP_INFO(node_.get_logger(), "잡기 판정 %s — 그리퍼 %.4fm · %.2fA", ok ? "쥠" : caught ? "빈손 (손가락 걸림 — 퍽보다 넓게 멈춤)" : "빈손", pos, eff);
     grasp_empty_ = !ok;
     cb(ok);
   };
