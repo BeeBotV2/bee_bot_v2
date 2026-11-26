@@ -5,17 +5,9 @@
 #   (no domain arg: copy the ROS env of the running Isaac — isaac_sim.sh before Play, or its launch)
 #   RVIZ_USE_SIM_TIME=false ./odom_nvblox.sh  # wall time for a real-robot view
 #   RVIZ_RECORD=0 ./odom_nvblox.sh   # skip bag recording
-#   ./odom_nvblox.sh image_raw       # also record color image_raw (pole_front_cam · gripper_cam) — heavy over Wi-Fi
 # When an Isaac launch in the selected ROS domain is running, borrow its DDS settings so both join the same graph.
 # Do not use the Isaac PID file to decide simulation time: it is created only after Play and ROS launch startup.
 HERE="$(cd "$(dirname "$0")" && pwd)"
-
-# image_raw (any position): record.sh adds color image topics
-ARGS=()
-for a in "$@"; do
-  if [[ "$a" == image_raw ]]; then export RVIZ_RECORD_IMAGES=1; else ARGS+=("$a"); fi
-done
-set -- "${ARGS[@]}"
 
 read_env() {
   tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n "s/^$2=//p" | head -n 1
